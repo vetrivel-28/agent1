@@ -1,4 +1,3 @@
-import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../services/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/Card';
@@ -38,25 +37,29 @@ export default function SalesMomentum() {
   const growing = results.fastest_growing_brands || [];
   const declining = results.declining_brands || [];
 
-  // Prepare chart data (top 10 growing vs declining)
+  // Prepare chart data (top 5 growing vs declining)
   const chartData = [
-    ...growing.slice(0, 5).map((b: any) => ({ name: b.Brand, trend: b.Sales_Trend, type: 'grow' })),
-    ...declining.slice(0, 5).map((b: any) => ({ name: b.Brand, trend: b.Sales_Trend, type: 'decline' })),
+    ...growing.slice(0, 5).map((b: any) => ({ name: b.brand, trend: b.avg_sales_trend_pct || 0, type: 'grow' })),
+    ...declining.slice(0, 5).map((b: any) => ({ name: b.brand, trend: b.avg_sales_trend_pct || 0, type: 'decline' })),
   ];
 
   const columns: Column<any>[] = [
-    { header: "Brand", accessorKey: "Brand", cell: (r) => <div className="font-semibold">{r.Brand}</div> },
-    { header: "Total Sales", accessorKey: "Total_Sales", cell: (r) => formatNumber(r.Total_Sales) },
+    { header: "Brand", accessorKey: "brand", cell: (r) => <div className="font-semibold">{r.brand}</div> },
+    { header: "Total Sales", accessorKey: "total_asin_sales", cell: (r) => r.total_asin_sales != null ? formatNumber(r.total_asin_sales) : '—' },
     { 
       header: "Sales Trend", 
-      accessorKey: "Sales_Trend", 
-      cell: (r) => (
-        <span className={r.Sales_Trend > 0 ? "text-success font-medium" : "text-danger font-medium"}>
-          {r.Sales_Trend > 0 ? '+' : ''}{r.Sales_Trend}%
-        </span>
-      ) 
+      accessorKey: "avg_sales_trend_pct", 
+      cell: (r) => {
+        const val = r.avg_sales_trend_pct;
+        if (val == null) return '—';
+        return (
+          <span className={val > 0 ? "text-success font-medium" : "text-danger font-medium"}>
+            {val > 0 ? '+' : ''}{typeof val === 'number' ? val.toFixed(1) : val}%
+          </span>
+        );
+      }
     },
-    { header: "Momentum Score", accessorKey: "momentum_score", cell: (r) => r.momentum_score?.toFixed(1) },
+    { header: "Momentum Score", accessorKey: "momentum_score", cell: (r) => r.momentum_score != null ? r.momentum_score.toFixed(1) : '—' },
   ];
 
   return (
@@ -132,4 +135,3 @@ export default function SalesMomentum() {
     </motion.div>
   );
 }
-

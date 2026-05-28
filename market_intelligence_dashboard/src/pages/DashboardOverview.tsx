@@ -1,11 +1,10 @@
-import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../services/api';
 import { KPICard } from '../components/ui/KPICard';
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
-import { formatCurrency, formatNumber } from '../utils/cn';
+import { formatCurrency } from '../utils/cn';
 import { Link } from 'react-router-dom';
 import { 
   Activity, Zap, TrendingUp, DollarSign, Database, AlertTriangle, Crosshair, ArrowRight
@@ -78,10 +77,12 @@ export default function DashboardOverview() {
   }
 
   const results = data?.results || {};
-  const demand = results.demand_strength?.results || {};
-  const revenue = results.revenue_momentum?.results || {};
-  const velocity = results.demand_velocity?.results || {};
-  const concentration = results.market_concentration?.results || {};
+  const engineScores = results.engine_scores || {};
+  const marketOverview = results.market_overview || {};
+  const finalVerdict = results.final_market_verdict || {};
+  const opportunitySignals = results.opportunity_signals || {};
+  const riskSignals = results.risk_signals || {};
+  const topKeywords = results.rankings?.top_demand_keywords || [];
 
   return (
     <motion.div 
@@ -105,28 +106,28 @@ export default function DashboardOverview() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
         <KPICard 
           title="Demand Strength"
-          value={demand.demand_strength_score?.toFixed(1) || '0.0'}
-          trend={0} // Placeholder for trend
+          value={engineScores.demand_strength?.toFixed(1) || '0.0'}
+          trend={0}
           icon={<Activity className="w-5 h-5" />}
-          status={demand.demand_strength_score > 60 ? 'success' : 'warning'}
+          status={engineScores.demand_strength > 60 ? 'success' : 'warning'}
         />
         <KPICard 
-          title="Sales Momentum"
-          value={results.sales_momentum?.results?.market_trend_direction === 'Growing' ? 'Positive' : 'Negative'}
+          title="Sales Direction"
+          value={marketOverview.sales_direction || 'Unknown'}
           icon={<TrendingUp className="w-5 h-5" />}
-          status={results.sales_momentum?.results?.market_trend_direction === 'Growing' ? 'success' : 'danger'}
+          status={marketOverview.sales_direction === 'Accelerating' ? 'success' : 'danger'}
         />
         <KPICard 
           title="Market Revenue"
-          value={formatCurrency(revenue.total_market_revenue || 0)}
+          value={formatCurrency(marketOverview.total_market_revenue || 0)}
           icon={<DollarSign className="w-5 h-5" />}
           status="neutral"
         />
         <KPICard 
-          title="Market Structure"
-          value={concentration.structure_type || 'Unknown'}
+          title="Composite Score"
+          value={`${results.composite_market_health_score || 0}/100`}
           icon={<Crosshair className="w-5 h-5" />}
-          status={concentration.hhi_score > 2500 ? 'danger' : 'success'}
+          status={results.composite_market_health_score > 50 ? 'success' : 'danger'}
         />
       </div>
 
@@ -139,13 +140,13 @@ export default function DashboardOverview() {
           <CardContent className="flex-1">
              <div className="p-6 rounded-xl bg-primary/5 border border-primary/10 h-full flex flex-col justify-center">
                 <h3 className="text-2xl font-semibold mb-4 text-primary">
-                  {results.executive_summary?.final_verdict || "Analysis Pending"}
+                  {finalVerdict.verdict || "Analysis Pending"}
                 </h3>
                 <div className="space-y-4">
                   <div>
                     <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-2">Key Opportunities</h4>
                     <ul className="space-y-2">
-                      {results.executive_summary?.opportunity_signals?.slice(0, 3).map((sig: string, i: number) => (
+                      {opportunitySignals.signals?.slice(0, 3).map((sig: string, i: number) => (
                         <li key={i} className="flex gap-2 text-sm">
                           <Zap className="w-4 h-4 text-warning shrink-0 mt-0.5" />
                           <span>{sig}</span>
@@ -165,7 +166,7 @@ export default function DashboardOverview() {
           </CardHeader>
           <CardContent>
             <ul className="space-y-3">
-              {results.executive_summary?.risk_signals?.map((risk: string, i: number) => (
+              {riskSignals.signals?.map((risk: string, i: number) => (
                 <li key={i} className="flex gap-3 text-sm p-3 bg-danger/5 border border-danger/10 rounded-lg">
                   <AlertTriangle className="w-5 h-5 text-danger shrink-0" />
                   <span>{risk}</span>
@@ -176,9 +177,9 @@ export default function DashboardOverview() {
             <div className="mt-8 pt-6 border-t">
               <h4 className="text-sm font-semibold mb-3">Top Keyword Demand</h4>
               <div className="flex flex-wrap gap-2">
-                {demand.top_demand_keywords?.map((kw: any, i: number) => (
+                {topKeywords.map((kw: any, i: number) => (
                   <Badge key={i} variant="outline" className="bg-background">
-                    {kw.Keyword}
+                    {kw.keyword}
                   </Badge>
                 ))}
               </div>

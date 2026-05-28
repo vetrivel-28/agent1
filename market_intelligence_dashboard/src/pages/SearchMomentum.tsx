@@ -1,4 +1,3 @@
-import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../services/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/Card';
@@ -33,17 +32,23 @@ export default function SearchMomentum() {
   }
 
   const results = data.results;
-  const healthy = results.healthy_growth_keywords || [];
+  const healthy = results.healthy_keywords || [];
   const weak = results.weak_conversion_keywords || [];
 
   const columns: Column<any>[] = [
-    { header: "Keyword", accessorKey: "Keyword", cell: (r) => <div className="font-semibold">{r.Keyword}</div> },
-    { header: "Search Trend", accessorKey: "Search Volume Trend", cell: (r) => (
-      <span className={r["Search Volume Trend"] > 0 ? "text-success" : "text-danger"}>
-        {r["Search Volume Trend"] > 0 ? '+' : ''}{r["Search Volume Trend"]}%
-      </span>
+    { header: "Keyword", accessorKey: "keyword", cell: (r) => (
+      <div className="font-semibold">{r.keyword || '—'}</div>
     )},
-    { header: "Alignment Score", accessorKey: "Sales_Search_Alignment", cell: (r) => r.Sales_Search_Alignment?.toFixed(2) },
+    { header: "Search Trend", accessorKey: "norm_search_trend", cell: (r) => {
+      const val = r.norm_search_trend;
+      if (val == null) return '—';
+      return (
+        <span className={val > 0.5 ? "text-success" : "text-danger"}>
+          {(val * 100).toFixed(1)}%
+        </span>
+      );
+    }},
+    { header: "Momentum Score", accessorKey: "momentum_score", cell: (r) => r.momentum_score != null ? r.momentum_score.toFixed(3) : '—' },
   ];
 
   return (
@@ -79,4 +84,3 @@ export default function SearchMomentum() {
     </motion.div>
   );
 }
-

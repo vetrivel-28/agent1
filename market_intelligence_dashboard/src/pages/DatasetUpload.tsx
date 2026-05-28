@@ -3,7 +3,6 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../services/api';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
-import { Badge } from '../components/ui/Badge';
 import { UploadCloud, File, X, CheckCircle, AlertCircle, Loader2, Database } from 'lucide-react';
 import { motion } from 'framer-motion';
 
@@ -72,7 +71,7 @@ export default function DatasetUpload() {
     file: FileState, 
     setFile: (f: FileState) => void, 
     label: string, 
-    inputRef: React.RefObject<HTMLInputElement> 
+    inputRef: React.RefObject<HTMLInputElement | null> 
   }) => {
     const handleDrop = (e: React.DragEvent) => {
       e.preventDefault();

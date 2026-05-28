@@ -1,9 +1,7 @@
-import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../services/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/Card';
 import { DataTable, type Column } from '../components/tables/DataTable';
-import { formatNumber } from '../utils/cn';
 import { AlertCircle, Loader2 } from 'lucide-react';
 import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { motion } from 'framer-motion';
@@ -39,11 +37,12 @@ export default function IntentEfficiency() {
   const inefficient = results.lowest_efficiency_keywords || [];
 
   const columns: Column<any>[] = [
-    { header: "Keyword", accessorKey: "Keyword", cell: (r) => <div className="font-semibold">{r.Keyword}</div> },
-    { header: "Search Volume", accessorKey: "Search Volume", cell: (r) => formatNumber(r["Search Volume"]) },
-    { header: "Click Share", accessorKey: "ABA Total Click Share", cell: (r) => `${(r["ABA Total Click Share"] * 100).toFixed(2)}%` },
-    { header: "Conv Share", accessorKey: "ABA Total Conv. Share", cell: (r) => `${(r["ABA Total Conv. Share"] * 100).toFixed(2)}%` },
-    { header: "SIEI", accessorKey: "SIEI", cell: (r) => r.SIEI?.toFixed(2) },
+    { header: "Keyword", accessorKey: "keyword", cell: (r) => (
+      <div className="font-semibold">{r.keyword || '—'}</div>
+    )},
+    { header: "Click Share", accessorKey: "click_share", cell: (r) => r.click_share != null ? `${(r.click_share * 100).toFixed(2)}%` : '—' },
+    { header: "Conv Share", accessorKey: "conv_share", cell: (r) => r.conv_share != null ? `${(r.conv_share * 100).toFixed(2)}%` : '—' },
+    { header: "SIEI", accessorKey: "siei", cell: (r) => r.siei != null ? r.siei.toFixed(2) : '—' },
   ];
 
   const chartData = [
@@ -56,10 +55,10 @@ export default function IntentEfficiency() {
       const data = payload[0].payload;
       return (
         <div className="bg-card border border-border p-3 rounded-lg shadow-sm">
-          <p className="font-semibold text-sm max-w-xs truncate mb-2">{data.Keyword}</p>
-          <p className="text-sm">Clicks: {(data["ABA Total Click Share"] * 100).toFixed(2)}%</p>
-          <p className="text-sm">Conv: {(data["ABA Total Conv. Share"] * 100).toFixed(2)}%</p>
-          <p className="text-sm">SIEI: <span className={data.SIEI > 1 ? 'text-success' : 'text-danger'}>{data.SIEI?.toFixed(2)}</span></p>
+          <p className="font-semibold text-sm max-w-xs truncate mb-2">{data.keyword}</p>
+          <p className="text-sm">Clicks: {data.click_share != null ? (data.click_share * 100).toFixed(2) : '—'}%</p>
+          <p className="text-sm">Conv: {data.conv_share != null ? (data.conv_share * 100).toFixed(2) : '—'}%</p>
+          <p className="text-sm">SIEI: <span className={data.siei > 1 ? 'text-success' : 'text-danger'}>{data.siei?.toFixed(2)}</span></p>
         </div>
       );
     }
@@ -87,14 +86,14 @@ export default function IntentEfficiency() {
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                 <XAxis 
                   type="number" 
-                  dataKey="ABA Total Click Share" 
+                  dataKey="click_share" 
                   name="Click Share"
                   tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }} 
                   tickFormatter={(val) => `${(val * 100).toFixed(1)}%`}
                 />
                 <YAxis 
                   type="number" 
-                  dataKey="ABA Total Conv. Share" 
+                  dataKey="conv_share" 
                   name="Conversion Share"
                   tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }}
                   tickFormatter={(val) => `${(val * 100).toFixed(1)}%`}
@@ -132,4 +131,3 @@ export default function IntentEfficiency() {
     </motion.div>
   );
 }
-

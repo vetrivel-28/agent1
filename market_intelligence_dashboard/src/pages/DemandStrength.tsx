@@ -1,4 +1,3 @@
-import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../services/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/Card';
@@ -11,7 +10,7 @@ import { motion } from 'framer-motion';
 export default function DemandStrength() {
   const { data, isLoading, isError } = useQuery({
     queryKey: ['demand-strength'],
-    queryFn: () => api.getDemandStrength(50), // Fetch more for table
+    queryFn: () => api.getDemandStrength(50),
   });
 
   if (isLoading) {
@@ -39,17 +38,16 @@ export default function DemandStrength() {
   const products = results.top_demand_products || [];
 
   const keywordColumns: Column<any>[] = [
-    { header: "Keyword", accessorKey: "Keyword" },
-    { header: "Search Volume", accessorKey: "Search Volume", cell: (r) => formatNumber(r["Search Volume"]) },
-    { header: "Score (0-100)", accessorKey: "demand_score", cell: (r) => r.demand_score?.toFixed(1) },
+    { header: "Keyword", accessorKey: "keyword", cell: (r) => r.keyword || '—' },
+    { header: "Search Volume", accessorKey: "search_volume", cell: (r) => formatNumber(r.search_volume) },
+    { header: "Keyword Sales", accessorKey: "keyword_sales", cell: (r) => r.keyword_sales != null ? formatNumber(r.keyword_sales) : '—' },
   ];
 
   const productColumns: Column<any>[] = [
-    { header: "Title", accessorKey: "Title", cell: (r) => <div className="max-w-xs truncate" title={r.Title}>{r.Title}</div> },
-    { header: "Brand", accessorKey: "Brand" },
-    { header: "Revenue", accessorKey: "Revenue", cell: (r) => formatCurrency(r.Revenue) },
-    { header: "Sales", accessorKey: "Sales", cell: (r) => formatNumber(r.Sales) },
-    { header: "Score (0-100)", accessorKey: "demand_score", cell: (r) => r.demand_score?.toFixed(1) },
+    { header: "Title", accessorKey: "title", cell: (r) => <div className="max-w-xs truncate" title={r.title}>{r.title || '—'}</div> },
+    { header: "ASIN", accessorKey: "asin", cell: (r) => r.asin || '—' },
+    { header: "Revenue", accessorKey: "revenue", cell: (r) => r.revenue != null ? formatCurrency(r.revenue) : '—' },
+    { header: "Sales", accessorKey: "ASIN Sales", cell: (r) => r["ASIN Sales"] != null ? formatNumber(r["ASIN Sales"]) : '—' },
   ];
 
   return (
@@ -63,7 +61,7 @@ export default function DemandStrength() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <Card className="lg:col-span-1 flex flex-col items-center justify-center p-8">
-          <ScoreGauge score={results.demand_strength_score || 0} label="Market Demand" size={220} />
+          <ScoreGauge score={results.overall_demand_score || 0} label="Market Demand" size={220} />
           <p className="mt-6 text-center text-sm text-muted-foreground">
             A score above 70 indicates strong, highly-validated consumer demand.
           </p>
@@ -92,4 +90,3 @@ export default function DemandStrength() {
     </motion.div>
   );
 }
-

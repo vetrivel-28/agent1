@@ -1,4 +1,3 @@
-import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../services/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/Card';
@@ -39,10 +38,10 @@ export default function BsrEfficiency() {
   const inefficient = results.inefficient_products || [];
 
   const columns: Column<any>[] = [
-    { header: "ASIN / Title", accessorKey: "Title", cell: (r) => <div className="max-w-[200px] truncate" title={r.Title}>{r.Title}</div> },
-    { header: "BSR", accessorKey: "BSR", cell: (r) => formatNumber(r.BSR) },
-    { header: "Revenue", accessorKey: "Revenue", cell: (r) => formatCurrency(r.Revenue) },
-    { header: "Efficiency", accessorKey: "efficiency_score", cell: (r) => r.efficiency_score?.toFixed(1) },
+    { header: "ASIN / Title", accessorKey: "title", cell: (r) => <div className="max-w-[200px] truncate" title={r.title}>{r.title || r.asin || '—'}</div> },
+    { header: "BSR", accessorKey: "bsr", cell: (r) => r.bsr != null ? formatNumber(r.bsr) : '—' },
+    { header: "Revenue", accessorKey: "revenue", cell: (r) => r.revenue != null ? formatCurrency(r.revenue) : '—' },
+    { header: "Efficiency", accessorKey: "efficiency_score", cell: (r) => r.efficiency_score != null ? r.efficiency_score.toFixed(1) : '—' },
   ];
 
   const chartData = [
@@ -55,9 +54,9 @@ export default function BsrEfficiency() {
       const data = payload[0].payload;
       return (
         <div className="bg-card border border-border p-3 rounded-lg shadow-sm">
-          <p className="font-semibold text-sm max-w-xs truncate mb-2">{data.Title}</p>
-          <p className="text-sm">BSR: {formatNumber(data.BSR)}</p>
-          <p className="text-sm">Revenue: {formatCurrency(data.Revenue)}</p>
+          <p className="font-semibold text-sm max-w-xs truncate mb-2">{data.title || data.asin}</p>
+          <p className="text-sm">BSR: {data.bsr != null ? formatNumber(data.bsr) : '—'}</p>
+          <p className="text-sm">Revenue: {data.revenue != null ? formatCurrency(data.revenue) : '—'}</p>
           <p className="text-sm">Score: <span className={data.type === 'efficient' ? 'text-success' : 'text-danger'}>{data.efficiency_score?.toFixed(1)}</span></p>
         </div>
       );
@@ -87,15 +86,15 @@ export default function BsrEfficiency() {
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                   <XAxis 
                     type="number" 
-                    dataKey="BSR" 
+                    dataKey="bsr" 
                     name="Best Sellers Rank"
-                    reversed // Lower BSR is better
+                    reversed
                     tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }} 
                     tickFormatter={(val) => formatNumber(val)}
                   />
                   <YAxis 
                     type="number" 
-                    dataKey="Revenue" 
+                    dataKey="revenue" 
                     name="Revenue"
                     tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }}
                     tickFormatter={(val) => `$${formatNumber(val)}`}
@@ -134,4 +133,3 @@ export default function BsrEfficiency() {
     </motion.div>
   );
 }
-

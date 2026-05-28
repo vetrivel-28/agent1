@@ -1,4 +1,3 @@
-import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../services/api';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
@@ -35,8 +34,8 @@ export default function DemandVelocity() {
   }
 
   const results = data.results;
-  const strongest = results.strongest_signals || [];
-  const weakest = results.weakest_signals || [];
+  const strongest = results.strongest_growth_signals || [];
+  const weakest = results.weakest_growth_signals || [];
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
@@ -60,8 +59,8 @@ export default function DemandVelocity() {
         />
         
         <KPICard 
-          title="Validation Score"
-          value={`${(results.validation_stats?.avg_accuracy * 100 || 0).toFixed(0)}%`}
+          title="Metrics Used"
+          value={`${results.metrics_used?.length || 0} signals`}
           icon={<FastForward className="w-5 h-5" />}
           status="neutral"
         />
@@ -76,13 +75,16 @@ export default function DemandVelocity() {
             <ul className="space-y-3">
               {strongest.map((sig: any, i: number) => (
                 <li key={i} className="flex justify-between items-center p-3 border rounded-lg bg-success/5">
-                  <span className="font-medium text-sm max-w-[200px] truncate">{sig.Keyword || sig.Brand || sig.Title}</span>
+                  <span className="font-medium text-sm max-w-[200px] truncate">{sig.signal}</span>
                   <div className="flex gap-2">
-                    <Badge variant="success" className="text-xs">{sig.type}</Badge>
-                    <Badge variant="outline" className="text-xs bg-background">+{sig.trend_value?.toFixed(1)}%</Badge>
+                    <Badge variant="success" className="text-xs">signal</Badge>
+                    <Badge variant="outline" className="text-xs bg-background">{(sig.score * 100).toFixed(1)}%</Badge>
                   </div>
                 </li>
               ))}
+              {strongest.length === 0 && (
+                <li className="text-sm text-muted-foreground p-3">No strong signals detected.</li>
+              )}
             </ul>
           </CardContent>
         </Card>
@@ -95,13 +97,16 @@ export default function DemandVelocity() {
             <ul className="space-y-3">
               {weakest.map((sig: any, i: number) => (
                 <li key={i} className="flex justify-between items-center p-3 border rounded-lg bg-danger/5">
-                  <span className="font-medium text-sm max-w-[200px] truncate">{sig.Keyword || sig.Brand || sig.Title}</span>
+                  <span className="font-medium text-sm max-w-[200px] truncate">{sig.signal}</span>
                   <div className="flex gap-2">
-                    <Badge variant="danger" className="text-xs">{sig.type}</Badge>
-                    <Badge variant="outline" className="text-xs bg-background">{sig.trend_value?.toFixed(1)}%</Badge>
+                    <Badge variant="danger" className="text-xs">signal</Badge>
+                    <Badge variant="outline" className="text-xs bg-background">{(sig.score * 100).toFixed(1)}%</Badge>
                   </div>
                 </li>
               ))}
+              {weakest.length === 0 && (
+                <li className="text-sm text-muted-foreground p-3">No weak signals detected.</li>
+              )}
             </ul>
           </CardContent>
         </Card>

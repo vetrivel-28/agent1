@@ -1,4 +1,3 @@
-import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../services/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/Card';
@@ -39,20 +38,24 @@ export default function RevenueMomentum() {
   const declining = results.declining_revenue_brands || [];
 
   const columns: Column<any>[] = [
-    { header: "Brand", accessorKey: "Brand", cell: (r) => <div className="font-semibold">{r.Brand}</div> },
-    { header: "Total Revenue", accessorKey: "Total_Revenue", cell: (r) => formatCurrency(r.Total_Revenue) },
-    { header: "Revenue Trend", accessorKey: "Revenue_Trend", cell: (r) => (
-      <span className={r.Revenue_Trend > 0 ? "text-success font-medium" : "text-danger font-medium"}>
-        {r.Revenue_Trend > 0 ? '+' : ''}{r.Revenue_Trend?.toFixed(1)}%
-      </span>
-    )},
-    { header: "Momentum Score", accessorKey: "momentum_score", cell: (r) => r.momentum_score?.toFixed(1) },
+    { header: "Brand", accessorKey: "brand", cell: (r) => <div className="font-semibold">{r.brand}</div> },
+    { header: "Total Revenue", accessorKey: "total_revenue", cell: (r) => r.total_revenue != null ? formatCurrency(r.total_revenue) : '—' },
+    { header: "Revenue Trend", accessorKey: "avg_revenue_trend_pct", cell: (r) => {
+      const val = r.avg_revenue_trend_pct;
+      if (val == null) return '—';
+      return (
+        <span className={val > 0 ? "text-success font-medium" : "text-danger font-medium"}>
+          {val > 0 ? '+' : ''}{typeof val === 'number' ? val.toFixed(1) : val}%
+        </span>
+      );
+    }},
+    { header: "Momentum Score", accessorKey: "revenue_momentum_score", cell: (r) => r.revenue_momentum_score != null ? r.revenue_momentum_score.toFixed(1) : '—' },
   ];
 
-  // For the area chart, let's plot cumulative or top revenue distributions
+  // For the area chart, plot top revenue brands
   const chartData = growing.slice(0, 15).map((b: any) => ({
-    name: b.Brand,
-    Revenue: b.Total_Revenue
+    name: b.brand,
+    Revenue: b.total_revenue || 0
   }));
 
   return (
@@ -96,7 +99,7 @@ export default function RevenueMomentum() {
                   />
                   <Tooltip 
                     contentStyle={{ backgroundColor: 'hsl(var(--card))', borderColor: 'hsl(var(--border))', borderRadius: '8px' }}
-                    formatter={(val: number) => formatCurrency(val)}
+                    formatter={(val: any) => formatCurrency(Number(val))}
                   />
                   <Area type="monotone" dataKey="Revenue" stroke="#3b82f6" fillOpacity={1} fill="url(#colorRev)" />
                 </AreaChart>
@@ -127,4 +130,3 @@ export default function RevenueMomentum() {
     </motion.div>
   );
 }
-
