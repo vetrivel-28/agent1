@@ -1,0 +1,191 @@
+import React from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { api } from '../services/api';
+import { KPICard } from '../components/ui/KPICard';
+import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '../components/ui/Card';
+import { Badge } from '../components/ui/Badge';
+import { Button } from '../components/ui/Button';
+import { formatCurrency, formatNumber } from '../utils/cn';
+import { Link } from 'react-router-dom';
+import { 
+  Activity, Zap, TrendingUp, DollarSign, Database, AlertTriangle, Crosshair, ArrowRight
+} from 'lucide-react';
+import { motion } from 'framer-motion';
+
+export default function DashboardOverview() {
+  const { data, isLoading, isError, error } = useQuery({
+    queryKey: ['market-report'],
+    queryFn: () => api.getMarketReport(5),
+    retry: false,
+    staleTime: 5 * 60 * 1000
+  });
+
+  const { data: health } = useQuery({
+    queryKey: ['health'],
+    queryFn: api.getHealth,
+  });
+
+  const hasBlackbox = health?.datasets_loaded?.blackbox;
+
+  if (!hasBlackbox && !isLoading) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] text-center max-w-md mx-auto space-y-6">
+        <div className="w-20 h-20 bg-primary/10 rounded-full flex items-center justify-center mb-4">
+          <Database className="w-10 h-10 text-primary" />
+        </div>
+        <h2 className="text-3xl font-bold tracking-tight">No Data Available</h2>
+        <p className="text-muted-foreground">
+          You need to upload datasets before the market intelligence engines can generate insights.
+        </p>
+        <Link to="/upload">
+          <Button size="lg" className="group">
+            Upload Datasets 
+            <ArrowRight className="w-4 h-4 ml-2 group-hover:translate-x-1 transition-transform" />
+          </Button>
+        </Link>
+      </div>
+    );
+  }
+
+  if (isLoading) {
+    return (
+      <div className="space-y-6">
+        <div className="h-10 w-64 bg-muted animate-pulse rounded-lg" />
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          {[1,2,3,4].map(i => <div key={i} className="h-32 bg-muted animate-pulse rounded-2xl" />)}
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="h-96 bg-muted animate-pulse rounded-2xl" />
+          <div className="h-96 bg-muted animate-pulse rounded-2xl" />
+        </div>
+      </div>
+    );
+  }
+
+  if (isError) {
+    return (
+      <Card className="border-danger/50 bg-danger/5 max-w-2xl mx-auto mt-20">
+        <CardContent className="p-8 flex flex-col items-center text-center">
+          <AlertTriangle className="w-12 h-12 text-danger mb-4" />
+          <h2 className="text-xl font-bold text-danger mb-2">Engines Failed</h2>
+          <p className="text-danger/80 mb-6">
+            {(error as any)?.response?.data?.detail?.[0]?.msg || (error as any)?.message || "Failed to generate market report."}
+          </p>
+          <Button variant="outline" onClick={() => window.location.reload()}>Retry Analysis</Button>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const results = data?.results || {};
+  const demand = results.demand_strength?.results || {};
+  const revenue = results.revenue_momentum?.results || {};
+  const velocity = results.demand_velocity?.results || {};
+  const concentration = results.market_concentration?.results || {};
+
+  return (
+    <motion.div 
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      className="space-y-8"
+    >
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight text-gradient-primary">Executive Dashboard</h1>
+          <p className="text-muted-foreground mt-1">Live market telemetry and growth signals.</p>
+        </div>
+        <div className="flex gap-2">
+          <Badge variant="outline" className="text-xs py-1">
+            Processed in: {data?.processing_time_seconds?.toFixed(2)}s
+          </Badge>
+          <Badge variant="success" className="text-xs py-1">Live Engines</Badge>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+        <KPICard 
+          title="Demand Strength"
+          value={demand.demand_strength_score?.toFixed(1) || '0.0'}
+          trend={0} // Placeholder for trend
+          icon={<Activity className="w-5 h-5" />}
+          status={demand.demand_strength_score > 60 ? 'success' : 'warning'}
+        />
+        <KPICard 
+          title="Sales Momentum"
+          value={results.sales_momentum?.results?.market_trend_direction === 'Growing' ? 'Positive' : 'Negative'}
+          icon={<TrendingUp className="w-5 h-5" />}
+          status={results.sales_momentum?.results?.market_trend_direction === 'Growing' ? 'success' : 'danger'}
+        />
+        <KPICard 
+          title="Market Revenue"
+          value={formatCurrency(revenue.total_market_revenue || 0)}
+          icon={<DollarSign className="w-5 h-5" />}
+          status="neutral"
+        />
+        <KPICard 
+          title="Market Structure"
+          value={concentration.structure_type || 'Unknown'}
+          icon={<Crosshair className="w-5 h-5" />}
+          status={concentration.hhi_score > 2500 ? 'danger' : 'success'}
+        />
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <Card className="flex flex-col h-full">
+          <CardHeader>
+            <CardTitle>Market Verdict</CardTitle>
+            <CardDescription>Synthesized finding from all engines.</CardDescription>
+          </CardHeader>
+          <CardContent className="flex-1">
+             <div className="p-6 rounded-xl bg-primary/5 border border-primary/10 h-full flex flex-col justify-center">
+                <h3 className="text-2xl font-semibold mb-4 text-primary">
+                  {results.executive_summary?.final_verdict || "Analysis Pending"}
+                </h3>
+                <div className="space-y-4">
+                  <div>
+                    <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-2">Key Opportunities</h4>
+                    <ul className="space-y-2">
+                      {results.executive_summary?.opportunity_signals?.slice(0, 3).map((sig: string, i: number) => (
+                        <li key={i} className="flex gap-2 text-sm">
+                          <Zap className="w-4 h-4 text-warning shrink-0 mt-0.5" />
+                          <span>{sig}</span>
+                        </li>
+                      )) || <li className="text-sm text-muted-foreground">No prominent signals.</li>}
+                    </ul>
+                  </div>
+                </div>
+             </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Risk Factors</CardTitle>
+            <CardDescription>Detected market hostilities and barriers.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ul className="space-y-3">
+              {results.executive_summary?.risk_signals?.map((risk: string, i: number) => (
+                <li key={i} className="flex gap-3 text-sm p-3 bg-danger/5 border border-danger/10 rounded-lg">
+                  <AlertTriangle className="w-5 h-5 text-danger shrink-0" />
+                  <span>{risk}</span>
+                </li>
+              )) || <li className="text-sm text-muted-foreground">No significant risks detected.</li>}
+            </ul>
+            
+            <div className="mt-8 pt-6 border-t">
+              <h4 className="text-sm font-semibold mb-3">Top Keyword Demand</h4>
+              <div className="flex flex-wrap gap-2">
+                {demand.top_demand_keywords?.map((kw: any, i: number) => (
+                  <Badge key={i} variant="outline" className="bg-background">
+                    {kw.Keyword}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    </motion.div>
+  );
+}

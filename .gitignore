@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+env/
+
+# Node
+node_modules/
+dist/
+
+# IDE
+.vscode/
+.idea/
+
+# Dataset files
+*.csv
+
+# Environment
+.env
+
+# Logs
+*.log
