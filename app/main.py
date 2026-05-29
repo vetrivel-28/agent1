@@ -63,6 +63,7 @@ async def startup_event():
     logger.info("  POST   /api/v1/search-momentum")
     logger.info("  POST   /api/v1/search-intent-efficiency")
     logger.info("  POST   /api/v1/market-concentration")
+    logger.info("  POST   /api/v1/finance-intelligence")
     logger.info("=" * 70)
 
 
@@ -96,6 +97,7 @@ async def root():
             "search_momentum": "/api/v1/search-momentum",
             "search_intent_efficiency": "/api/v1/search-intent-efficiency",
             "market_concentration": "/api/v1/market-concentration",
+            "finance_intelligence": "/api/v1/finance-intelligence",
         },
     }
 

@@ -200,12 +200,21 @@ def run(
         brand_agg["revenue_consistency"] = 50.0
         brand_agg["revenue_acceleration"] = 50.0
 
-    brand_agg["revenue_momentum_score"] = (
-        brand_agg["norm_revenue"] * 0.4
-        + brand_agg.get("norm_rev_trend", 50.0) * 0.3
-        + brand_agg["revenue_consistency"] * 0.2
-        + (100.0 - brand_agg["revenue_acceleration"]) * 0.1
-    ).clip(0.0, 100.0)
+    rev_score = 0.0
+    weight_sum = 0.0
+
+    if "norm_rev_trend" in brand_agg.columns:
+        rev_score += brand_agg["norm_rev_trend"] * 0.5
+        weight_sum += 0.5
+    
+    if "norm_revenue" in brand_agg.columns:
+        rev_score += brand_agg["norm_revenue"] * 0.3
+        weight_sum += 0.3
+    
+    if weight_sum > 0:
+        brand_agg["revenue_momentum_score"] = (rev_score / weight_sum).clip(0.0, 100.0)
+    else:
+        brand_agg["revenue_momentum_score"] = 0.0
 
     # -----------------------------------------------------------------------
     # Percentile-based classification
@@ -311,11 +320,8 @@ def _brand_records(df: pd.DataFrame, n: int) -> List[Dict]:
 def _sv(v: Any) -> Any:
     if v is None:
         return None
-    try:
-        if np.isnan(float(v)):
-            return None
-    except (TypeError, ValueError):
-        return str(v)
+    if pd.isna(v):
+        return None
     if isinstance(v, np.integer):
         return int(v)
     if isinstance(v, (np.floating, float)):

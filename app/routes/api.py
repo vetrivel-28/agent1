@@ -49,8 +49,12 @@ from app.models.response_models import (
     SubstituteIntelligenceResult,
     UploadResponse,
     WhitespaceOpportunityResult,
+    FinanceIntelligenceResult,
 )
+from app.services.analysis_cache import analysis_cache
+from app.services.analysis_runner import run_all_engines
 from app.services.dataset_registry import registry
+from app.services.finance_intelligence import run as run_finance_intelligence
 from app.services.pdf_exporter import export_market_report_pdf
 from app.services.report_builder import build_report
 from app.utils.dataframe_checks import is_empty_dataframe
@@ -133,9 +137,10 @@ async def upload_datasets(
     if blackbox:
         try:
             content = await blackbox.read()
-            ok, df, err = validate_csv_bytes(content, "blackbox")
+            ok, df, err = validate_csv_bytes(content, "blackbox", expected_type="blackbox")
             if ok:
                 registry.set_blackbox(df)
+                analysis_cache.clear()
                 rows_loaded["blackbox"] = len(df)
                 datasets_loaded["blackbox"] = True
                 logger.info(f"BlackBox uploaded: {len(df)} rows, {len(df.columns)} cols")
@@ -150,9 +155,10 @@ async def upload_datasets(
     if magnet:
         try:
             content = await magnet.read()
-            ok, df, err = validate_csv_bytes(content, "magnet")
+            ok, df, err = validate_csv_bytes(content, "magnet", expected_type="magnet")
             if ok:
                 registry.set_magnet(df)
+                analysis_cache.clear()
                 rows_loaded["magnet"] = len(df)
                 datasets_loaded["magnet"] = True
                 logger.info(f"Magnet uploaded: {len(df)} rows, {len(df.columns)} cols")
@@ -167,9 +173,10 @@ async def upload_datasets(
     if keyword_classification:
         try:
             content = await keyword_classification.read()
-            ok, df, err = validate_csv_bytes(content, "keyword_classification")
+            ok, df, err = validate_csv_bytes(content, "keyword_classification", expected_type="keyword_classification")
             if ok:
                 registry.set_keyword_classification(df)
+                analysis_cache.clear()
                 rows_loaded["keyword_classification"] = len(df)
                 datasets_loaded["keyword_classification"] = True
                 logger.info(
@@ -194,10 +201,12 @@ async def upload_datasets(
     any_loaded = any(datasets_loaded.values())
     if errors and not any_loaded:
         overall = "error"
-        message = "All datasets failed to upload."
+        first_err = errors[0].get("message", "validation failed")
+        message = first_err if first_err else "All datasets failed validation."
     elif errors:
         overall = "partial"
-        message = "Some datasets uploaded successfully; see errors for details."
+        first_err = errors[0].get("message", "validation failed")
+        message = f"Some datasets uploaded successfully. Failed: {first_err}"
     elif not any_loaded:
         overall = "warning"
         message = "No files were provided. Send at least one CSV file."
@@ -606,6 +615,53 @@ def bundle_opportunities(top_n: int = 10):
     return result
 
 
+@router.get(
+    "/analysis-snapshot",
+    summary="Cached analysis outputs",
+    description="Returns the most recent full analysis run (single source of truth for UI and report).",
+)
+def analysis_snapshot():
+    snap = analysis_cache.get_snapshot()
+    if not snap:
+        return {"status": "empty", "message": "No analysis run yet. Upload data and open Dashboard or Market Report."}
+    return {"status": "success", **snap}
+
+
+# =========================================================================
+# Finance Intelligence
+# =========================================================================
+
+@router.post(
+    "/finance-intelligence",
+    response_model=FinanceIntelligenceResult,
+    summary="Finance Intelligence",
+    description=(
+        "Market economics pillar: advertising pressure, premium viability, "
+        "margin compression, capital efficiency, and entry cost.\n\n"
+        "**Datasets**: Magnet (keyword) + BlackBox (products)\n\n"
+        "**Aggregates**: Finance Health Score (0–100) with economic verdict.\n\n"
+        "Returns insufficient_data for individual metrics when required columns are missing."
+    ),
+)
+def finance_intelligence(top_n: int = 10):
+    logger.info("Finance Intelligence requested")
+    magnet_df = registry.get_magnet()
+    blackbox_df = registry.get_blackbox()
+    if is_empty_dataframe(magnet_df) and is_empty_dataframe(blackbox_df):
+        return _datasets_not_loaded("Finance Intelligence", "magnet and/or blackbox")
+    demand_score = None
+    if not (is_empty_dataframe(magnet_df) and is_empty_dataframe(blackbox_df)):
+        demand_res = demand_engine.run(magnet_df, blackbox_df, top_n=top_n)
+        if demand_res.get("status") == "success":
+            demand_score = demand_res.get("results", {}).get("overall_demand_score")
+    result = run_finance_intelligence(magnet_df, blackbox_df, demand_score=demand_score)
+    logger.info(
+        f"Finance Intelligence complete — status={result['status']}, "
+        f"health={result.get('results', {}).get('finance_health', {}).get('finance_health')}"
+    )
+    return result
+
+
 # =========================================================================
 # Market Report
 # =========================================================================
@@ -622,54 +678,47 @@ def bundle_opportunities(top_n: int = 10):
         "and Markdown narrative. Future-ready for PDF/HTML export."
     ),
 )
-def market_report(top_n: int = 10):
-    logger.info(f"Market Report requested (top_n={top_n})")
-
+def _build_report_from_snapshot(top_n: int = 10):
+    """Single analysis run — report and UI share cached engine outputs."""
     blackbox_df = registry.get_blackbox()
     magnet_df = registry.get_magnet()
-    kc_df = registry.get_keyword_classification()
-
     if is_empty_dataframe(blackbox_df):
         return _datasets_not_loaded("Market Report", "blackbox")
 
-    # Run all engines safely
-    demand_result = demand_engine.run(magnet_df, blackbox_df, top_n=top_n)
-    sales_result = sales_momentum_engine.run(blackbox_df, top_n=top_n)
-    revenue_result = revenue_momentum_engine.run(blackbox_df, top_n=top_n)
-    bsr_result = bsr_efficiency_engine.run(blackbox_df, top_n=top_n)
+    snapshot = run_all_engines(top_n=top_n)
+    engines = snapshot.get("engines", {})
 
-    siei_result = siei_engine.run(magnet_df, top_n=top_n) if not is_empty_dataframe(magnet_df) else None
-    whitespace_result = whitespace_engine.run(magnet_df, None, top_n=top_n) if not is_empty_dataframe(magnet_df) else None
-    
-    direct_comp_result = direct_competitor_engine.run(None, blackbox_df, top_n=top_n) if not is_empty_dataframe(blackbox_df) else None
-    price_elasticity_result = price_elasticity_engine.run(None, blackbox_df) if not is_empty_dataframe(blackbox_df) else None
-    hhi_result = hhi_engine.run(blackbox_df, top_n=top_n) if not is_empty_dataframe(blackbox_df) else None
-    
-    search_mom_result = search_momentum_engine.run(magnet_df, blackbox_df, top_n=top_n) if not (is_empty_dataframe(magnet_df) or is_empty_dataframe(blackbox_df)) else None
-    demand_vel_result = demand_velocity_engine.run(magnet_df, blackbox_df, top_n=top_n) if not (is_empty_dataframe(magnet_df) and is_empty_dataframe(blackbox_df)) else None
-
-    substitute_result = substitute_engine.run(kc_df, blackbox_df, top_n=top_n) if not (is_empty_dataframe(kc_df) or is_empty_dataframe(blackbox_df)) else None
-    complement_result = complement_engine.run(kc_df, blackbox_df, top_n=top_n) if not (is_empty_dataframe(kc_df) or is_empty_dataframe(blackbox_df)) else None
-    bundle_result = bundle_opportunity_engine.run(kc_df, blackbox_df, top_n=top_n) if not (is_empty_dataframe(kc_df) or is_empty_dataframe(blackbox_df)) else None
+    def _eng(key: str):
+        return engines.get(key) or {}
 
     report = build_report(
-        demand_result=demand_result,
-        sales_result=sales_result,
-        revenue_result=revenue_result,
-        bsr_result=bsr_result,
-        siei_result=siei_result,
-        whitespace_result=whitespace_result,
-        direct_comp_result=direct_comp_result,
-        price_elasticity_result=price_elasticity_result,
-        hhi_result=hhi_result,
-        search_mom_result=search_mom_result,
-        demand_vel_result=demand_vel_result,
-        substitute_result=substitute_result,
-        complement_result=complement_result,
-        bundle_result=bundle_result,
+        demand_result=_eng("demand"),
+        sales_result=_eng("sales_momentum"),
+        revenue_result=_eng("revenue_momentum"),
+        bsr_result=_eng("bsr_efficiency"),
+        siei_result=_eng("siei") or None,
+        whitespace_result=_eng("whitespace") or None,
+        direct_comp_result=_eng("direct_competitors") or None,
+        price_elasticity_result=_eng("price_elasticity") or None,
+        hhi_result=_eng("hhi") or None,
+        search_mom_result=_eng("search_momentum") or None,
+        demand_vel_result=_eng("demand_velocity") or None,
+        substitute_result=_eng("substitute") or None,
+        complement_result=_eng("complement") or None,
+        bundle_result=_eng("bundle") or None,
+        finance_result=_eng("finance") or None,
+        blackbox_df=blackbox_df,
+        magnet_df=magnet_df,
         top_n=top_n,
     )
+    if report.get("results") is not None:
+        report["results"]["engine_outputs"] = engines
+    return report
 
+
+def market_report(top_n: int = 10):
+    logger.info(f"Market Report requested (top_n={top_n})")
+    report = _build_report_from_snapshot(top_n=top_n)
     logger.info("Market Report complete")
     return report
 
@@ -681,48 +730,11 @@ def market_report(top_n: int = 10):
 )
 def market_report_pdf(top_n: int = 10):
     logger.info(f"Market Report PDF requested (top_n={top_n})")
-    blackbox_df = registry.get_blackbox()
-    magnet_df = registry.get_magnet()
-    kc_df = registry.get_keyword_classification()
-    if is_empty_dataframe(blackbox_df):
-        return _datasets_not_loaded("Market Report PDF", "blackbox")
-
-    demand_result = demand_engine.run(magnet_df, blackbox_df, top_n=top_n)
-    sales_result = sales_momentum_engine.run(blackbox_df, top_n=top_n)
-    revenue_result = revenue_momentum_engine.run(blackbox_df, top_n=top_n)
-    bsr_result = bsr_efficiency_engine.run(blackbox_df, top_n=top_n)
-    
-    siei_result = siei_engine.run(magnet_df, top_n=top_n) if not is_empty_dataframe(magnet_df) else None
-    whitespace_result = whitespace_engine.run(magnet_df, None, top_n=top_n) if not is_empty_dataframe(magnet_df) else None
-    
-    direct_comp_result = direct_competitor_engine.run(None, blackbox_df, top_n=top_n) if not is_empty_dataframe(blackbox_df) else None
-    price_elasticity_result = price_elasticity_engine.run(None, blackbox_df) if not is_empty_dataframe(blackbox_df) else None
-    hhi_result = hhi_engine.run(blackbox_df, top_n=top_n) if not is_empty_dataframe(blackbox_df) else None
-    
-    search_mom_result = search_momentum_engine.run(magnet_df, blackbox_df, top_n=top_n) if not (is_empty_dataframe(magnet_df) or is_empty_dataframe(blackbox_df)) else None
-    demand_vel_result = demand_velocity_engine.run(magnet_df, blackbox_df, top_n=top_n) if not (is_empty_dataframe(magnet_df) and is_empty_dataframe(blackbox_df)) else None
-
-    substitute_result = substitute_engine.run(kc_df, blackbox_df, top_n=top_n) if not (is_empty_dataframe(kc_df) or is_empty_dataframe(blackbox_df)) else None
-    complement_result = complement_engine.run(kc_df, blackbox_df, top_n=top_n) if not (is_empty_dataframe(kc_df) or is_empty_dataframe(blackbox_df)) else None
-    bundle_result = bundle_opportunity_engine.run(kc_df, blackbox_df, top_n=top_n) if not (is_empty_dataframe(kc_df) or is_empty_dataframe(blackbox_df)) else None
-
-    report = build_report(
-        demand_result=demand_result,
-        sales_result=sales_result,
-        revenue_result=revenue_result,
-        bsr_result=bsr_result,
-        siei_result=siei_result,
-        whitespace_result=whitespace_result,
-        direct_comp_result=direct_comp_result,
-        price_elasticity_result=price_elasticity_result,
-        hhi_result=hhi_result,
-        search_mom_result=search_mom_result,
-        demand_vel_result=demand_vel_result,
-        substitute_result=substitute_result,
-        complement_result=complement_result,
-        bundle_result=bundle_result,
-        top_n=top_n,
-    )
+    report = _build_report_from_snapshot(top_n=top_n)
+    if report.get("status") == "error":
+        return report
+    if not report.get("results"):
+        return report
     pdf_path = export_market_report_pdf(report)
     return FileResponse(
         path=pdf_path,
@@ -749,6 +761,7 @@ def _datasets_not_loaded(metric_name: str, required: str) -> dict:
         "validation": {
             "status": "failed",
             "message": msg,
+            "missing_columns": [],
             "rows_before_cleaning": 0,
             "rows_after_cleaning": 0,
             "rows_skipped": 0,

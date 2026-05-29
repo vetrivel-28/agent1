@@ -43,9 +43,13 @@ export default function DatasetUpload() {
       }, 3000);
     },
     onError: (error: any) => {
+      const errList = error.response?.data?.errors;
+      const firstMsg = Array.isArray(errList) && errList[0]?.message
+        ? errList[0].message
+        : error.response?.data?.message;
       setUploadStatus({
         type: 'error',
-        message: error.response?.data?.detail?.[0]?.msg || error.message || 'Failed to upload datasets.',
+        message: firstMsg || error.response?.data?.detail?.[0]?.msg || error.message || 'Upload validation failed.',
         details: error.response?.data
       });
     }
@@ -140,7 +144,7 @@ export default function DatasetUpload() {
       <div>
         <h1 className="text-3xl font-bold tracking-tight">Dataset Upload</h1>
         <p className="text-muted-foreground mt-1 text-lg">
-          Upload Helium10 BlackBox and Magnet CSVs to start the intelligence engines.
+          Upload CSV files — dataset type is detected from column headers, not file names.
         </p>
       </div>
 
@@ -222,7 +226,7 @@ export default function DatasetUpload() {
                   <div className="flex items-start gap-3">
                     <AlertCircle className="w-5 h-5 text-danger mt-0.5 shrink-0" />
                     <div>
-                      <h4 className="font-semibold text-danger">Upload Failed</h4>
+                      <h4 className="font-semibold text-danger">Validation Failed</h4>
                       <p className="text-sm text-danger/80 mt-1">{uploadStatus.message}</p>
                     </div>
                   </div>

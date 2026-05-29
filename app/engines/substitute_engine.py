@@ -64,7 +64,7 @@ MIN_PRODUCT_SCORE = 10.0
 def run(
     kc_df: Optional[pd.DataFrame],
     blackbox_df: Optional[pd.DataFrame],
-    top_n: int = 10,
+    top_n: int = 5,
 ) -> Dict[str, Any]:
     t0 = time.time()
     logger.info("Substitute Intelligence engine started.")
@@ -72,10 +72,9 @@ def run(
     # -----------------------------------------------------------------------
     # Dataset guards
     # -----------------------------------------------------------------------
-    if kc_df is None or kc_df.empty:
+    if kc_df is None or kc_df.empty or blackbox_df is None or blackbox_df.empty:
         return _error("keyword_classification dataset not uploaded or empty.", t0)
-    if blackbox_df is None or blackbox_df.empty:
-        return _error("blackbox dataset not uploaded or empty.", t0)
+    
 
     rows_kc = len(kc_df)
     rows_bb = len(blackbox_df)
@@ -148,6 +147,12 @@ def run(
     )
     logger.info(f"Substitute token vocabulary size: {len(all_sub_tokens)}")
 
+    primary_subcat_clean = ""
+    if subcat_col and not blackbox_df[subcat_col].empty:
+        primary_subcat = blackbox_df[subcat_col].mode()[0]
+        primary_subcat_clean = str(primary_subcat).lower()
+        logger.info(f"Primary market subcategory: {primary_subcat_clean}")
+
     # -----------------------------------------------------------------------
     # Score BlackBox products against substitute keywords
     # Vectorised approach: pre-filter by token presence, then score
@@ -183,9 +188,14 @@ def run(
         kw_sv = kw_entry["search_volume"] or 0
 
         for idx, row in candidate_bb.iterrows():
-            title_score  = combined_similarity(kw, row["_title_clean"])
-            subcat_score = combined_similarity(kw, row["_subcat_clean"]) if subcat_col else 0.0
-            score = max(title_score, subcat_score)
+            comp_subcat = row["_subcat_clean"]
+            if comp_subcat == primary_subcat_clean:
+                continue # Same subcategory means direct competitor, not substitute
+
+            intent_score = combined_similarity(kw, row["_title_clean"])
+            title_score = combined_similarity(kw, row["_title_clean"])
+            use_case_score = combined_similarity(kw, row["_subcat_clean"]) if subcat_col else 0.0
+            score = 0.5 * intent_score + 0.3 * title_score + 0.2 * use_case_score
 
             if score < MIN_MATCH_SCORE:
                 continue
@@ -260,9 +270,11 @@ def run(
     # -----------------------------------------------------------------------
     # = normalised density: (matched products / total products) * mean similarity
     if substitute_products:
-        density = len(substitute_products) / rows_bb
+        # Density of substitutes vs total market
+        density = min(len(substitute_products) / max(rows_bb, 1), 1.0)
         mean_sim = float(np.mean([p["similarity_score"] for p in substitute_products]))
-        market_overlap_score = round(min(density * mean_sim * 3, 100.0), 2)
+        # Overlap score combines how many substitutes exist with how similar they are
+        market_overlap_score = round(min(density * 100.0 * 0.5 + mean_sim * 0.5, 100.0), 2)
     else:
         market_overlap_score = 0.0
 
@@ -335,16 +347,13 @@ def run(
 def _sv(v: Any) -> Any:
     if v is None:
         return None
-    try:
-        if np.isnan(float(v)):
-            return None
-    except (TypeError, ValueError):
+    if pd.isna(v):
         return None
     if isinstance(v, np.integer):
         return int(v)
     if isinstance(v, (np.floating, float)):
         return round(float(v), 2)
-    return v
+    return float(v) if isinstance(v, str) and v.replace('.','',1).isdigit() else v
 
 
 def _error(message: str, t0: float, missing: Optional[List[str]] = None) -> Dict:

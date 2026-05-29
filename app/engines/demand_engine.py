@@ -18,7 +18,8 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from app.utils.column_mapper import find_column, minmax_normalize
+from app.utils.column_mapper import find_column
+from app.utils.normalization import min_max_normalize
 from app.utils.logger import get_logger
 from app.utils.numeric_cleaner import clean_numeric_series
 
@@ -86,7 +87,7 @@ def run(
                 f"cleaned={sv_stats['cleaned_count']}, "
                 f"nan={sv_stats['nan_introduced']}"
             )
-            sv_norm = minmax_normalize(sv_clean)
+            sv_norm = min_max_normalize(sv_clean)
             sv_mean = float(sv_norm.mean(skipna=True))
             if not np.isnan(sv_mean):
                 metrics_available.append("Search Volume")
@@ -109,7 +110,7 @@ def run(
                 f"cleaned={ks_stats['cleaned_count']}, "
                 f"nan={ks_stats['nan_introduced']}"
             )
-            ks_norm = minmax_normalize(ks_clean)
+            ks_norm = min_max_normalize(ks_clean)
             ks_mean = float(ks_norm.mean(skipna=True))
             if not np.isnan(ks_mean):
                 metrics_available.append("Keyword Sales")
@@ -133,7 +134,7 @@ def run(
                 f"cleaned={as_stats['cleaned_count']}, "
                 f"nan={as_stats['nan_introduced']}"
             )
-            as_norm = minmax_normalize(as_clean)
+            as_norm = min_max_normalize(as_clean)
             as_mean = float(as_norm.mean(skipna=True))
             if not np.isnan(as_mean):
                 metrics_available.append("ASIN Sales")
@@ -156,7 +157,7 @@ def run(
                 f"cleaned={rev_stats['cleaned_count']}, "
                 f"nan={rev_stats['nan_introduced']}"
             )
-            rev_norm = minmax_normalize(rev_clean)
+            rev_norm = min_max_normalize(rev_clean)
             rev_mean = float(rev_norm.mean(skipna=True))
             if not np.isnan(rev_mean):
                 metrics_available.append("Revenue")
@@ -195,24 +196,49 @@ def run(
         }
 
     # -----------------------------------------------------------------------
-    # 5. Overall Demand Score
+    # 5. Market demand index (internal pillar score only — not shown as Demand Strength)
     # -----------------------------------------------------------------------
-    valid_means = [v for v in metric_means.values() if not np.isnan(v)]
-    overall_score = round(float(np.mean(valid_means)), 2) if valid_means else 0.0
+    score_sum = 0.0
+    weight_sum = 0.0
+    if "Search Volume" in metric_means:
+        score_sum += metric_means["Search Volume"] * 0.50
+        weight_sum += 0.50
+    sales_score = 0.0
+    sales_count = 0
+    if "Keyword Sales" in metric_means:
+        sales_score += metric_means["Keyword Sales"]
+        sales_count += 1
+    if "ASIN Sales" in metric_means:
+        sales_score += metric_means["ASIN Sales"]
+        sales_count += 1
+    if sales_count > 0:
+        score_sum += (sales_score / sales_count) * 0.35
+        weight_sum += 0.35
+    if "Revenue" in metric_means:
+        score_sum += metric_means["Revenue"] * 0.15
+        weight_sum += 0.15
+    market_demand_index = round(score_sum / weight_sum, 2) if weight_sum > 0 else 0.0
 
     # -----------------------------------------------------------------------
-    # 6. Top demand keywords  (by Search Volume)
+    # 6. Top demand keyword + keyword list
     # -----------------------------------------------------------------------
     top_keywords: List[Dict] = []
+    top_demand_keyword: Dict[str, Any] = {}
     if magnet_df is not None and sv_col:
         kw_col = find_column(magnet_df, _KEYWORD_CANDIDATES)
         tmp = magnet_df.copy()
         sv_c, _ = clean_numeric_series(tmp[sv_col], sv_col)
         tmp["_sv"] = sv_c
         tmp = tmp.dropna(subset=["_sv"]).sort_values("_sv", ascending=False)
+        total_sv = float(tmp["_sv"].sum())
         logger.info(f"Top keywords pool: {len(tmp)} rows with valid Search Volume")
         for _, row in tmp.head(top_n).iterrows():
-            entry: Dict[str, Any] = {"search_volume": _sv(row["_sv"])}
+            sv_val = float(row["_sv"])
+            contrib = round((sv_val / total_sv) * 100.0, 2) if total_sv > 0 else 0.0
+            entry: Dict[str, Any] = {
+                "search_volume": _sv(sv_val),
+                "demand_contribution": contrib,
+            }
             if kw_col:
                 entry["keyword"] = str(row[kw_col])
             if kw_sales_col:
@@ -221,6 +247,30 @@ def run(
                 )
                 entry["keyword_sales"] = _sv(ks_c.iloc[0])
             top_keywords.append(entry)
+
+        if not tmp.empty:
+            top_row = tmp.iloc[0]
+            top_sv = float(top_row["_sv"])
+            top_contrib = round((top_sv / total_sv) * 100.0, 2) if total_sv > 0 else 0.0
+            if top_contrib >= 10:
+                opp = "High"
+            elif top_contrib >= 5:
+                opp = "Medium"
+            else:
+                opp = "Low"
+            rev_col_mag = find_column(magnet_df, _REVENUE_CANDIDATES)
+            rev_est = None
+            if rev_col_mag:
+                rev_s, _ = clean_numeric_series(pd.Series([top_row[rev_col_mag]]), rev_col_mag)
+                rev_est = _sv(rev_s.iloc[0])
+            top_demand_keyword = {
+                "keyword": str(top_row[kw_col]) if kw_col else "Unknown",
+                "search_volume": int(top_sv) if top_sv == int(top_sv) else round(top_sv, 0),
+                "demand_contribution": top_contrib,
+                "revenue_opportunity": opp,
+                "opportunity_level": opp,
+                "estimated_keyword_revenue": rev_est,
+            }
 
     # -----------------------------------------------------------------------
     # 7. Top demand products  (by ASIN Sales or Revenue)
@@ -252,46 +302,39 @@ def run(
     # -----------------------------------------------------------------------
     # 8. Interpretation (percentile-relative to score distribution)
     # -----------------------------------------------------------------------
-    if overall_score >= 75:
+    if top_demand_keyword:
         interpretation = (
-            "Strong market demand. High search volume and sales activity "
-            "indicate a healthy, active market."
+            f"Leading demand keyword '{top_demand_keyword.get('keyword', '')}' "
+            f"accounts for {top_demand_keyword.get('demand_contribution', 0)}% of measured "
+            f"search volume with {top_demand_keyword.get('opportunity_level', 'N/A')} revenue opportunity."
         )
-    elif overall_score >= 50:
-        interpretation = (
-            "Moderate market demand. The market shows reasonable activity "
-            "but may have room for growth."
-        )
-    elif overall_score >= 25:
-        interpretation = (
-            "Below-average demand. Market activity is limited — "
-            "consider niche positioning."
-        )
+    elif market_demand_index >= 60:
+        interpretation = "Market shows concentrated search demand across tracked keywords."
     else:
-        interpretation = (
-            "Weak demand signals. Low search and sales activity detected "
-            "across available metrics."
-        )
+        interpretation = "Limited search demand signals in uploaded keyword data."
 
     elapsed = round(time.time() - t0, 3)
     logger.info(
-        f"Demand Strength complete: score={overall_score}, "
-        f"metrics={metrics_available}, elapsed={elapsed}s"
+        "Demand Intelligence complete: market_demand_index=%s, top_keyword=%s, elapsed=%ss",
+        market_demand_index,
+        top_demand_keyword.get("keyword", "n/a"),
+        elapsed,
     )
 
     return {
         "status": "success",
-        "metric_name": "Demand Strength",
+        "metric_name": "Demand Intelligence",
         "summary": interpretation,
-        "datasets_used": list(dict.fromkeys(datasets_used)),   # preserve order, dedupe
+        "datasets_used": list(dict.fromkeys(datasets_used)),
         "columns_used": list(dict.fromkeys(columns_used)),
         "formula_used": (
-            "Demand Strength = mean( normalised_metric_1, normalised_metric_2, … ) "
-            "where each metric is min-max normalised to 0-100. "
-            f"Metrics used: {metrics_available}"
+            "Top Demand Keyword = highest Search Volume row; "
+            "Demand Contribution = keyword SV / total SV; "
+            "Market Demand Index (report pillar only) from weighted normalized metrics."
         ),
         "results": {
-            "overall_demand_score": overall_score,
+            "market_demand_index": market_demand_index,
+            "top_demand_keyword": top_demand_keyword,
             "metrics_contributing": metric_means,
             "metrics_available": metrics_available,
             "top_demand_keywords": top_keywords,
@@ -319,11 +362,8 @@ def _sv(v: Any) -> Any:
     """Convert numpy scalars / NaN to JSON-safe Python types."""
     if v is None:
         return None
-    try:
-        if np.isnan(float(v)):
-            return None
-    except (TypeError, ValueError):
-        pass
+    if pd.isna(v):
+        return None
     if isinstance(v, np.integer):
         return int(v)
     if isinstance(v, (np.floating, float)):

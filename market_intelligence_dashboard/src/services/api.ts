@@ -72,6 +72,11 @@ export const api = {
     return response.data;
   },
 
+  getAnalysisSnapshot: async () => {
+    const response = await apiClient.get('/analysis-snapshot');
+    return response.data;
+  },
+
   getWhitespaceOpportunities: async (topN = 15) => {
     const response = await apiClient.post(`/whitespace-opportunities?top_n=${topN}`);
     return response.data;
@@ -99,6 +104,11 @@ export const api = {
 
   getBundleOpportunities: async (topN = 10) => {
     const response = await apiClient.post(`/bundle-opportunities?top_n=${topN}`);
+    return response.data;
+  },
+
+  getFinanceIntelligence: async () => {
+    const response = await apiClient.post('/finance-intelligence');
     return response.data;
   },
 

@@ -7,9 +7,10 @@ import { Button } from '../components/ui/Button';
 import { formatCurrency } from '../utils/cn';
 import { Link } from 'react-router-dom';
 import { 
-  Activity, Zap, TrendingUp, DollarSign, Database, AlertTriangle, Crosshair, ArrowRight
+  Activity, Zap, TrendingUp, DollarSign, Database, AlertTriangle, ArrowRight, Landmark
 } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { AttractivenessMatrix } from '../components/charts/AttractivenessMatrix';
 
 export default function DashboardOverview() {
   const { data, isLoading, isError, error } = useQuery({
@@ -84,6 +85,12 @@ export default function DashboardOverview() {
   const opportunitySignals = results.opportunity_signals || {};
   const riskSignals = results.risk_signals || {};
   const topKeywords = results.rankings?.top_demand_keywords || [];
+  const marketEconomics = results.executive_summary?.market_economics || results.market_economics_narrative || '';
+  const financeScore = results.engine_scores?.finance_health ?? results.pillar_scores?.finance;
+  const attractivenessMatrix = results.economic_attractiveness_matrix
+    || results.finance_intelligence?.economic_attractiveness_matrix
+    || {};
+  const finalVerdictDetails = results.final_market_verdict || {};
 
   return (
     <motion.div 
@@ -104,26 +111,24 @@ export default function DashboardOverview() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-        <KPICard 
-          title="Demand Strength"
-          value={engineScores.demand_strength?.toFixed(1) || '0.0'}
-          trend={0}
-          icon={<Activity className="w-5 h-5" />}
-          status={engineScores.demand_strength > 60 ? 'success' : 'warning'}
-        />
-        <KPICard 
-          title="Market Direction"
-          value={marketHealth.market_direction || marketOverview.market_direction || 'Unknown'}
-          icon={<TrendingUp className="w-5 h-5" />}
-          status={
-            (marketHealth.market_direction || marketOverview.market_direction) === 'growing'
-              ? 'success'
-              : (marketHealth.market_direction || marketOverview.market_direction) === 'stable'
-              ? 'warning'
-              : 'danger'
-          }
-        />
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="flex flex-col gap-1">
+          <KPICard 
+            title="Market Direction"
+            value={marketHealth.market_direction || marketOverview.market_direction || 'Unknown'}
+            icon={<TrendingUp className="w-5 h-5" />}
+            status={
+              (marketHealth.market_direction || marketOverview.market_direction) === 'growing'
+                ? 'success'
+                : (marketHealth.market_direction || marketOverview.market_direction) === 'stable'
+                ? 'warning'
+                : 'danger'
+            }
+          />
+          <p className="text-[10px] text-muted-foreground px-1 leading-tight">
+            {marketHealth.market_direction_explanation || marketOverview.market_direction_explanation || ''}
+          </p>
+        </div>
         <KPICard 
           title="Market Revenue"
           value={formatCurrency(marketOverview.total_market_revenue || 0)}
@@ -131,12 +136,35 @@ export default function DashboardOverview() {
           status="neutral"
         />
         <KPICard 
-          title="Data Reliability"
-          value={`${(marketHealth.data_reliability_score ?? marketOverview.data_reliability_score ?? 0).toFixed(1)}/100`}
-          icon={<Crosshair className="w-5 h-5" />}
-          status={(marketHealth.data_reliability_score ?? marketOverview.data_reliability_score ?? 0) > 60 ? 'success' : 'warning'}
+          title="Final Market Score"
+          value={`${(finalVerdictDetails.final_market_score ?? results.executive_summary?.final_market_score ?? 0).toFixed(1)}/100`}
+          icon={<Activity className="w-5 h-5" />}
+          status={
+            (finalVerdictDetails.final_market_score ?? 0) >= 60 ? 'success' : 'warning'
+          }
         />
       </div>
+
+      {financeScore != null && Number(financeScore) > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Landmark className="w-5 h-5 text-primary" />
+              Market Economics
+            </CardTitle>
+            <CardDescription>Finance Intelligence pillar — health score {Number(financeScore).toFixed(0)}/100</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground leading-relaxed">
+              {marketEconomics || 'Upload datasets with finance columns to generate market economics narrative.'}
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {attractivenessMatrix?.quadrant && (
+        <AttractivenessMatrix data={attractivenessMatrix} />
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card className="flex flex-col h-full">
@@ -149,6 +177,17 @@ export default function DashboardOverview() {
                 <h3 className="text-2xl font-semibold mb-4 text-primary">
                   {finalVerdict.verdict || "Analysis Pending"}
                 </h3>
+                {finalVerdictDetails.market_rating && (
+                  <p className="text-sm text-muted-foreground mb-2">
+                    Rating: <strong>{finalVerdictDetails.market_rating}</strong>
+                    {finalVerdictDetails.final_market_score != null && (
+                      <> · Score: <strong>{finalVerdictDetails.final_market_score}/100</strong></>
+                    )}
+                  </p>
+                )}
+                {finalVerdictDetails.launch_recommendation && (
+                  <p className="text-sm mb-4">{finalVerdictDetails.launch_recommendation}</p>
+                )}
                 <div className="space-y-4">
                   <div>
                     <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-2">Key Opportunities</h4>

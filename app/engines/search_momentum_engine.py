@@ -13,9 +13,21 @@ from app.utils.numeric_cleaner import clean_numeric_series
 
 logger = get_logger("search_momentum_engine")
 
-_SEARCH_TREND_CANDIDATES = ["Search Volume Trend", "Search Trend"]
-_SALES_TREND_CANDIDATES = ["Sales Trend", "Sales Trend (90 days) (%)", "Sales Trend (%)"]
-_SALES_VOLUME_CANDIDATES = ["ASIN Sales", "Parent Level Sales", "Keyword Sales"]
+_SEARCH_TREND_CANDIDATES = [
+    "Search Volume Trend", "search volume trend", "Search Trend", "search trend",
+    "SV Trend", "Monthly Search Volume Trend",
+]
+_SEARCH_VOLUME_CANDIDATES = [
+    "Search Volume", "search volume", "Monthly Search Volume", "SearchVolume",
+]
+_SALES_TREND_CANDIDATES = [
+    "Sales Trend (90 days) (%)", "Sales Trend (%)", "Sales Trend", "sales trend",
+    "Revenue Trend (90 days) (%)", "revenue trend",
+]
+_SALES_VOLUME_CANDIDATES = [
+    "ASIN Sales", "asin sales", "Parent Level Sales", "parent level sales",
+    "Keyword Sales", "keyword sales", "Sales", "sales",
+]
 _KEYWORD_CANDIDATES = ["Keyword Phrase", "Keyword"]
 _TITLE_CANDIDATES = ["Title", "Product Title"]
 _ASIN_CANDIDATES = ["ASIN"]
@@ -48,16 +60,28 @@ def run(magnet_df: Optional[pd.DataFrame], blackbox_df: Optional[pd.DataFrame], 
         }
 
     search_col = find_column(magnet_df, _SEARCH_TREND_CANDIDATES)
+    search_proxy = False
+    if search_col is None:
+        search_col = find_column(magnet_df, _SEARCH_VOLUME_CANDIDATES)
+        search_proxy = search_col is not None
+
     sales_col = find_column(blackbox_df, _SALES_TREND_CANDIDATES)
     sales_volume_col = find_column(blackbox_df, _SALES_VOLUME_CANDIDATES)
-    if search_col is None or sales_col is None or sales_volume_col is None:
+
+    missing_msgs: List[str] = []
+    if search_col is None:
+        missing_msgs.append("Missing Search Volume or Search Volume Trend (Magnet)")
+    if sales_col is None and sales_volume_col is None:
+        missing_msgs.append("Missing Sales Trend or ASIN Sales (BlackBox)")
+
+    if missing_msgs:
         return {
-            "status": "warning",
-            "message": "No valid numeric rows after cleaning",
+            "status": "error",
+            "message": "; ".join(missing_msgs),
             "metric_name": "Search Momentum",
-            "summary": "Required trend columns not found.",
+            "summary": "; ".join(missing_msgs),
             "datasets_used": ["magnet", "blackbox"],
-            "columns_used": [c for c in [search_col, sales_col, sales_volume_col] if c],
+            "columns_used": [],
             "formula_used": "",
             "results": {},
             "validation": {
@@ -65,9 +89,15 @@ def run(magnet_df: Optional[pd.DataFrame], blackbox_df: Optional[pd.DataFrame], 
                 "rows_after_cleaning": 0,
                 "rows_skipped": rows_before_cleaning,
                 "numeric_columns_cleaned": [],
+                "missing_columns": missing_msgs,
             },
             "processing_time_seconds": round(time.time() - t0, 3),
         }
+
+    if sales_col is None:
+        sales_col = sales_volume_col
+    if sales_volume_col is None:
+        sales_volume_col = sales_col
 
     magnet_work = pd.DataFrame(index=magnet_df.index)
     blackbox_work = pd.DataFrame(index=blackbox_df.index)
@@ -86,14 +116,10 @@ def run(magnet_df: Optional[pd.DataFrame], blackbox_df: Optional[pd.DataFrame], 
         rolling_trend_smoothing(blackbox_work["sales_volume"], window=5)
     )
 
-    if (
-        magnet_work["norm_search_trend"].dropna().empty
-        or blackbox_work["norm_sales_trend"].dropna().empty
-        or blackbox_work["norm_sales_volume_trend"].dropna().empty
-    ):
+    if magnet_work["norm_search_trend"].dropna().empty or blackbox_work["norm_sales_trend"].dropna().empty:
         return {
-            "status": "warning",
-            "message": "No valid numeric rows after cleaning",
+            "status": "error",
+            "message": "Insufficient numeric data after cleaning trend/volume columns",
             "metric_name": "Search Momentum",
             "summary": "Trend columns did not contain sufficient numeric variance.",
             "datasets_used": ["magnet", "blackbox"],
@@ -181,11 +207,11 @@ def run(magnet_df: Optional[pd.DataFrame], blackbox_df: Optional[pd.DataFrame], 
         "datasets_used": ["magnet", "blackbox"],
         "columns_used": [search_col, sales_col, sales_volume_col],
         "formula_used": (
-            "Search Momentum = weighted_average("
-            "Search Volume Trend x 0.4, Sales Trend x 0.4, Sales Volume Trend x 0.2"
-            "), with log scaling, clipping, smoothing, and 0-100 normalization."
+            "Search Momentum = 0.4×norm(Search signal) + 0.4×norm(Sales trend) + "
+            "0.2×norm(Sales volume); uses Search Volume as proxy when trend column absent."
         ),
         "results": {
+            "search_signal_source": "search_volume_proxy" if search_proxy else "search_trend",
             "momentum_alignment": momentum_alignment,
             "healthy_keywords": healthy_keywords,
             "weak_conversion_keywords": weak_conversion_keywords,

@@ -17,26 +17,29 @@ import {
   TrendingDown,
   ShieldAlert,
   LinkIcon,
-  PackagePlus
+  PackagePlus,
+  BarChart4,
+  Landmark
 } from 'lucide-react';
 
 const navigation = [
+  { name: 'Data Upload', href: '/upload', icon: UploadCloud },
   { name: 'Dashboard Overview', href: '/', icon: LayoutDashboard },
-  { name: 'Dataset Upload', href: '/upload', icon: UploadCloud },
   { name: 'Demand Intelligence', href: '/demand-strength', icon: Activity },
   { name: 'Sales Momentum', href: '/sales-momentum', icon: TrendingUp },
-  { name: 'Revenue Momentum', href: '/revenue-momentum', icon: DollarSign },
+  { name: 'Market Overview', href: '/market-concentration', icon: PieChart },
+  { name: 'Revenue Growth', href: '/revenue-momentum', icon: DollarSign },
   { name: 'BSR Efficiency', href: '/bsr-efficiency', icon: Crosshair },
-  { name: 'Demand Velocity', href: '/demand-velocity', icon: Zap },
-  { name: 'Search Intelligence', href: '/search-momentum', icon: Search },
-  { name: 'Intent Efficiency', href: '/search-intent-efficiency', icon: MousePointerClick },
-  { name: 'Market Structure', href: '/market-concentration', icon: PieChart },
-  { name: 'Whitespace Opportunities', href: '/whitespace-opportunities', icon: Target },
-  { name: 'Direct Competitors', href: '/direct-competitors', icon: Users },
-  { name: 'Price Elasticity', href: '/price-elasticity', icon: TrendingDown },
-  { name: 'Substitute Intelligence', href: '/substitute-intelligence', icon: ShieldAlert },
-  { name: 'Complement Intelligence', href: '/complement-intelligence', icon: LinkIcon },
-  { name: 'Bundle Opportunities', href: '/bundle-opportunities', icon: PackagePlus },
+  { name: 'Search Momentum', href: '/search-momentum', icon: Search },
+  { name: 'Inbound Efficiency Index', href: '/search-intent-efficiency', icon: MousePointerClick },
+  { name: 'Market Structure', href: '/market-structure', icon: BarChart4 },
+  { name: 'White Space Opportunities', href: '/whitespace-opportunities', icon: Target },
+  { name: 'Competitive Landscape', href: '/direct-competitors', icon: Users },
+  { name: 'Substitute Analysis', href: '/substitute-intelligence', icon: ShieldAlert },
+  { name: 'Complement Analysis', href: '/complement-intelligence', icon: LinkIcon },
+  { name: 'Bundle Opportunity Insights', href: '/bundle-opportunities', icon: PackagePlus },
+  { name: 'Price Intelligence', href: '/price-elasticity', icon: TrendingDown },
+  { name: 'Finance Intelligence', href: '/finance-intelligence', icon: Landmark },
   { name: 'Market Report', href: '/market-report', icon: FileText },
 ];
 

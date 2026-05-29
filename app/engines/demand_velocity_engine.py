@@ -25,11 +25,8 @@ _ASIN_CANDIDATES = ["ASIN"]
 def _safe_value(value: Any) -> Any:
     if value is None:
         return None
-    try:
-        if np.isnan(float(value)):
-            return None
-    except (TypeError, ValueError):
-        return str(value)
+    if pd.isna(value):
+        return None
     if isinstance(value, np.integer):
         return int(value)
     if isinstance(value, (np.floating, float)):

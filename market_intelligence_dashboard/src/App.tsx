@@ -9,7 +9,6 @@ import DemandStrength from './pages/DemandStrength';
 import SalesMomentum from './pages/SalesMomentum';
 import RevenueMomentum from './pages/RevenueMomentum';
 import BsrEfficiency from './pages/BsrEfficiency';
-import DemandVelocity from './pages/DemandVelocity';
 import SearchMomentum from './pages/SearchMomentum';
 import IntentEfficiency from './pages/IntentEfficiency';
 import MarketConcentration from './pages/MarketConcentration';
@@ -20,6 +19,7 @@ import PriceElasticity from './pages/PriceElasticity';
 import SubstituteIntelligence from './pages/SubstituteIntelligence';
 import ComplementIntelligence from './pages/ComplementIntelligence';
 import BundleOpportunities from './pages/BundleOpportunities';
+import FinanceIntelligence from './pages/FinanceIntelligence';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -37,23 +37,24 @@ function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<MainLayout />}>
-            <Route index element={<DashboardOverview />} />
             <Route path="upload" element={<DatasetUpload />} />
+            <Route index element={<DashboardOverview />} />
             <Route path="demand-strength" element={<DemandStrength />} />
             <Route path="sales-momentum" element={<SalesMomentum />} />
+            <Route path="market-concentration" element={<MarketConcentration />} />
             <Route path="revenue-momentum" element={<RevenueMomentum />} />
             <Route path="bsr-efficiency" element={<BsrEfficiency />} />
-            <Route path="demand-velocity" element={<DemandVelocity />} />
             <Route path="search-momentum" element={<SearchMomentum />} />
             <Route path="search-intent-efficiency" element={<IntentEfficiency />} />
-            <Route path="market-concentration" element={<MarketConcentration />} />
-            <Route path="market-report" element={<MarketReport />} />
+            <Route path="market-structure" element={<div className="p-8"><h1 className="text-3xl font-bold tracking-tight text-gradient-primary">Market Structure</h1><p className="mt-4 text-muted-foreground">Detailed market structure analysis will be displayed here.</p></div>} />
             <Route path="whitespace-opportunities" element={<WhitespaceOpportunities />} />
             <Route path="direct-competitors" element={<DirectCompetitors />} />
-            <Route path="price-elasticity" element={<PriceElasticity />} />
             <Route path="substitute-intelligence" element={<SubstituteIntelligence />} />
             <Route path="complement-intelligence" element={<ComplementIntelligence />} />
             <Route path="bundle-opportunities" element={<BundleOpportunities />} />
+            <Route path="price-elasticity" element={<PriceElasticity />} />
+            <Route path="finance-intelligence" element={<FinanceIntelligence />} />
+            <Route path="market-report" element={<MarketReport />} />
           </Route>
         </Routes>
       </BrowserRouter>

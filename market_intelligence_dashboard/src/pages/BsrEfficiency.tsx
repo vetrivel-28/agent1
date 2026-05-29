@@ -2,9 +2,9 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '../services/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/Card';
 import { DataTable, type Column } from '../components/tables/DataTable';
-import { adaptiveDomain, formatCurrency, formatNumber } from '../utils/cn';
-import { AlertCircle, Loader2 } from 'lucide-react';
-import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
+import { formatCurrency, formatNumber } from '../utils/cn';
+import { isEngineOk, getEngineErrorMessage } from '../utils/analysisStatus';
+import { AlertCircle, Loader2, ArrowUpRight, Target, Search, AlertTriangle } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 export default function BsrEfficiency() {
@@ -21,21 +21,22 @@ export default function BsrEfficiency() {
     );
   }
 
-  if (isError || !data || data.status !== 'success') {
+  if (isError || !isEngineOk(data)) {
     return (
       <Card className="border-danger/50 bg-danger/5 mt-10">
-        <CardContent className="p-8 flex flex-col items-center">
+        <CardContent className="p-8 flex flex-col items-center text-center">
           <AlertCircle className="w-12 h-12 text-danger mb-4" />
-          <h2 className="text-xl font-bold text-danger mb-2">Analysis Failed</h2>
-          <p className="text-danger/80">Make sure BlackBox products dataset is loaded.</p>
+          <h2 className="text-xl font-bold text-danger mb-2">BSR Efficiency Unavailable</h2>
+          <p className="text-danger/80 max-w-lg">{getEngineErrorMessage(data, 'Required BSR and Revenue columns not found in product dataset.')}</p>
         </CardContent>
       </Card>
     );
   }
 
-  const results = data.results;
+  const results = data.results || {};
   const efficient = results.efficient_products || [];
   const inefficient = results.inefficient_products || [];
+  const qs = results.quadrant_summary || {};
 
   const columns: Column<any>[] = [
     { header: "ASIN / Title", accessorKey: "title", cell: (r) => <div className="max-w-[200px] truncate" title={r.title}>{r.title || r.asin || '—'}</div> },
@@ -44,27 +45,7 @@ export default function BsrEfficiency() {
     { header: "Efficiency", accessorKey: "efficiency_score", cell: (r) => r.efficiency_score != null ? `${r.efficiency_score.toFixed(1)}/100` : '—' },
   ];
 
-  const chartData = [
-    ...efficient.map((p: any) => ({ ...p, type: 'efficient' })),
-    ...inefficient.map((p: any) => ({ ...p, type: 'inefficient' }))
-  ];
-  const bsrDomain = adaptiveDomain(chartData.map((d: any) => Number(d.bsr || 0)), 0.02, 0.98);
-  const revenueDomain = adaptiveDomain(chartData.map((d: any) => Number(d.revenue || 0)), 0.02, 0.98);
-
-  const CustomTooltip = ({ active, payload }: any) => {
-    if (active && payload && payload.length) {
-      const data = payload[0].payload;
-      return (
-        <div className="bg-card border border-border p-3 rounded-lg shadow-sm">
-          <p className="font-semibold text-sm max-w-xs truncate mb-2">{data.title || data.asin}</p>
-          <p className="text-sm">BSR: {data.bsr != null ? formatNumber(data.bsr) : '—'}</p>
-          <p className="text-sm">Revenue: {data.revenue != null ? formatCurrency(data.revenue) : '—'}</p>
-          <p className="text-sm">Score: <span className={data.type === 'efficient' ? 'text-success' : 'text-danger'}>{data.efficiency_score?.toFixed(1)}</span></p>
-        </div>
-      );
-    }
-    return null;
-  };
+  const hasQuadrantData = qs.valid_products_count > 0;
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
@@ -76,45 +57,76 @@ export default function BsrEfficiency() {
       </div>
 
       <div className="grid grid-cols-1 gap-6">
+        {/* Quadrant Map Card */}
         <Card>
           <CardHeader>
-            <CardTitle>Rank vs Revenue Frontier</CardTitle>
-            <CardDescription>Mapping market efficiency. Quadrant outliers indicate strategic opportunities.</CardDescription>
+            <CardTitle>Rank-to-Revenue Opportunity Map</CardTitle>
+            <CardDescription>Product segmentation based on market rank and revenue thresholds.</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="h-[400px] w-full mt-4">
-              <ResponsiveContainer width="100%" height="100%">
-                <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis 
-                    type="number" 
-                    dataKey="bsr" 
-                    name="Best Sellers Rank"
-                    domain={bsrDomain}
-                    reversed
-                    tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }} 
-                    tickFormatter={(val) => formatNumber(val)}
-                  />
-                  <YAxis 
-                    type="number" 
-                    dataKey="revenue" 
-                    name="Revenue"
-                    domain={revenueDomain}
-                    tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }}
-                    tickFormatter={(val) => `$${formatNumber(val)}`}
-                  />
-                  <Tooltip content={<CustomTooltip />} cursor={{strokeDasharray: '3 3'}} />
-                  <Scatter data={chartData}>
-                    {chartData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.type === 'efficient' ? '#10b981' : '#ef4444'} />
-                    ))}
-                  </Scatter>
-                </ScatterChart>
-              </ResponsiveContainer>
-            </div>
+            {!hasQuadrantData ? (
+              <div className="flex flex-col items-center justify-center py-12 text-muted-foreground bg-muted/20 rounded-lg border border-dashed">
+                <AlertCircle className="w-8 h-8 mb-2 opacity-50" />
+                <p>Insufficient valid product data</p>
+                <p className="text-sm opacity-75">Cannot calculate thresholds from available BSR and revenue fields.</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Top Left: Market Leaders */}
+                  <div className="p-5 rounded-lg border bg-success/5 border-success/20 flex flex-col items-center text-center">
+                    <div className="flex items-center gap-2 mb-2 text-success">
+                      <ArrowUpRight className="w-5 h-5" />
+                      <span className="font-bold">Market Leaders</span>
+                    </div>
+                    <div className="text-3xl font-bold text-success mb-1">{qs.market_leaders_count}</div>
+                    <p className="text-xs text-muted-foreground">Strong BSR & Strong Revenue</p>
+                  </div>
+
+                  {/* Top Right: Optimization Gaps */}
+                  <div className="p-5 rounded-lg border bg-amber-500/5 border-amber-500/20 flex flex-col items-center text-center">
+                    <div className="flex items-center gap-2 mb-2 text-amber-600 dark:text-amber-500">
+                      <AlertTriangle className="w-5 h-5" />
+                      <span className="font-bold">Optimization Gaps</span>
+                    </div>
+                    <div className="text-3xl font-bold text-amber-600 dark:text-amber-500 mb-1">{qs.optimization_gaps_count}</div>
+                    <p className="text-xs text-muted-foreground">Strong BSR & Weak Revenue</p>
+                  </div>
+
+                  {/* Bottom Left: Hidden Winners */}
+                  <div className="p-5 rounded-lg border bg-blue-500/5 border-blue-500/20 flex flex-col items-center text-center">
+                    <div className="flex items-center gap-2 mb-2 text-blue-500">
+                      <Target className="w-5 h-5" />
+                      <span className="font-bold">Hidden Winners</span>
+                    </div>
+                    <div className="text-3xl font-bold text-blue-500 mb-1">{qs.hidden_winners_count}</div>
+                    <p className="text-xs text-muted-foreground">Weak BSR & Strong Revenue</p>
+                  </div>
+
+                  {/* Bottom Right: Weak Listings */}
+                  <div className="p-5 rounded-lg border bg-muted/30 border-muted/50 flex flex-col items-center text-center">
+                    <div className="flex items-center gap-2 mb-2 text-muted-foreground">
+                      <Search className="w-5 h-5" />
+                      <span className="font-bold">Weak Listings</span>
+                    </div>
+                    <div className="text-3xl font-bold text-muted-foreground mb-1">{qs.weak_listings_count}</div>
+                    <p className="text-xs text-muted-foreground">Weak BSR & Weak Revenue</p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap gap-4 text-xs text-muted-foreground bg-muted/20 p-3 rounded-md mt-4 justify-center">
+                  <div><strong>Valid products used:</strong> {qs.valid_products_count}</div>
+                  <div>•</div>
+                  <div><strong>Strong rank threshold:</strong> BSR ≤ {formatNumber(qs.rank_threshold_bsr)}</div>
+                  <div>•</div>
+                  <div><strong>Strong revenue threshold:</strong> Revenue ≥ {formatCurrency(qs.revenue_threshold)}</div>
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
 
+        {/* Existing Tables */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <Card>
             <CardHeader>

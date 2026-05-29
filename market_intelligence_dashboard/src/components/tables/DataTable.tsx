@@ -25,7 +25,7 @@ export function DataTable<T>({ columns, data, pageSize = 10, searchable = true }
 
   // Sorting
   const sortedData = React.useMemo(() => {
-    let sortableItems = [...data];
+    const sortableItems = [...data];
     if (sortConfig !== null) {
       sortableItems.sort((a: any, b: any) => {
         const aValue = a[sortConfig.key];

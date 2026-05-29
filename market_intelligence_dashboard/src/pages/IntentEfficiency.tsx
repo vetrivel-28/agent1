@@ -3,6 +3,7 @@ import { api } from '../services/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/Card';
 import { DataTable, type Column } from '../components/tables/DataTable';
 import { adaptiveDomain } from '../utils/cn';
+import { isEngineOk, getEngineErrorMessage } from '../utils/analysisStatus';
 import { AlertCircle, Loader2 } from 'lucide-react';
 import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { motion } from 'framer-motion';
@@ -21,13 +22,13 @@ export default function IntentEfficiency() {
     );
   }
 
-  if (isError || !data || data.status !== 'success') {
+  if (isError || !isEngineOk(data)) {
     return (
       <Card className="border-danger/50 bg-danger/5 mt-10">
-        <CardContent className="p-8 flex flex-col items-center">
+        <CardContent className="p-8 flex flex-col items-center text-center">
           <AlertCircle className="w-12 h-12 text-danger mb-4" />
-          <h2 className="text-xl font-bold text-danger mb-2">Analysis Failed</h2>
-          <p className="text-danger/80">Requires Magnet dataset.</p>
+          <h2 className="text-xl font-bold text-danger mb-2">Inbound Efficiency Unavailable</h2>
+          <p className="text-danger/80 max-w-lg">{getEngineErrorMessage(data, 'Missing ABA Click Share or Conversion Share in Magnet dataset.')}</p>
         </CardContent>
       </Card>
     );

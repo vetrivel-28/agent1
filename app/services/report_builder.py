@@ -21,6 +21,52 @@ from app.utils.logger import get_logger
 
 logger = get_logger("report_builder")
 
+_PILLAR_WEIGHTS = {
+    "demand": 0.25,
+    "momentum": 0.15,
+    "competition": 0.15,
+    "opportunity": 0.15,
+    "finance": 0.20,
+    "search": 0.10,
+}
+
+
+def _weighted_pillar_score(pillar_scores: Dict[str, Optional[float]]) -> float:
+    """Weighted pillar mean with re-normalization when pillars are unavailable."""
+    total = 0.0
+    weight_sum = 0.0
+    for key, base_weight in _PILLAR_WEIGHTS.items():
+        value = pillar_scores.get(key)
+        if value is None:
+            continue
+        total += base_weight * float(value)
+        weight_sum += base_weight
+    return round(total / weight_sum, 2) if weight_sum > 0 else 0.0
+
+
+def _market_rating(score: float) -> str:
+    if score >= 70:
+        return "Strong"
+    if score >= 45:
+        return "Moderate"
+    return "Weak"
+
+
+def _launch_recommendation_from_score(score: float, quadrant: str = "") -> str:
+    if quadrant == "Launch Candidate":
+        return "Proceed with launch planning — demand and economics align."
+    if quadrant == "Niche Opportunity":
+        return "Pursue niche positioning with focused SKU strategy."
+    if quadrant == "Difficult Economics":
+        return "Defer broad launch until unit economics improve."
+    if quadrant == "Avoid":
+        return "Do not launch — reassess category selection."
+    if score >= 70:
+        return "Proceed with structured market entry."
+    if score >= 45:
+        return "Pilot launch with tight capital controls."
+    return "Hold entry — strengthen fundamentals first."
+
 
 def build_report(
     demand_result: Dict[str, Any],
@@ -37,6 +83,9 @@ def build_report(
     substitute_result: Optional[Dict[str, Any]] = None,
     complement_result: Optional[Dict[str, Any]] = None,
     bundle_result: Optional[Dict[str, Any]] = None,
+    finance_result: Optional[Dict[str, Any]] = None,
+    blackbox_df: Any = None,
+    magnet_df: Any = None,
     top_n: int = 10,
 ) -> Dict[str, Any]:
     """
@@ -60,10 +109,33 @@ def build_report(
     # -----------------------------------------------------------------------
     # Extract key metrics safely
     # -----------------------------------------------------------------------
-    demand_score     = _get(demand_result,  "results", "overall_demand_score") or 0.0
+    demand_score     = (
+        _get(demand_result, "results", "market_demand_index")
+        or _get(demand_result, "results", "overall_demand_score")
+        or 0.0
+    )
     sales_score      = _get(sales_result,   "results", "market_mean_score")    or 0.0
     revenue_score    = _get(revenue_result, "results", "market_mean_score")    or 0.0
     bsr_score        = _get(bsr_result,     "results", "market_efficiency_score") or 0.0
+
+    finance_health_score = _get(finance_result, "results", "finance_health", "finance_health") or 0.0
+    whitespace_score = _get(whitespace_result, "results", "overall_whitespace_score") or 0.0
+    hhi_score = _get(hhi_result, "results", "hhi_score")
+    competition_score = 0.0
+    if hhi_result and hhi_result.get("status") == "success" and hhi_score is not None:
+        competition_score = round(max(0.0, min(100.0, 100.0 - float(hhi_score))), 2)
+    momentum_score = round((float(sales_score) + float(revenue_score)) / 2.0, 2)
+    opportunity_score = float(whitespace_score) if whitespace_score else round(
+        (_get(whitespace_result, "results", "market_whitespace_score") or 0.0), 2
+    )
+    search_score_val = _get(search_mom_result, "results", "momentum_alignment")
+    search_score = (
+        round(float(search_score_val), 2)
+        if search_mom_result
+        and search_mom_result.get("status") == "success"
+        and search_score_val is not None
+        else None
+    )
 
     demand_status  = demand_result.get("status",  "error")
     sales_status   = sales_result.get("status",   "error")
@@ -76,15 +148,27 @@ def build_report(
     ]
 
     # -----------------------------------------------------------------------
-    # Composite market health score (mean of available engine scores)
+    # Final market score (weighted across intelligence pillars)
     # -----------------------------------------------------------------------
+    pillar_scores: Dict[str, Optional[float]] = {
+        "demand": float(demand_score) if demand_status == "success" else None,
+        "momentum": momentum_score if sales_status == "success" or revenue_status == "success" else None,
+        "competition": competition_score if competition_score > 0 else None,
+        "opportunity": opportunity_score if opportunity_score > 0 else None,
+        "finance": (
+            float(finance_health_score)
+            if finance_result
+            and finance_result.get("results", {}).get("finance_health", {}).get("status") == "success"
+            else None
+        ),
+        "search": search_score,
+    }
+    composite_score = _weighted_pillar_score(pillar_scores)
+
     available_scores = [
         float(s) for s in [demand_score, sales_score, revenue_score, bsr_score]
         if s is not None and not isinstance(s, str)
     ]
-    composite_score = round(
-        sum(available_scores) / len(available_scores), 2
-    ) if available_scores else 0.0
 
     # -----------------------------------------------------------------------
     # Rankings
@@ -161,27 +245,49 @@ def build_report(
         revenue_result.get("validation", {}),
         bsr_result.get("validation", {}),
     ]
-    rows_before = sum(int(v.get("rows_before_cleaning", 0) or 0) for v in validation_blocks)
-    rows_after = sum(int(v.get("rows_after_cleaning", 0) or 0) for v in validation_blocks)
-    metric_availability = (
-        len([s for s in [demand_score, sales_score, revenue_score, bsr_score] if s is not None]) / 4.0
-    )
-    nan_percentage = (1.0 - (rows_after / rows_before)) if rows_before > 0 else 1.0
-    signal_consistency = 1.0 - (abs(sales_score - revenue_score) / 100.0)
-    reliability_score = round(
-        max(
-            0.0,
-            min(
-                100.0,
-                (
-                    (1.0 - nan_percentage) * 0.4
-                    + signal_consistency * 0.3
-                    + metric_availability * 0.3
-                )
-                * 100.0,
-            ),
-        ),
-        2,
+
+    # Data Reliability logic
+    reliability_score = 0.0
+    if blackbox_df is not None:
+        required_cols = [
+            "Title", "Brand", "Category", "Price", "Sales", "Revenue", "BSR",
+            "Review Count", "Rating", "Sales Trend", "Price Trend",
+            "Search Volume", "Search Volume Trend"
+        ]
+        
+        # We check both blackbox and magnet
+        df_cols = list(blackbox_df.columns)
+        if magnet_df is not None:
+            df_cols += list(magnet_df.columns)
+            
+        found_cols = [c for c in required_cols if any(c.lower() in str(col).lower() for col in df_cols)]
+        
+        # Calculate non-nulls for found columns.
+        total_cells = 0
+        non_null_cells = 0
+        
+        import pandas as pd
+        
+        for req_c in required_cols:
+            bb_match = [c for c in blackbox_df.columns if req_c.lower() in str(c).lower()]
+            mag_match = [c for c in magnet_df.columns if req_c.lower() in str(c).lower()] if magnet_df is not None else []
+            
+            if bb_match:
+                total_cells += len(blackbox_df)
+                non_null_cells += blackbox_df[bb_match[0]].count()
+            elif mag_match:
+                total_cells += len(magnet_df)
+                non_null_cells += magnet_df[mag_match[0]].count()
+                
+        if total_cells > 0:
+            reliability_score = round((non_null_cells / total_cells) * 100, 2)
+        else:
+            reliability_score = 0.0
+
+    direction_explanation = (
+        "Growing because overall momentum and demand scores are strong." if market_direction == "growing" else
+        "Stable because overall momentum and demand scores are moderate." if market_direction == "stable" else
+        "Declining because overall momentum and demand scores are weak."
     )
 
     if sales_direction == "Decelerating":
@@ -206,11 +312,48 @@ def build_report(
             "converting their rank into proportional revenue."
         )
 
+    finance_narrative = ""
+    finance_overview = {}
+    finance_block = {}
+    if finance_result and finance_result.get("results"):
+        finance_block = finance_result["results"]
+        finance_narrative = finance_block.get("market_economics_narrative", "")
+        finance_overview = finance_block.get("overview_panel", {})
+        mcr_risk = finance_block.get("margin_compression", {}).get("risk", "")
+        if mcr_risk == "High":
+            risks.append(
+                "Margin compression risk is elevated — pricing wars may erode seller margins."
+            )
+        if finance_health_score >= 60 and finance_block.get("entry_cost", {}).get("classification") == "Difficult":
+            opportunities.append(
+                "Strong market economics despite difficult entry — incumbents may have defensible positioning."
+            )
+
+    attractiveness_matrix = finance_block.get("economic_attractiveness_matrix", {})
+    if not attractiveness_matrix and finance_health_score > 0:
+        from app.analytics.finance._utils import build_economic_attractiveness_matrix
+        attractiveness_matrix = build_economic_attractiveness_matrix(
+            demand_strength=float(demand_score),
+            finance_health=float(finance_health_score),
+        )
+
+    economic_risk = finance_block.get("economic_risk_gauge", 0.0)
+    finance_contribution = (
+        round(_PILLAR_WEIGHTS["finance"] * float(finance_health_score or 0), 2)
+        if finance_health_score
+        else 0.0
+    )
+    market_rating = _market_rating(composite_score)
+    launch_recommendation = _launch_recommendation_from_score(
+        composite_score,
+        attractiveness_matrix.get("quadrant", ""),
+    )
+
     # -----------------------------------------------------------------------
     # Rule-based verdict
     # -----------------------------------------------------------------------
     if composite_score >= 70:
-        verdict = "Market demand is strong with healthy monetization signals."
+        verdict = "Market demand is strong with healthy monetization and search alignment."
     elif composite_score >= 45:
         verdict = "Market conditions are stable with selective growth opportunities."
     else:
@@ -222,14 +365,35 @@ def build_report(
     report_sections = {
         "executive_summary": {
             "composite_market_health_score": composite_score,
+            "final_market_score": composite_score,
             "engines_successful": len(engines_ok),
             "engines_total": 4,
+            "pillar_scores": pillar_scores,
             "deterministic_note": "Generated from deterministic engine outputs only.",
+            "market_economics": finance_narrative or "Market economics data not available.",
         },
+        "finance_intelligence": {
+            "finance_health_score": round(float(finance_health_score), 2),
+            "economic_attractiveness": finance_overview.get(
+                "economic_attractiveness", "Not Available"
+            ),
+            "advertising_pressure": finance_block.get("advertising_pressure", {}),
+            "premium_viability": finance_block.get("premium_viability", {}),
+            "margin_compression": finance_block.get("margin_compression", {}),
+            "capital_efficiency": finance_block.get("capital_efficiency", {}),
+            "entry_cost": finance_block.get("entry_cost", {}),
+            "economic_verdict": finance_block.get("economic_verdict", ""),
+            "radar_chart": finance_block.get("radar_chart", []),
+            "economic_risk_gauge": finance_block.get("economic_risk_gauge", 0),
+            "economic_attractiveness_matrix": attractiveness_matrix,
+        },
+        "economic_attractiveness_matrix": attractiveness_matrix,
         "market_health": {
             "overall_score": composite_score,
             "data_reliability_score": reliability_score,
+            "data_reliability_explanation": "Data Reliability measures how complete and usable the uploaded dataset is. Higher reliability means the dashboard insights are more trustworthy.",
             "market_direction": market_direction,
+            "market_direction_explanation": direction_explanation,
             "sales_direction": sales_direction,
             "revenue_direction": revenue_direction,
             "demand_direction_signal": demand_phase,
@@ -283,7 +447,24 @@ def build_report(
         },
         "final_market_verdict": {
             "verdict": verdict,
-            "verdict_basis": "Deterministic score rules from engine outputs",
+            "verdict_basis": (
+                "FinalMarketScore = 0.25*Demand + 0.15*Momentum + 0.15*Competition + "
+                "0.15*Opportunity + 0.20*Finance + 0.10*Search"
+            ),
+            "final_market_score": composite_score,
+            "market_rating": market_rating,
+            "launch_recommendation": launch_recommendation,
+            "finance_contribution": (
+                f"Finance pillar contributed ~{finance_contribution} points "
+                f"(health {round(float(finance_health_score or 0), 1)}/100)."
+            ),
+            "economic_risk": (
+                f"Economic risk gauge {round(float(economic_risk), 1)}/100 "
+                f"({finance_block.get('margin_compression', {}).get('risk', 'N/A')} margin compression)."
+            ),
+            "pillar_scores": {k: v for k, v in pillar_scores.items() if v is not None},
+            "finance_score": round(float(finance_health_score), 2),
+            "search_score": search_score,
         },
     }
 
@@ -307,6 +488,8 @@ def build_report(
         risks=risks,
         sales_direction=sales_direction,
         revenue_direction=revenue_direction,
+        finance_narrative=finance_narrative,
+        finance_health_score=finance_health_score,
     )
 
     elapsed = round(time.time() - t0, 3)
@@ -322,8 +505,8 @@ def build_report(
         "datasets_used": ["blackbox", "magnet"],
         "columns_used": [],
         "formula_used": (
-            "Composite Score = mean(Demand Strength, Sales Momentum, "
-            "Revenue Momentum, BSR Efficiency)"
+            "FinalMarketScore = 0.25*Demand + 0.15*Momentum + 0.15*Competition + "
+            "0.15*Opportunity + 0.20*Finance + 0.10*Search"
         ),
         "results": {
             # Requested structured sections
@@ -335,7 +518,9 @@ def build_report(
                 "sales_momentum":    round(sales_score, 2),
                 "revenue_momentum":  round(revenue_score, 2),
                 "bsr_efficiency":    round(bsr_score, 2),
+                "finance_health":    round(float(finance_health_score), 2),
             },
+            "pillar_scores": pillar_scores,
             "market_overview": {
                 "total_brands_analysed":   total_brands,
                 "total_products_analysed": total_products,
@@ -343,7 +528,9 @@ def build_report(
                 "sales_direction":         sales_direction,
                 "revenue_direction":       revenue_direction,
                 "market_direction":        market_direction,
+                "market_direction_explanation": direction_explanation,
                 "data_reliability_score":  reliability_score,
+                "data_reliability_explanation": "Data Reliability measures how complete and usable the uploaded dataset is. Higher reliability means the dashboard insights are more trustworthy.",
             },
             "rankings": {
                 "top_demand_keywords":      top_demand_keywords[:top_n],
@@ -367,6 +554,8 @@ def build_report(
             "substitute_intelligence": substitute_result.get("results", {}) if substitute_result else {},
             "complement_intelligence": complement_result.get("results", {}) if complement_result else {},
             "bundle_opportunities": bundle_result.get("results", {}) if bundle_result else {},
+            "finance_intelligence": finance_block,
+            "market_economics_narrative": finance_narrative,
             "markdown_report": md,
         },
         "validation": {
@@ -408,6 +597,8 @@ def _build_markdown(
     risks: List[str],
     sales_direction: str,
     revenue_direction: str,
+    finance_narrative: str = "",
+    finance_health_score: float = 0.0,
 ) -> str:
     lines = [
         "# Market Intelligence Report",
@@ -421,7 +612,17 @@ def _build_markdown(
         f"| Sales Momentum | {round(sales_score, 1)}/100 |",
         f"| Revenue Momentum | {round(revenue_score, 1)}/100 |",
         f"| BSR Efficiency | {round(bsr_score, 1)}/100 |",
+        f"| Finance Health | {round(finance_health_score, 1)}/100 |",
         "",
+    ]
+    if finance_narrative:
+        lines += [
+            "## Market Economics",
+            "",
+            finance_narrative,
+            "",
+        ]
+    lines += [
         "## Market Overview",
         "",
         f"- **Total Brands Analysed**: {total_brands}",

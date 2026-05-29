@@ -13,6 +13,7 @@ class ValidationResponse(BaseModel):
     rows_after_cleaning: int = 0
     rows_skipped: int = 0
     numeric_columns_cleaned: List[str] = Field(default_factory=list)
+    missing_columns: List[str] = Field(default_factory=list)
 
     class Config:
         extra = "allow"
@@ -139,6 +140,23 @@ class ComplementIntelligenceResult(EngineResponse):
     - total_complement_products (int)
     """
     metric_name: str = "Complement Intelligence"
+
+
+class FinanceIntelligenceResult(EngineResponse):
+    """
+    Finance Intelligence analysis result.
+
+    Key fields in `results`:
+    - finance_health (dict)
+    - overview_panel (dict)
+    - advertising_pressure, premium_viability, margin_compression,
+      capital_efficiency, entry_cost (dicts)
+    - radar_chart (list)
+    - economic_risk_gauge (float)
+    - economic_verdict (str)
+    - market_economics_narrative (str)
+    """
+    metric_name: str = "Finance Intelligence"
 
 
 class BundleOpportunityResult(EngineResponse):

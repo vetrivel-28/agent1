@@ -1,0 +1,567 @@
+{
+  "report": {
+    "status": "success",
+    "metric_name": "Market Intelligence Report",
+    "summary": "Composite market health score: 46.86/100. 4/4 engines ran successfully. Market covers 3 brands and 5 products.",
+    "datasets_used": [
+      "blackbox",
+      "magnet"
+    ],
+    "columns_used": [],
+    "formula_used": "FinalMarketScore = 0.25\u00d7Demand + 0.20\u00d7Momentum + 0.20\u00d7Competition + 0.15\u00d7Opportunity + 0.20\u00d7Finance",
+    "results": {
+      "executive_summary": {
+        "composite_market_health_score": 46.86,
+        "final_market_score": 46.86,
+        "engines_successful": 4,
+        "engines_total": 4,
+        "pillar_scores": {
+          "demand": 35.76,
+          "momentum": 57.66,
+          "competition": 0.0,
+          "opportunity": 50.97,
+          "finance": 0.0
+        },
+        "deterministic_note": "Generated from deterministic engine outputs only.",
+        "market_economics": "Market economics data not available."
+      },
+      "finance_intelligence": {},
+      "market_health": {
+        "overall_score": 46.86,
+        "data_reliability_score": 100.0,
+        "data_reliability_explanation": "Data Reliability measures how complete and usable the uploaded dataset is. Higher reliability means the dashboard insights are more trustworthy.",
+        "market_direction": "stable",
+        "market_direction_explanation": "Stable because sales/revenue/search indicators are moving within a narrow range (1.4%), without strong acceleration or decline.",
+        "sales_direction": "Stable",
+        "revenue_direction": "Growing",
+        "demand_direction_signal": "Weak demand signals. Low search and sales activity detected across available metrics.",
+        "market_health_band": "medium"
+      },
+      "demand_analysis": {
+        "demand_score": 35.76,
+        "top_demand_keywords": [
+          {
+            "search_volume": 10000,
+            "keyword": "key a",
+            "keyword_sales": 2000
+          },
+          {
+            "search_volume": 5000,
+            "keyword": "key b",
+            "keyword_sales": 1000
+          },
+          {
+            "search_volume": 2000,
+            "keyword": "key c",
+            "keyword_sales": 500
+          },
+          {
+            "search_volume": 1000,
+            "keyword": "key d",
+            "keyword_sales": 200
+          },
+          {
+            "search_volume": 500,
+            "keyword": "key e",
+            "keyword_sales": 100
+          }
+        ],
+        "top_demand_products": [
+          {
+            "Revenue": 18000,
+            "title": "Product C"
+          },
+          {
+            "Revenue": 16000,
+            "title": "Product B"
+          },
+          {
+            "Revenue": 12500,
+            "title": "Product D"
+          },
+          {
+            "Revenue": 10000,
+            "title": "Product A"
+          },
+          {
+            "Revenue": 9000,
+            "title": "Product E"
+          }
+        ],
+        "deterministic_interpretation": "Market demand is weak"
+      },
+      "brand_momentum": {
+        "sales_momentum_score": 53.35,
+        "fastest_growing_brands": [
+          {
+            "brand": "Brand1",
+            "momentum_score": 100.0,
+            "trend_strength_score": 100.0,
+            "consistency_score": 29.1119,
+            "acceleration_score": 100.0,
+            "avg_sales_trend_pct": 7.5
+          }
+        ],
+        "declining_brands": [
+          {
+            "brand": "Brand3",
+            "momentum_score": 0.0,
+            "trend_strength_score": 0.0,
+            "consistency_score": 95.2741,
+            "acceleration_score": 35.2941,
+            "avg_sales_trend_pct": -5.0
+          }
+        ],
+        "deterministic_interpretation": "Growth momentum stable"
+      },
+      "revenue_analysis": {
+        "revenue_momentum_score": 61.98,
+        "total_market_revenue": 65500.0,
+        "top_revenue_brands": [
+          {
+            "brand": "Brand1",
+            "revenue_momentum_score": 100.0,
+            "total_revenue": 28000,
+            "consistency_score": 50.0,
+            "acceleration_score": 50.0
+          }
+        ],
+        "declining_revenue_brands": [
+          {
+            "brand": "Brand3",
+            "revenue_momentum_score": 0.0,
+            "total_revenue": 12500,
+            "consistency_score": 50.0,
+            "acceleration_score": 50.0
+          }
+        ]
+      },
+      "bsr_efficiency_analysis": {
+        "bsr_efficiency_score": 50.42,
+        "most_efficient_products": [
+          {
+            "efficiency_score": 93.9397,
+            "bsr": 2,
+            "revenue": 18000,
+            "norm_bsr": 15.1508,
+            "norm_revenue": 100.0,
+            "title": "Product C",
+            "brand": "Brand1"
+          },
+          {
+            "efficiency_score": 72.2716,
+            "bsr": 5,
+            "revenue": 16000,
+            "norm_bsr": 47.5264,
+            "norm_revenue": 85.4702,
+            "title": "Product B",
+            "brand": "Brand2"
+          }
+        ],
+        "least_efficient_products": [
+          {
+            "efficiency_score": 0.0,
+            "bsr": 20,
+            "revenue": 9000,
+            "norm_bsr": 100.0,
+            "norm_revenue": 0.0,
+            "title": "Product E",
+            "brand": "Brand2"
+          },
+          {
+            "efficiency_score": 38.1076,
+            "bsr": 10,
+            "revenue": 12500,
+            "norm_bsr": 75.8378,
+            "norm_revenue": 47.4046,
+            "title": "Product D",
+            "brand": "Brand3"
+          }
+        ],
+        "deterministic_interpretation": "Products monetizing moderately"
+      },
+      "opportunity_signals": {
+        "count": 2,
+        "signals": [
+          "Brand 'Brand1' leads sales momentum (score 100.0/100) \u2014 study their positioning strategy.",
+          "Keyword 'key a' has the highest search volume (10,000) \u2014 strong organic traffic opportunity."
+        ]
+      },
+      "risk_signals": {
+        "count": 1,
+        "signals": [
+          "1 brand(s) are in the bottom sales momentum quartile \u2014 avoid entering segments dominated by these brands."
+        ]
+      },
+      "final_market_verdict": {
+        "verdict": "Market conditions are stable with selective growth opportunities.",
+        "verdict_basis": "FinalMarketScore = 0.25\u00d7Demand + 0.20\u00d7Momentum + 0.20\u00d7Competition + 0.15\u00d7Opportunity + 0.20\u00d7Finance",
+        "final_market_score": 46.86,
+        "pillar_scores": {
+          "demand": 35.76,
+          "momentum": 57.66,
+          "competition": 0.0,
+          "opportunity": 50.97,
+          "finance": 0.0
+        },
+        "finance_score": 0.0
+      },
+      "composite_market_health_score": 46.86,
+      "engine_scores": {
+        "demand_strength": 35.76,
+        "sales_momentum": 53.35,
+        "revenue_momentum": 61.98,
+        "bsr_efficiency": 50.42,
+        "finance_health": 0.0
+      },
+      "pillar_scores": {
+        "demand": 35.76,
+        "momentum": 57.66,
+        "competition": 0.0,
+        "opportunity": 50.97,
+        "finance": 0.0
+      },
+      "market_overview": {
+        "total_brands_analysed": 3,
+        "total_products_analysed": 5,
+        "total_market_revenue": 65500.0,
+        "sales_direction": "Stable",
+        "revenue_direction": "Growing",
+        "market_direction": "stable",
+        "market_direction_explanation": "Stable because sales/revenue/search indicators are moving within a narrow range (1.4%), without strong acceleration or decline.",
+        "data_reliability_score": 100.0,
+        "data_reliability_explanation": "Data Reliability measures how complete and usable the uploaded dataset is. Higher reliability means the dashboard insights are more trustworthy."
+      },
+      "rankings": {
+        "top_demand_keywords": [
+          {
+            "search_volume": 10000,
+            "keyword": "key a",
+            "keyword_sales": 2000
+          },
+          {
+            "search_volume": 5000,
+            "keyword": "key b",
+            "keyword_sales": 1000
+          },
+          {
+            "search_volume": 2000,
+            "keyword": "key c",
+            "keyword_sales": 500
+          },
+          {
+            "search_volume": 1000,
+            "keyword": "key d",
+            "keyword_sales": 200
+          },
+          {
+            "search_volume": 500,
+            "keyword": "key e",
+            "keyword_sales": 100
+          }
+        ],
+        "top_demand_products": [
+          {
+            "Revenue": 18000,
+            "title": "Product C"
+          },
+          {
+            "Revenue": 16000,
+            "title": "Product B"
+          },
+          {
+            "Revenue": 12500,
+            "title": "Product D"
+          },
+          {
+            "Revenue": 10000,
+            "title": "Product A"
+          },
+          {
+            "Revenue": 9000,
+            "title": "Product E"
+          }
+        ],
+        "fastest_growing_brands": [
+          {
+            "brand": "Brand1",
+            "momentum_score": 100.0,
+            "trend_strength_score": 100.0,
+            "consistency_score": 29.1119,
+            "acceleration_score": 100.0,
+            "avg_sales_trend_pct": 7.5
+          }
+        ],
+        "declining_brands": [
+          {
+            "brand": "Brand3",
+            "momentum_score": 0.0,
+            "trend_strength_score": 0.0,
+            "consistency_score": 95.2741,
+            "acceleration_score": 35.2941,
+            "avg_sales_trend_pct": -5.0
+          }
+        ],
+        "top_revenue_brands": [
+          {
+            "brand": "Brand1",
+            "revenue_momentum_score": 100.0,
+            "total_revenue": 28000,
+            "consistency_score": 50.0,
+            "acceleration_score": 50.0
+          }
+        ],
+        "declining_revenue_brands": [
+          {
+            "brand": "Brand3",
+            "revenue_momentum_score": 0.0,
+            "total_revenue": 12500,
+            "consistency_score": 50.0,
+            "acceleration_score": 50.0
+          }
+        ],
+        "most_efficient_products": [
+          {
+            "efficiency_score": 93.9397,
+            "bsr": 2,
+            "revenue": 18000,
+            "norm_bsr": 15.1508,
+            "norm_revenue": 100.0,
+            "title": "Product C",
+            "brand": "Brand1"
+          },
+          {
+            "efficiency_score": 72.2716,
+            "bsr": 5,
+            "revenue": 16000,
+            "norm_bsr": 47.5264,
+            "norm_revenue": 85.4702,
+            "title": "Product B",
+            "brand": "Brand2"
+          }
+        ],
+        "least_efficient_products": [
+          {
+            "efficiency_score": 0.0,
+            "bsr": 20,
+            "revenue": 9000,
+            "norm_bsr": 100.0,
+            "norm_revenue": 0.0,
+            "title": "Product E",
+            "brand": "Brand2"
+          },
+          {
+            "efficiency_score": 38.1076,
+            "bsr": 10,
+            "revenue": 12500,
+            "norm_bsr": 75.8378,
+            "norm_revenue": 47.4046,
+            "title": "Product D",
+            "brand": "Brand3"
+          }
+        ]
+      },
+      "opportunity_findings": [
+        "Brand 'Brand1' leads sales momentum (score 100.0/100) \u2014 study their positioning strategy.",
+        "Keyword 'key a' has the highest search volume (10,000) \u2014 strong organic traffic opportunity."
+      ],
+      "risk_findings": [
+        "1 brand(s) are in the bottom sales momentum quartile \u2014 avoid entering segments dominated by these brands."
+      ],
+      "siei": {},
+      "whitespace": {
+        "overall_whitespace_score": 50.97,
+        "top_whitespace_keywords": [
+          {
+            "keyword": "key a",
+            "search_volume": 10000,
+            "title_density": 5.0,
+            "whitespace_score": 75.62,
+            "opportunity_label": "high opportunity"
+          },
+          {
+            "keyword": "key b",
+            "search_volume": 5000,
+            "title_density": 2.0,
+            "whitespace_score": 66.04,
+            "opportunity_label": "high opportunity"
+          },
+          {
+            "keyword": "key c",
+            "search_volume": 2000,
+            "title_density": 8.0,
+            "whitespace_score": 41.9,
+            "opportunity_label": "moderate opportunity"
+          },
+          {
+            "keyword": "key d",
+            "search_volume": 1000,
+            "title_density": 1.0,
+            "whitespace_score": 39.97,
+            "opportunity_label": "moderate opportunity"
+          },
+          {
+            "keyword": "key e",
+            "search_volume": 500,
+            "title_density": 0.0,
+            "whitespace_score": 31.33,
+            "opportunity_label": "moderate opportunity"
+          }
+        ],
+        "high_search_low_density_keywords": [
+          {
+            "keyword": "key a",
+            "search_volume": 10000,
+            "title_density": 5.0,
+            "whitespace_score": 75.62
+          },
+          {
+            "keyword": "key b",
+            "search_volume": 5000,
+            "title_density": 2.0,
+            "whitespace_score": 66.04
+          }
+        ],
+        "opportunity_distribution": {
+          "low_opportunity": 0,
+          "moderate_opportunity": 3,
+          "high_opportunity": 2,
+          "extreme_opportunity": 0
+        },
+        "total_keywords_analyzed": 5
+      },
+      "direct_competitors": {},
+      "price_elasticity": {
+        "price_buckets": [
+          {
+            "tier": "Low",
+            "price_range": {
+              "min": 10.0,
+              "max": 16.67
+            },
+            "average_sales": 0.0,
+            "average_revenue": 100.0,
+            "average_rating": 4.65,
+            "average_review_count": 100.0,
+            "average_bsr": 1.5,
+            "pricing_strength_score": 70.63,
+            "product_count": 2
+          },
+          {
+            "tier": "Mid",
+            "price_range": {
+              "min": 16.67,
+              "max": 23.33
+            },
+            "average_sales": 0.0,
+            "average_revenue": 100.0,
+            "average_rating": 4.0,
+            "average_review_count": 50.0,
+            "average_bsr": 5.0,
+            "pricing_strength_score": 56.25,
+            "product_count": 1
+          },
+          {
+            "tier": "Premium",
+            "price_range": {
+              "min": 23.33,
+              "max": 30.01
+            },
+            "average_sales": 0.0,
+            "average_revenue": 100.0,
+            "average_rating": 3.85,
+            "average_review_count": 20.0,
+            "average_bsr": 15.0,
+            "pricing_strength_score": 16.67,
+            "product_count": 2
+          }
+        ],
+        "strongest_price_ranges": [
+          {
+            "tier": "Low",
+            "price_range": {
+              "min": 10.0,
+              "max": 16.67
+            },
+            "average_sales": 0.0,
+            "average_revenue": 100.0,
+            "average_rating": 4.65,
+            "average_review_count": 100.0,
+            "average_bsr": 1.5,
+            "pricing_strength_score": 70.63,
+            "product_count": 2
+          },
+          {
+            "tier": "Mid",
+            "price_range": {
+              "min": 16.67,
+              "max": 23.33
+            },
+            "average_sales": 0.0,
+            "average_revenue": 100.0,
+            "average_rating": 4.0,
+            "average_review_count": 50.0,
+            "average_bsr": 5.0,
+            "pricing_strength_score": 56.25,
+            "product_count": 1
+          },
+          {
+            "tier": "Premium",
+            "price_range": {
+              "min": 23.33,
+              "max": 30.01
+            },
+            "average_sales": 0.0,
+            "average_revenue": 100.0,
+            "average_rating": 3.85,
+            "average_review_count": 20.0,
+            "average_bsr": 15.0,
+            "pricing_strength_score": 16.67,
+            "product_count": 2
+          }
+        ],
+        "bucket_count": 3
+      },
+      "hhi": {},
+      "search_momentum": {},
+      "demand_velocity": {},
+      "substitute_intelligence": {
+        "substitute_keywords": [],
+        "substitute_products": [],
+        "substitute_clusters": [],
+        "market_overlap_score": 0.0,
+        "total_substitute_keywords": 0,
+        "total_substitute_products": 0
+      },
+      "complement_intelligence": {
+        "complement_keywords": [],
+        "complement_products": [],
+        "ecosystem_clusters": [],
+        "cross_sell_opportunities": [],
+        "ecosystem_strength": 0.0,
+        "total_complement_keywords": 0,
+        "total_complement_products": 0
+      },
+      "bundle_opportunities": {
+        "bundle_opportunities": [],
+        "high_potential_bundles": [],
+        "bundle_clusters": [],
+        "ecosystem_strength": 0.0,
+        "total_bundle_opportunities": 0
+      },
+      "market_economics_narrative": "",
+      "markdown_report": "# Market Intelligence Report\n\n## Executive Summary\n\n| Metric | Score |\n|--------|-------|\n| **Composite Market Health** | 46.86/100 |\n| Demand Strength | 35.8/100 |\n| Sales Momentum | 53.4/100 |\n| Revenue Momentum | 62.0/100 |\n| BSR Efficiency | 50.4/100 |\n| Finance Health | 0.0/100 |\n\n## Market Overview\n\n- **Total Brands Analysed**: 3\n- **Total Products Analysed**: 5\n- **Total Market Revenue**: $65,500.00\n- **Sales Direction**: Stable\n- **Revenue Direction**: Growing\n\n## Top Demand Keywords\n\n| Keyword | Search Volume | Keyword Sales |\n|---------|--------------|---------------|\n| key a | 10,000 | 2,000 |\n| key b | 5,000 | 1,000 |\n| key c | 2,000 | 500 |\n| key d | 1,000 | 200 |\n| key e | 500 | 100 |\n\n## Fastest Growing Brands (Sales Momentum)\n\n| Brand | Momentum Score | Avg Sales Trend % |\n|-------|---------------|-------------------|\n| Brand1 | 100.0 | 7.5 |\n\n## Top Revenue Growth Brands\n\n| Brand | Revenue Score | Total Revenue |\n|-------|--------------|---------------|\n| Brand1 | 100.0 | $28,000.00 |\n\n## Most Efficient Products (BSR Efficiency)\n\n| ASIN | Brand | BSR | Revenue | Efficiency Score |\n|------|-------|-----|---------|-----------------|\n| \u2014 | Brand1 | 2 | $18,000.00 | 93.9397 |\n| \u2014 | Brand2 | 5 | $16,000.00 | 72.2716 |\n\n## Opportunity Findings\n\n1. Brand 'Brand1' leads sales momentum (score 100.0/100) \u2014 study their positioning strategy.\n2. Keyword 'key a' has the highest search volume (10,000) \u2014 strong organic traffic opportunity.\n\n## Risk Findings\n\n1. 1 brand(s) are in the bottom sales momentum quartile \u2014 avoid entering segments dominated by these brands.\n\n---\n*Report generated deterministically from uploaded dataset values. No AI-generated metrics.*"
+    },
+    "validation": {
+      "status": "passed",
+      "engines_successful": [
+        "success",
+        "success",
+        "success",
+        "success"
+      ],
+      "engines_total": 4
+    },
+    "processing_time_seconds": 0.005
+  }
+}

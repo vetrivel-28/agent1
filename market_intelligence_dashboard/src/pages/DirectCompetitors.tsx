@@ -7,6 +7,7 @@ import { AlertCircle, Loader2, Users, Activity, BarChart2, Zap } from 'lucide-re
 import { Tooltip, ResponsiveContainer, ScatterChart, Scatter, CartesianGrid, XAxis, YAxis, ZAxis, Treemap } from 'recharts';
 import { KPICard } from '../components/ui/KPICard';
 import { motion } from 'framer-motion';
+import { isEngineOk, getEngineErrorMessage } from '../utils/analysisStatus';
 
 export default function DirectCompetitors() {
   const { data: directCompData, isLoading: dcLoading, isError } = useQuery({
@@ -22,13 +23,13 @@ export default function DirectCompetitors() {
     );
   }
 
-  if (isError || !directCompData || directCompData.status !== 'success') {
+  if (isError || !isEngineOk(directCompData)) {
     return (
       <Card className="border-danger/50 bg-danger/5 mt-10">
-        <CardContent className="p-8 flex flex-col items-center">
+        <CardContent className="p-8 flex flex-col items-center text-center">
           <AlertCircle className="w-12 h-12 text-danger mb-4" />
-          <h2 className="text-xl font-bold text-danger mb-2">Analysis Failed</h2>
-          <p className="text-danger/80">Make sure BlackBox dataset is uploaded.</p>
+          <h2 className="text-xl font-bold text-danger mb-2">Competitive Landscape Unavailable</h2>
+          <p className="text-danger/80">{getEngineErrorMessage(directCompData, 'Requires BlackBox with Title, Category, and Price.')}</p>
         </CardContent>
       </Card>
     );
@@ -70,7 +71,7 @@ export default function DirectCompetitors() {
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight text-gradient-primary">Direct Competitor Analysis</h1>
+        <h1 className="text-3xl font-bold tracking-tight text-gradient-primary">Competitive Landscape</h1>
         <p className="text-muted-foreground mt-1">Identify direct market competitors by category, subcategory, and price.</p>
       </div>
       

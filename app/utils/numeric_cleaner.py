@@ -56,8 +56,14 @@ def clean_numeric_series(
     cleaned = cleaned.str.replace("%", "", regex=False)  # Percent signs
     cleaned = cleaned.str.replace("#", "", regex=False)  # Hash
     cleaned = cleaned.str.replace("+", "", regex=False)  # Plus
-    cleaned = cleaned.str.replace("K", "000", regex=False)  # 1.5K → 1.5000
-    cleaned = cleaned.str.replace("M", "000000", regex=False)  # 1.5M → 1.5000000
+    
+    has_k = cleaned.str.endswith("K") | cleaned.str.endswith("k")
+    has_m = cleaned.str.endswith("M") | cleaned.str.endswith("m")
+    has_b = cleaned.str.endswith("B") | cleaned.str.endswith("b")
+    
+    cleaned = cleaned.str.replace("K", "", regex=False).str.replace("k", "", regex=False)
+    cleaned = cleaned.str.replace("M", "", regex=False).str.replace("m", "", regex=False)
+    cleaned = cleaned.str.replace("B", "", regex=False).str.replace("b", "", regex=False)
     
     # Replace placeholder strings with NaN
     placeholders = ["N/A", "n/a", "NA", "na", "-", "--", "none", "None", "NONE", "null", "NULL", ""]
@@ -66,6 +72,10 @@ def clean_numeric_series(
     
     # Step 2: Convert to numeric
     numeric = pd.to_numeric(cleaned, errors="coerce")
+    numeric = np.where(has_k, numeric * 1000, numeric)
+    numeric = np.where(has_m, numeric * 1000000, numeric)
+    numeric = np.where(has_b, numeric * 1000000000, numeric)
+    numeric = pd.Series(numeric, index=series.index)
     
     # Step 3: Handle negative values if requested
     if remove_negative:

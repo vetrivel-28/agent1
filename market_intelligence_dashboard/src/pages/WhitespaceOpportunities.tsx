@@ -7,6 +7,7 @@ import { motion } from 'framer-motion';
 import { KPICard } from '../components/ui/KPICard';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, ScatterChart, Scatter, CartesianGrid, ZAxis, Cell } from 'recharts';
 import { formatNumber } from '../utils/cn';
+import { isEngineOk, getEngineErrorMessage } from '../utils/analysisStatus';
 
 export default function WhitespaceOpportunities() {
   const { data: whitespaceData, isLoading: wsLoading, isError } = useQuery({
@@ -22,13 +23,13 @@ export default function WhitespaceOpportunities() {
     );
   }
 
-  if (isError || !whitespaceData || whitespaceData.status !== 'success') {
+  if (isError || !isEngineOk(whitespaceData)) {
     return (
       <Card className="border-danger/50 bg-danger/5 mt-10">
-        <CardContent className="p-8 flex flex-col items-center">
+        <CardContent className="p-8 flex flex-col items-center text-center">
           <AlertCircle className="w-12 h-12 text-danger mb-4" />
-          <h2 className="text-xl font-bold text-danger mb-2">Analysis Failed</h2>
-          <p className="text-danger/80">Make sure Magnet dataset is uploaded.</p>
+          <h2 className="text-xl font-bold text-danger mb-2">White Space Unavailable</h2>
+          <p className="text-danger/80">{getEngineErrorMessage(whitespaceData, 'Requires Magnet with Search Volume and Title Density.')}</p>
         </CardContent>
       </Card>
     );

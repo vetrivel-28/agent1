@@ -6,6 +6,7 @@ import { adaptiveDomain, formatNumber, growthLabelFromScore } from '../utils/cn'
 import { AlertCircle, Loader2 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { motion } from 'framer-motion';
+import { isEngineOk, getEngineErrorMessage } from '../utils/analysisStatus';
 
 export default function SalesMomentum() {
   const { data, isLoading, isError } = useQuery({
@@ -21,13 +22,13 @@ export default function SalesMomentum() {
     );
   }
 
-  if (isError || !data || data.status !== 'success') {
+  if (isError || !isEngineOk(data)) {
     return (
       <Card className="border-danger/50 bg-danger/5 mt-10">
-        <CardContent className="p-8 flex flex-col items-center">
+        <CardContent className="p-8 flex flex-col items-center text-center">
           <AlertCircle className="w-12 h-12 text-danger mb-4" />
-          <h2 className="text-xl font-bold text-danger mb-2">Analysis Failed</h2>
-          <p className="text-danger/80">Dataset processing failed or missing.</p>
+          <h2 className="text-xl font-bold text-danger mb-2">Sales Momentum Unavailable</h2>
+          <p className="text-danger/80">{getEngineErrorMessage(data, 'Requires BlackBox with sales trend data.')}</p>
         </CardContent>
       </Card>
     );

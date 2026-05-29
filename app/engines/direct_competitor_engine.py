@@ -84,18 +84,6 @@ def _calculate_similarity_score(
     price_similarity: bool,
     price_diff_pct: float = 0.0,
 ) -> float:
-    """
-    Calculate 0-100 similarity score.
-    
-    Args:
-        category_match: True if categories match
-        subcategory_match: True if subcategories match
-        price_similarity: True if prices similar
-        price_diff_pct: Price difference percentage (for fine-tuning)
-    
-    Returns:
-        Similarity score 0-100
-    """
     score = 0.0
     
     # Category match: 40 points
@@ -108,9 +96,9 @@ def _calculate_similarity_score(
     
     # Price similarity: 25 points
     if price_similarity:
-        # Reduce slightly by price difference percentage (max -10 points)
-        price_penalty = min(10.0, abs(price_diff_pct) / 5.0)
-        score += max(15.0, 25.0 - price_penalty)
+        # price_diff_pct is bounded by price_tolerance_pct (usually 20).
+        price_sim_score = max(0.0, (20.0 - price_diff_pct) / 20.0 * 25.0)
+        score += price_sim_score
     
     return min(100.0, score)
 
@@ -122,8 +110,8 @@ def _calculate_similarity_score(
 def run(
     magnet_df: Optional[pd.DataFrame],
     blackbox_df: Optional[pd.DataFrame],
-    top_n: int = 15,
-    price_tolerance_pct: float = 17.5,
+    top_n: int = 5,
+    price_tolerance_pct: float = 20.0,
 ) -> Dict[str, Any]:
     """
     Analyze BlackBox dataset to identify direct market competitors.
@@ -146,8 +134,8 @@ def run(
     # -----------------------------------------------------------------------
     # 1. Validate dataset availability
     # -----------------------------------------------------------------------
-    if blackbox_df is None or blackbox_df.empty:
-        logger.warning("Direct Competitor: no BlackBox dataset provided.")
+    if magnet_df is None or magnet_df.empty or blackbox_df is None or blackbox_df.empty:
+        logger.warning("Direct Competitor: missing required dataset (magnet_df or blackbox_df).")
         return {
             "status": "error",
             "metric_name": "Direct Competitors",

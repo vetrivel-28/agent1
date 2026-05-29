@@ -13,9 +13,17 @@ from app.utils.numeric_cleaner import clean_numeric_series
 
 logger = get_logger("siei_engine")
 
-_CLICK_SHARE_CANDIDATES = ["ABA Total Click Share"]
-_CONV_SHARE_CANDIDATES = ["ABA Total Conv. Share", "ABA Total Conversion Share"]
+_CLICK_SHARE_CANDIDATES = [
+    "ABA Total Click Share", "ABA Total Click Share (%)", "Click Share", "click share",
+    "Total Click Share",
+]
+_CONV_SHARE_CANDIDATES = [
+    "ABA Total Conv. Share", "ABA Total Conversion Share", "Conversion Share",
+    "conv share", "Total Conv. Share",
+]
 _KEYWORD_CANDIDATES = ["Keyword Phrase", "Keyword"]
+_SEARCH_VOL_CANDIDATES = ["Search Volume", "search volume", "SearchVolume", "Monthly Search Volume"]
+_TITLE_DENSITY_CANDIDATES = ["Title Density", "title density", "TitleDensity"]
 
 
 def run(magnet_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
@@ -44,13 +52,20 @@ def run(magnet_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
     click_col = find_column(magnet_df, _CLICK_SHARE_CANDIDATES)
     conv_col = find_column(magnet_df, _CONV_SHARE_CANDIDATES)
     keyword_col = find_column(magnet_df, _KEYWORD_CANDIDATES)
+    search_vol_col = find_column(magnet_df, _SEARCH_VOL_CANDIDATES)
+    title_density_col = find_column(magnet_df, _TITLE_DENSITY_CANDIDATES)
 
     if click_col is None or conv_col is None:
+        missing = []
+        if click_col is None:
+            missing.append("ABA Total Click Share")
+        if conv_col is None:
+            missing.append("ABA Total Conv. Share")
         return {
-            "status": "warning",
-            "message": "No valid numeric rows after cleaning",
+            "status": "error",
+            "message": f"Missing required columns: {', '.join(missing)}",
             "metric_name": "Search Intent Efficiency Index (SIEI)",
-            "summary": "Required ABA click/conversion share columns are missing.",
+            "summary": f"Required click/conversion share columns not found: {', '.join(missing)}",
             "datasets_used": ["magnet"],
             "columns_used": [c for c in [click_col, conv_col] if c],
             "formula_used": "",
@@ -70,8 +85,19 @@ def run(magnet_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
     if keyword_col:
         work["keyword"] = magnet_df[keyword_col].astype(str)
 
+    if search_vol_col:
+        work["search_vol"], _ = clean_numeric_series(magnet_df[search_vol_col], search_vol_col)
+    else:
+        work["search_vol"] = 0.0
+
+    if title_density_col:
+        work["title_density"], _ = clean_numeric_series(magnet_df[title_density_col], title_density_col)
+    else:
+        work["title_density"] = 0.0
+
     click_nonzero = work["click_share"].replace(0, np.nan)
-    work["siei"] = work["conv_share"] / click_nonzero
+    base_siei = work["conv_share"] / click_nonzero
+    work["siei"] = base_siei - (work["title_density"] * 0.20)
     work["siei"] = work["siei"].replace([np.inf, -np.inf], np.nan)
     work["siei_rank_score"] = safe_log_normalize(work["siei"])
 
@@ -111,13 +137,24 @@ def run(magnet_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
         .replace({np.nan: None})
         .to_dict(orient="records")
     )
-    market_friction = (
-        valid[valid["siei"] <= p20]
-        .sort_values("siei", ascending=True)
-        .head(top_n)
-        .replace({np.nan: None})
-        .to_dict(orient="records")
-    )
+    
+    friction_df = valid[valid["siei"] <= p20].copy()
+    if "search_vol" in friction_df.columns and "title_density" in friction_df.columns:
+        friction_df["friction_score"] = (0.4 * friction_df["search_vol"]) + (0.3 * friction_df["title_density"]) - (0.3 * friction_df["conv_share"])
+        market_friction = (
+            friction_df.sort_values("friction_score", ascending=False)
+            .head(top_n)
+            .replace({np.nan: None})
+            .to_dict(orient="records")
+        )
+    else:
+        market_friction = (
+            friction_df.sort_values("siei", ascending=True)
+            .head(top_n)
+            .replace({np.nan: None})
+            .to_dict(orient="records")
+        )
+
     click_heavy_low_conversion = (
         valid[(valid["click_share"] >= click_p80) & (valid["siei"] <= p20)]
         .sort_values(["click_share", "siei"], ascending=[False, True])
@@ -135,7 +172,7 @@ def run(magnet_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
         "summary": "SIEI computed with safe division and percentile-based ranking.",
         "datasets_used": ["magnet"],
         "columns_used": [click_col, conv_col] + ([keyword_col] if keyword_col else []),
-        "formula_used": "SIEI = ABA Total Conv. Share / ABA Total Click Share.",
+        "formula_used": "SIEI = (ABA Total Conv. Share / ABA Total Click Share) - (title_density * 0.20).",
         "results": {
             "siei_percentile_20": round(p20, 6),
             "siei_percentile_80": round(p80, 6),

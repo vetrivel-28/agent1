@@ -156,6 +156,11 @@ def export_market_report_pdf(report: Dict[str, Any]) -> str:
     substitute = results.get("substitute_intelligence", {})
     complement = results.get("complement_intelligence", {})
     bundle = results.get("bundle_opportunities", {})
+    finance = results.get("finance_intelligence", {})
+    attractiveness_matrix = results.get("economic_attractiveness_matrix", {})
+    if not attractiveness_matrix:
+        attractiveness_matrix = finance.get("economic_attractiveness_matrix", {})
+    final_verdict_full = results.get("final_market_verdict", {})
 
     # ==========================================
     # 1. COVER PAGE
@@ -209,7 +214,12 @@ def export_market_report_pdf(report: Dict[str, Any]) -> str:
     # 2. EXECUTIVE SUMMARY
     # ==========================================
     elems.extend(_section_header("Executive Summary", "2"))
-    
+    market_econ = exec_summary.get("market_economics", "")
+    if market_econ:
+        elems.append(Paragraph("<b>Market Economics</b>", styles["Heading4"]))
+        elems.append(Paragraph(market_econ, styles["BodyText"]))
+        elems.append(Spacer(1, 12))
+
     summary_data = [
         [
             Paragraph("<b>Demand Score</b>", styles['Normal']), 
@@ -228,7 +238,13 @@ def export_market_report_pdf(report: Dict[str, Any]) -> str:
             Paragraph(f"{whitespace.get('overall_whitespace_score', 0)}", styles['Normal']),
             Paragraph("<b>Ecosystem Strength</b>", styles['Normal']),
             Paragraph(f"{bundle.get('ecosystem_strength', 0)}", styles['Normal'])
-        ]
+        ],
+        [
+            Paragraph("<b>Finance Health</b>", styles['Normal']),
+            Paragraph(f"{finance.get('finance_health_score', results.get('engine_scores', {}).get('finance_health', 0))}", styles['Normal']),
+            Paragraph("<b>Final Market Score</b>", styles['Normal']),
+            Paragraph(f"{exec_summary.get('final_market_score', exec_summary.get('composite_market_health_score', 0))}", styles['Normal'])
+        ],
     ]
     
     summary_table = Table(summary_data)
@@ -326,12 +342,80 @@ def export_market_report_pdf(report: Dict[str, Any]) -> str:
     if bundle:
         elems.extend(_table_from_records(bundle.get("bundle_opportunities", []), "High Potential Bundle Opportunities"))
 
+    # ==========================================
+    # 10. FINANCE INTELLIGENCE
+    # ==========================================
+    elems.extend(_section_header("Finance Intelligence", "10"))
+    if finance:
+        elems.extend(_score_card(
+            "Finance Health Score",
+            f"{finance.get('finance_health_score', 0)} / 100",
+            finance.get("economic_attractiveness", ""),
+        ))
+        api = finance.get("advertising_pressure", {})
+        pvs = finance.get("premium_viability", {})
+        mcr = finance.get("margin_compression", {})
+        ces = finance.get("capital_efficiency", {})
+        eci = finance.get("entry_cost", {})
+        finance_kpis = [
+            ("Advertising Pressure", api.get("score"), api.get("classification")),
+            ("Premium Viability", pvs.get("score"), pvs.get("classification")),
+            ("Margin Compression Risk", mcr.get("score"), mcr.get("risk")),
+            ("Capital Efficiency", ces.get("score"), ces.get("classification")),
+            ("Entry Cost Index", eci.get("score"), eci.get("classification")),
+        ]
+        kpi_rows = [["Metric", "Score", "Classification"]]
+        for name, score, label in finance_kpis:
+            kpi_rows.append([
+                name,
+                str(score) if score is not None else "N/A",
+                str(label or "N/A"),
+            ])
+        kpi_table = Table(kpi_rows, colWidths=[180, 80, 160])
+        kpi_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1e40af")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
+            ("FONTSIZE", (0, 0), (-1, -1), 9),
+            ("PADDING", (0, 0), (-1, -1), 8),
+        ]))
+        elems.append(kpi_table)
+        elems.append(Spacer(1, 12))
+        heatmap = pvs.get("price_elasticity_heatmap", [])
+        if heatmap:
+            elems.extend(_table_from_records(heatmap, "Premium Viability — Price Band Heatmap"))
+        if attractiveness_matrix:
+            matrix_rows = [
+                ["Dimension", "Value"],
+                ["Finance Health (X)", str(attractiveness_matrix.get("finance_health", "N/A"))],
+                ["Demand Strength (Y)", str(attractiveness_matrix.get("demand_strength", "N/A"))],
+                ["Quadrant", str(attractiveness_matrix.get("quadrant", "N/A"))],
+                ["Recommendation", str(attractiveness_matrix.get("launch_recommendation", "N/A"))],
+            ]
+            matrix_table = Table(matrix_rows, colWidths=[160, 300])
+            matrix_table.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0f172a")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
+                ("FONTSIZE", (0, 0), (-1, -1), 9),
+                ("PADDING", (0, 0), (-1, -1), 8),
+            ]))
+            elems.append(Paragraph("<b>Economic Attractiveness Matrix</b>", styles["Heading4"]))
+            elems.append(matrix_table)
+            elems.append(Spacer(1, 12))
+        verdict_text = finance.get("economic_verdict", "")
+        if verdict_text:
+            elems.append(Paragraph(f"<b>Economic Verdict:</b> {verdict_text}", styles["BodyText"]))
+            elems.append(Spacer(1, 10))
+    else:
+        elems.append(Paragraph("Finance Intelligence data not available.", styles["BodyText"]))
+
     elems.append(PageBreak())
 
     # ==========================================
-    # 10. OPPORTUNITY ANALYSIS
+    # 11. OPPORTUNITY ANALYSIS
     # ==========================================
-    elems.extend(_section_header("Opportunity Analysis", "10"))
+    elems.extend(_section_header("Opportunity Analysis", "11"))
     if opportunities:
         for opp in opportunities:
             elems.append(Paragraph(f"• {opp}", styles["BodyText"]))
@@ -341,9 +425,9 @@ def export_market_report_pdf(report: Dict[str, Any]) -> str:
     elems.append(Spacer(1, 15))
 
     # ==========================================
-    # 11. RISK ANALYSIS
+    # 12. RISK ANALYSIS
     # ==========================================
-    elems.extend(_section_header("Risk Analysis", "11"))
+    elems.extend(_section_header("Risk Analysis", "12"))
     if risks:
         for risk in risks:
             elems.append(Paragraph(f"• {risk}", styles["BodyText"]))
@@ -353,9 +437,9 @@ def export_market_report_pdf(report: Dict[str, Any]) -> str:
     elems.append(Spacer(1, 15))
 
     # ==========================================
-    # 12. FINAL MARKET VERDICT
+    # 13. FINAL MARKET VERDICT
     # ==========================================
-    elems.extend(_section_header("Final Market Verdict", "12"))
+    elems.extend(_section_header("Final Market Verdict", "13"))
     verdict_style = ParagraphStyle(
         'Verdict',
         parent=styles['Normal'],
@@ -370,6 +454,17 @@ def export_market_report_pdf(report: Dict[str, Any]) -> str:
         borderRadius=8
     )
     elems.append(Paragraph(final_verdict, verdict_style))
+    if final_verdict_full.get("market_rating"):
+        elems.append(Spacer(1, 8))
+        elems.append(Paragraph(
+            f"<b>Market Rating:</b> {final_verdict_full.get('market_rating')} | "
+            f"<b>Launch:</b> {final_verdict_full.get('launch_recommendation', '')}",
+            styles["BodyText"],
+        ))
+    if final_verdict_full.get("finance_contribution"):
+        elems.append(Paragraph(final_verdict_full["finance_contribution"], styles["BodyText"]))
+    if final_verdict_full.get("economic_risk"):
+        elems.append(Paragraph(final_verdict_full["economic_risk"], styles["BodyText"]))
 
     doc.build(elems, onFirstPage=_header_footer, onLaterPages=_header_footer)
     return output_path

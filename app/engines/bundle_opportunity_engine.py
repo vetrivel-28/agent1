@@ -48,6 +48,7 @@ _ASIN_CANDIDATES      = ["ASIN", "asin"]
 _BRAND_CANDIDATES     = ["Brand", "brand", "Seller", "seller"]
 _REVENUE_CANDIDATES   = ["ASIN Revenue", "asin revenue", "Revenue", "revenue"]
 _SALES_CANDIDATES     = ["ASIN Sales", "asin sales", "Parent Level Sales"]
+_PRICE_CANDIDATES     = ["Price", "price"]
 
 # Minimum complement_strength to consider a product for bundling
 MIN_COMPLEMENT_STRENGTH = 15.0
@@ -62,7 +63,7 @@ MIN_BUNDLE_SCORE = 10.0
 def run(
     kc_df: Optional[pd.DataFrame],
     blackbox_df: Optional[pd.DataFrame],
-    top_n: int = 10,
+    top_n: int = 5,
 ) -> Dict[str, Any]:
     t0 = time.time()
     logger.info("Bundle Opportunity engine started.")
@@ -70,10 +71,9 @@ def run(
     # -----------------------------------------------------------------------
     # Dataset guards
     # -----------------------------------------------------------------------
-    if kc_df is None or kc_df.empty:
+    if kc_df is None or kc_df.empty or blackbox_df is None or blackbox_df.empty:
         return _error("keyword_classification dataset not uploaded or empty.", t0)
-    if blackbox_df is None or blackbox_df.empty:
-        return _error("blackbox dataset not uploaded or empty.", t0)
+    
 
     rows_bb = len(blackbox_df)
     logger.info(f"Input rows — blackbox={rows_bb}")
@@ -112,6 +112,7 @@ def run(
     brand_col  = find_column(blackbox_df, _BRAND_CANDIDATES)
     rev_col    = find_column(blackbox_df, _REVENUE_CANDIDATES)
     sales_col  = find_column(blackbox_df, _SALES_CANDIDATES)
+    price_col  = find_column(blackbox_df, _PRICE_CANDIDATES)
 
     if title_col is None:
         return _error("Title column not found in BlackBox dataset.", t0, missing=["Title"])
@@ -141,6 +142,16 @@ def run(
         primary_bb = bb.copy()
 
     logger.info(f"Primary product pool: {len(primary_bb)} products")
+
+    asin_to_price = {}
+    asin_to_rev = {}
+    if asin_col:
+        for _, r in blackbox_df.iterrows():
+            a = str(r[asin_col])
+            p = _sv(r.get(price_col, 0)) if price_col else 0.0
+            rev = _sv(r.get(rev_col, 0)) if rev_col else 0.0
+            asin_to_price[a] = float(p or 0.0)
+            asin_to_rev[a] = float(rev or 0.0)
 
     # -----------------------------------------------------------------------
     # Step 5: Score bundle pairs
@@ -190,11 +201,24 @@ def run(
                 10.0 if p_subcat == comp_subcat else 0.0
             )
 
+            p_price = float(_sv(prow.get(price_col, 0)) or 0.0) if price_col else 0.0
+            p_rev   = float(_sv(prow.get(rev_col, 0)) or 0.0) if rev_col else 0.0
+            c_price = asin_to_price.get(comp_asin, 0.0)
+            c_rev   = asin_to_rev.get(comp_asin, 0.0)
+
+            combined_price = p_price + c_price
+            combined_rev = p_rev + c_rev
+            
+            price_bonus = min(combined_price / 100.0 * 10, 10.0)
+            rev_bonus = min(combined_rev / 10000.0 * 10, 10.0)
+
             # Bundle score = weighted combination
             bundle_score = round(
-                comp_strength * 0.4
-                + demand_overlap * 0.4
-                + cat_adjacency * 0.2,
+                comp_strength * 0.35
+                + demand_overlap * 0.25
+                + price_bonus
+                + rev_bonus
+                + cat_adjacency,
                 2,
             )
 
@@ -219,6 +243,8 @@ def run(
                 },
                 "shared_keywords": comp_keywords_matched[:3],
                 "combined_search_volume": comp_sv,
+                "combined_price": round(combined_price, 2),
+                "combined_revenue": round(combined_rev, 2),
                 "insight": _bundle_insight(p_title, comp_title, comp_keywords_matched),
             }
             bundle_pairs.append(pair)
@@ -369,16 +395,13 @@ def _bundle_insight(primary_title: str, comp_title: str, keywords: List[str]) ->
 def _sv(v: Any) -> Any:
     if v is None:
         return None
-    try:
-        if np.isnan(float(v)):
-            return None
-    except (TypeError, ValueError):
+    if pd.isna(v):
         return None
     if isinstance(v, np.integer):
         return int(v)
     if isinstance(v, (np.floating, float)):
         return round(float(v), 2)
-    return v
+    return float(v) if isinstance(v, str) and v.replace('.','',1).isdigit() else v
 
 
 def _error(message: str, t0: float, missing: Optional[List[str]] = None) -> Dict:

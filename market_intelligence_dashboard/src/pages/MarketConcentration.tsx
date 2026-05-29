@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../co
 import { DataTable, type Column } from '../components/tables/DataTable';
 import { ScoreGauge } from '../components/ui/ScoreGauge';
 import { formatCurrency } from '../utils/cn';
+import { isEngineOk, getEngineErrorMessage } from '../utils/analysisStatus';
 import { AlertCircle, Loader2 } from 'lucide-react';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts';
 import { motion } from 'framer-motion';
@@ -22,12 +23,13 @@ export default function MarketConcentration() {
     );
   }
 
-  if (isError || !data || data.status !== 'success') {
+  if (isError || !isEngineOk(data)) {
     return (
       <Card className="border-danger/50 bg-danger/5 mt-10">
-        <CardContent className="p-8 flex flex-col items-center">
+        <CardContent className="p-8 flex flex-col items-center text-center">
           <AlertCircle className="w-12 h-12 text-danger mb-4" />
-          <h2 className="text-xl font-bold text-danger mb-2">Analysis Failed</h2>
+          <h2 className="text-xl font-bold text-danger mb-2">Market Structure Unavailable</h2>
+          <p className="text-danger/80">{getEngineErrorMessage(data, 'Requires BlackBox with Brand and Revenue columns.')}</p>
         </CardContent>
       </Card>
     );

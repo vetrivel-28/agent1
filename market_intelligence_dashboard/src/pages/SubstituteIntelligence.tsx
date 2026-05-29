@@ -6,6 +6,7 @@ import { AlertCircle, Loader2, ShieldAlert, Activity, BarChart2, Users } from 'l
 import { Tooltip, ResponsiveContainer, CartesianGrid, XAxis, YAxis, ZAxis, BarChart, Bar, ScatterChart, Scatter, Cell } from 'recharts';
 import { KPICard } from '../components/ui/KPICard';
 import { motion } from 'framer-motion';
+import { isEngineOk, getEngineErrorMessage } from '../utils/analysisStatus';
 
 export default function SubstituteIntelligence() {
   const { data: substituteData, isLoading: subLoading, isError } = useQuery({
@@ -21,13 +22,13 @@ export default function SubstituteIntelligence() {
     );
   }
 
-  if (isError || !substituteData || substituteData.status !== 'success') {
+  if (isError || !isEngineOk(substituteData)) {
     return (
       <Card className="border-danger/50 bg-danger/5 mt-10">
-        <CardContent className="p-8 flex flex-col items-center">
+        <CardContent className="p-8 flex flex-col items-center text-center">
           <AlertCircle className="w-12 h-12 text-danger mb-4" />
-          <h2 className="text-xl font-bold text-danger mb-2">Analysis Failed</h2>
-          <p className="text-danger/80">Make sure Keyword and BlackBox datasets are uploaded.</p>
+          <h2 className="text-xl font-bold text-danger mb-2">Substitute Analysis Unavailable</h2>
+          <p className="text-danger/80 max-w-lg">{getEngineErrorMessage(substituteData, 'Requires Keyword Classification (Substitute labels) and BlackBox products.')}</p>
         </CardContent>
       </Card>
     );

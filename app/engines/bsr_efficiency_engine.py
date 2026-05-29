@@ -281,6 +281,41 @@ def run(
         "mean_revenue":   _sv(work["revenue"].mean()),
     }
 
+    corr_df = work.dropna(subset=["bsr", "revenue"])
+    rank_revenue_correlation = None
+    if len(corr_df) >= 3:
+        rank_revenue_correlation = round(float(corr_df["bsr"].corr(corr_df["revenue"])), 4)
+
+    rank_threshold = float(work["bsr"].median(skipna=True))
+    revenue_threshold = float(work["revenue"].median(skipna=True))
+    valid_mask = work["bsr"].notna() & work["revenue"].notna()
+    valid_products = work[valid_mask]
+    quadrant_summary = {
+        "valid_products_count": int(len(valid_products)),
+        "rank_threshold_bsr": round(rank_threshold, 2),
+        "revenue_threshold": round(revenue_threshold, 2),
+        "rank_revenue_correlation": rank_revenue_correlation,
+        "correlation_interpretation": (
+            "Strong inverse rank-revenue relationship (better rank → more revenue)"
+            if rank_revenue_correlation is not None and rank_revenue_correlation < -0.3
+            else "Weak rank-revenue alignment — optimization opportunities exist"
+            if rank_revenue_correlation is not None
+            else "Insufficient data for correlation"
+        ),
+        "market_leaders_count": int(
+            ((valid_products["bsr"] <= rank_threshold) & (valid_products["revenue"] >= revenue_threshold)).sum()
+        ),
+        "optimization_gaps_count": int(
+            ((valid_products["bsr"] <= rank_threshold) & (valid_products["revenue"] < revenue_threshold)).sum()
+        ),
+        "hidden_winners_count": int(
+            ((valid_products["bsr"] > rank_threshold) & (valid_products["revenue"] >= revenue_threshold)).sum()
+        ),
+        "weak_listings_count": int(
+            ((valid_products["bsr"] > rank_threshold) & (valid_products["revenue"] < revenue_threshold)).sum()
+        ),
+    }
+
     elapsed = round(time.time() - t0, 3)
     logger.info(
         f"BSR Efficiency complete: {len(work)} products, "
@@ -311,6 +346,12 @@ def run(
             "inefficient_products": inefficient_products,
             "bsr_distribution": bsr_stats_out,
             "revenue_distribution": rev_stats_out,
+            "quadrant_summary": quadrant_summary,
+            "rank_revenue_correlation": rank_revenue_correlation,
+            "rank_revenue_scatter": [
+                {"bsr": _sv(r["bsr"]), "revenue": _sv(r["revenue"]), "efficiency_score": _sv(r["efficiency_score"])}
+                for _, r in valid_products.head(200).iterrows()
+            ],
             "graph_scaling": {
                 "bsr_axis": adaptive_scaling(work["bsr"]),
                 "revenue_axis": adaptive_scaling(work["revenue"]),
@@ -353,11 +394,8 @@ def _product_records(df: pd.DataFrame, n: int) -> List[Dict]:
 def _sv(v: Any) -> Any:
     if v is None:
         return None
-    try:
-        if np.isnan(float(v)):
-            return None
-    except (TypeError, ValueError):
-        return str(v)
+    if pd.isna(v):
+        return None
     if isinstance(v, np.integer):
         return int(v)
     if isinstance(v, (np.floating, float)):

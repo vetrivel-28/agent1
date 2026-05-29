@@ -50,7 +50,7 @@ _ASIN_SALES_CANDIDATES = [
 
 def run(
     blackbox_df: Optional[pd.DataFrame],
-    top_n: int = 10,
+    top_n: int = 5,
 ) -> Dict[str, Any]:
     t0 = time.time()
     logger.info("Sales Momentum engine started.")
@@ -200,12 +200,21 @@ def run(
         brand_agg["sales_consistency"] = 50.0
         brand_agg["trend_acceleration"] = 50.0
 
-    brand_agg["momentum_score"] = (
-        brand_agg.get("norm_sales_trend", 50.0) * 0.4
-        + brand_agg.get("norm_asin_sales", 50.0) * 0.3
-        + brand_agg["sales_consistency"] * 0.2
-        + (100.0 - brand_agg["trend_acceleration"]) * 0.1
-    ).clip(0.0, 100.0)
+    momentum_score = 0.0
+    weight_sum = 0.0
+
+    if "norm_sales_trend" in brand_agg.columns:
+        momentum_score += brand_agg["norm_sales_trend"] * 0.4
+        weight_sum += 0.4
+    
+    if "norm_asin_sales" in brand_agg.columns:
+        momentum_score += brand_agg["norm_asin_sales"] * 0.2
+        weight_sum += 0.2
+    
+    if weight_sum > 0:
+        brand_agg["momentum_score"] = (momentum_score / weight_sum).clip(0.0, 100.0)
+    else:
+        brand_agg["momentum_score"] = 0.0
 
     # -----------------------------------------------------------------------
     # Percentile-based classification
@@ -306,11 +315,8 @@ def _brand_records(df: pd.DataFrame, n: int) -> List[Dict]:
 def _sv(v: Any) -> Any:
     if v is None:
         return None
-    try:
-        if np.isnan(float(v)):
-            return None
-    except (TypeError, ValueError):
-        return str(v)
+    if pd.isna(v):
+        return None
     if isinstance(v, np.integer):
         return int(v)
     if isinstance(v, (np.floating, float)):

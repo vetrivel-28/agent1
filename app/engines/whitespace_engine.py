@@ -3,7 +3,7 @@ Whitespace Engine
 =================
 Purpose  : Find high-demand keywords with weak competitor optimization.
 Datasets : Magnet Keyword dataset
-Formula  : Whitespace Score = Normalized Search Volume × (1 - Normalized Title Density)
+Formula  : 0.3*vol + 0.2*conv + 0.2*sales + 0.15*inv_density + 0.1*inv_comp + 0.05*trend
 
 Identifies SEO opportunities: high search demand + low keyword optimization.
 
@@ -19,14 +19,11 @@ import pandas as pd
 
 from app.utils.column_mapper import find_column
 from app.utils.logger import get_logger
-from app.utils.normalization import min_max_normalize, percentile_clip, safe_log_normalize
+from app.utils.normalization import min_max_normalize, safe_log_normalize
 from app.utils.numeric_cleaner import clean_numeric_series
 
 logger = get_logger("whitespace_engine")
 
-# ---------------------------------------------------------------------------
-# Column candidate lists
-# ---------------------------------------------------------------------------
 _KEYWORD_CANDIDATES = [
     "Keyword Phrase", "keyword phrase", "Keyword", "keyword",
 ]
@@ -36,57 +33,43 @@ _SEARCH_VOL_CANDIDATES = [
 _TITLE_DENSITY_CANDIDATES = [
     "Title Density", "title density", "TitleDensity",
 ]
-
-
-# ---------------------------------------------------------------------------
-# Helper functions
-# ---------------------------------------------------------------------------
+_CONV_CANDIDATES = [
+    "Conversion Rate", "ABA Total Conv. Share", "conversion rate", "ABA Total Conversion Share"
+]
+_SALES_CANDIDATES = [
+    "Keyword Sales", "keyword sales", "Sales", "sales"
+]
+_COMP_CANDIDATES = [
+    "Competing Products", "competing products", "CPR"
+]
+_TREND_CANDIDATES = [
+    "Search Volume Trend", "search volume trend", "Trend", "trend"
+]
 
 def _format_score(val: float) -> float:
-    """Round to 2 decimals, clip to 0-100."""
     if np.isnan(val):
         return 0.0
     return round(float(np.clip(val, 0.0, 100.0)), 2)
 
-
-# ---------------------------------------------------------------------------
-# Main engine function
-# ---------------------------------------------------------------------------
 
 def run(
     magnet_df: Optional[pd.DataFrame],
     blackbox_df: Optional[pd.DataFrame],
     top_n: int = 15,
 ) -> Dict[str, Any]:
-    """
-    Analyze Magnet dataset to find high-search, low-density keywords.
-
-    Args:
-        magnet_df: Magnet keyword dataset
-        blackbox_df: (unused for this engine)
-        top_n: Number of top keywords to return
-
-    Returns:
-        Structured result dict with whitespace analysis
-    """
     t0 = time.time()
     logger.info("Whitespace engine started.")
 
     rows_magnet = len(magnet_df) if magnet_df is not None else 0
-    logger.info(f"Input rows — magnet={rows_magnet}")
 
-    # -----------------------------------------------------------------------
-    # 1. Validate dataset availability
-    # -----------------------------------------------------------------------
     if magnet_df is None or magnet_df.empty:
-        logger.warning("Whitespace: no Magnet dataset provided.")
         return {
             "status": "error",
             "metric_name": "Whitespace Opportunity",
             "summary": "No Magnet keyword dataset available.",
             "datasets_used": [],
             "columns_used": [],
-            "formula_used": "Whitespace = Norm(Search Volume) × (1 - Norm(Title Density))",
+            "formula_used": "",
             "results": {},
             "validation": {
                 "status": "failed",
@@ -100,27 +83,27 @@ def run(
             "processing_time_seconds": round(time.time() - t0, 3),
         }
 
-    # -----------------------------------------------------------------------
-    # 2. Find required columns
-    # -----------------------------------------------------------------------
     keyword_col = find_column(magnet_df, _KEYWORD_CANDIDATES)
     search_vol_col = find_column(magnet_df, _SEARCH_VOL_CANDIDATES)
     title_density_col = find_column(magnet_df, _TITLE_DENSITY_CANDIDATES)
+    conv_col = find_column(magnet_df, _CONV_CANDIDATES)
+    sales_col = find_column(magnet_df, _SALES_CANDIDATES)
+    comp_col = find_column(magnet_df, _COMP_CANDIDATES)
+    trend_col = find_column(magnet_df, _TREND_CANDIDATES)
 
     if not search_vol_col:
-        logger.warning("Whitespace: Search Volume column not found.")
         return {
             "status": "error",
             "metric_name": "Whitespace Opportunity",
             "summary": "Required column 'Search Volume' not found in Magnet dataset.",
             "datasets_used": ["magnet"],
             "columns_used": [],
-            "formula_used": "Whitespace = Norm(Search Volume) × (1 - Norm(Title Density))",
+            "formula_used": "",
             "results": {},
             "validation": {
                 "status": "failed",
                 "message": "Search Volume column missing.",
-                "missing_columns": ["Search Volume", "Title Density"],
+                "missing_columns": ["Search Volume"],
                 "rows_before_cleaning": rows_magnet,
                 "rows_after_cleaning": 0,
                 "rows_skipped": rows_magnet,
@@ -129,60 +112,36 @@ def run(
             "processing_time_seconds": round(time.time() - t0, 3),
         }
 
-    # -----------------------------------------------------------------------
-    # 3. Prepare working dataframe
-    # -----------------------------------------------------------------------
     df = magnet_df.copy()
     numeric_cols_cleaned = []
 
-    # Clean Search Volume
-    sv_clean, sv_stats = clean_numeric_series(df[search_vol_col], search_vol_col)
-    logger.info(
-        f"Search Volume '{search_vol_col}': "
-        f"original={sv_stats['original_count']}, "
-        f"cleaned={sv_stats['cleaned_count']}, "
-        f"nan={sv_stats['nan_introduced']}"
-    )
-    df["_search_volume_clean"] = sv_clean
-    numeric_cols_cleaned.append(search_vol_col)
+    def process_col(col_name):
+        if col_name:
+            clean, _ = clean_numeric_series(df[col_name], col_name)
+            numeric_cols_cleaned.append(col_name)
+            return clean
+        return pd.Series(0.0, index=df.index)
 
-    # Clean Title Density (if available)
-    td_clean = None
-    if title_density_col:
-        td_clean, td_stats = clean_numeric_series(
-            df[title_density_col], title_density_col
-        )
-        logger.info(
-            f"Title Density '{title_density_col}': "
-            f"original={td_stats['original_count']}, "
-            f"cleaned={td_stats['cleaned_count']}, "
-            f"nan={td_stats['nan_introduced']}"
-        )
-        df["_title_density_clean"] = td_clean
-        numeric_cols_cleaned.append(title_density_col)
-    else:
-        # Assume no competition if column missing
-        logger.info("Title Density not found; assuming 0 density for all keywords.")
-        df["_title_density_clean"] = 0.0
+    df["_vol_clean"] = process_col(search_vol_col)
+    df["_density_clean"] = process_col(title_density_col)
+    df["_conv_clean"] = process_col(conv_col)
+    df["_sales_clean"] = process_col(sales_col)
+    df["_comp_clean"] = process_col(comp_col)
+    df["_trend_clean"] = process_col(trend_col)
 
-    # -----------------------------------------------------------------------
-    # 4. Filter rows with valid Search Volume
-    # -----------------------------------------------------------------------
-    df_valid = df.dropna(subset=["_search_volume_clean"])
+    df_valid = df.dropna(subset=["_vol_clean"])
     rows_before = len(df)
     rows_after = len(df_valid)
     rows_skipped = rows_before - rows_after
-    logger.info(f"Rows with valid Search Volume: {rows_after}/{rows_before}")
 
     if rows_after == 0:
-        logger.warning("Whitespace: no valid rows after cleaning Search Volume.")
         return {
             "status": "error",
             "metric_name": "Whitespace Opportunity",
             "summary": "No valid keyword data after cleaning.",
             "datasets_used": ["magnet"],
-            "columns_used": [search_vol_col, title_density_col] if title_density_col else [search_vol_col],
-            "formula_used": "Whitespace = Norm(Search Volume) × (1 - Norm(Title Density))",
+            "columns_used": [search_vol_col],
+            "formula_used": "",
             "results": {},
             "validation": {
                 "status": "failed",
@@ -196,40 +155,36 @@ def run(
             "processing_time_seconds": round(time.time() - t0, 3),
         }
 
-    # -----------------------------------------------------------------------
-    # 5. Apply log scaling and percentile clipping
-    # -----------------------------------------------------------------------
-    sv_log = safe_log_normalize(df_valid["_search_volume_clean"])
-    logger.info(f"Search Volume after log scaling: min={sv_log.min():.2f}, max={sv_log.max():.2f}")
+    vol_norm = min_max_normalize(safe_log_normalize(df_valid["_vol_clean"]))
+    conv_norm = min_max_normalize(df_valid["_conv_clean"])
+    sales_norm = min_max_normalize(safe_log_normalize(df_valid["_sales_clean"]))
+    density_norm = min_max_normalize(df_valid["_density_clean"])
+    comp_norm = min_max_normalize(safe_log_normalize(df_valid["_comp_clean"]))
+    trend_norm = min_max_normalize(df_valid["_trend_clean"])
 
-    # -----------------------------------------------------------------------
-    # 6. Normalize metrics to 0-100
-    # -----------------------------------------------------------------------
-    sv_norm = min_max_normalize(sv_log)
-    logger.info(f"Search Volume normalized: min={sv_norm.min():.2f}, max={sv_norm.max():.2f}")
+    inv_density = 100.0 - density_norm.fillna(0.0)
+    inv_comp = 100.0 - comp_norm.fillna(0.0)
 
-    # Normalize Title Density
-    td_norm = min_max_normalize(df_valid["_title_density_clean"])
-    logger.info(f"Title Density normalized: min={td_norm.min():.2f}, max={td_norm.max():.2f}")
+    score = (
+        0.3 * vol_norm.fillna(0.0) +
+        0.2 * conv_norm.fillna(0.0) +
+        0.2 * sales_norm.fillna(0.0) +
+        0.15 * inv_density +
+        0.1 * inv_comp +
+        0.05 * trend_norm.fillna(0.0)
+    )
 
-    # -----------------------------------------------------------------------
-    # 7. Calculate Whitespace Score
-    # -----------------------------------------------------------------------
-    # Whitespace = Search Volume × (1 - Title Density)
-    # High search volume + low title density = high whitespace (opportunity)
-    df_valid["_whitespace_score"] = sv_norm * (100.0 - td_norm) / 100.0
+    vol_p20 = float(df_valid["_vol_clean"].quantile(0.20))
+    sales_p20 = float(df_valid["_sales_clean"].quantile(0.20))
 
-    # Re-normalize to 0-100 scale
-    df_valid["_whitespace_score"] = min_max_normalize(df_valid["_whitespace_score"])
+    mask_low = (df_valid["_vol_clean"] < vol_p20) & (df_valid["_sales_clean"] < sales_p20)
+    score.loc[mask_low] = score.loc[mask_low].clip(upper=60.0)
+
+    df_valid["_whitespace_score"] = score
 
     overall_score = _format_score(df_valid["_whitespace_score"].mean())
-    logger.info(f"Overall whitespace score: {overall_score}")
 
-    # -----------------------------------------------------------------------
-    # 8. Classify opportunities by score
-    # -----------------------------------------------------------------------
     def classify_opportunity(score: float) -> str:
-        """Deterministic opportunity label based on score."""
         if score < 30:
             return "low opportunity"
         elif score < 60:
@@ -239,46 +194,33 @@ def run(
         else:
             return "extreme opportunity"
 
-    df_valid["_opportunity_label"] = df_valid["_whitespace_score"].apply(
-        classify_opportunity
-    )
+    df_valid["_opportunity_label"] = df_valid["_whitespace_score"].apply(classify_opportunity)
 
-    # -----------------------------------------------------------------------
-    # 9. Extract top whitespace keywords
-    # -----------------------------------------------------------------------
     df_sorted = df_valid.sort_values("_whitespace_score", ascending=False)
     top_keywords: List[Dict[str, Any]] = []
 
     for _, row in df_sorted.head(top_n).iterrows():
         entry: Dict[str, Any] = {
             "keyword": str(row[keyword_col]) if keyword_col else "N/A",
-            "search_volume": int(row["_search_volume_clean"]),
-            "title_density": _format_score(row["_title_density_clean"]),
+            "search_volume": int(row["_vol_clean"]),
+            "title_density": _format_score(row["_density_clean"]),
             "whitespace_score": _format_score(row["_whitespace_score"]),
             "opportunity_label": row["_opportunity_label"],
         }
         top_keywords.append(entry)
 
-    # -----------------------------------------------------------------------
-    # 10. Find high-search, low-density keywords
-    # -----------------------------------------------------------------------
-    high_search_low_density = df_sorted[
-        (df_sorted["_whitespace_score"] >= 60)
-    ].copy()
+    high_search_low_density = df_sorted[(df_sorted["_whitespace_score"] >= 60)].copy()
 
     high_search_low_density_keywords: List[Dict[str, Any]] = []
     for _, row in high_search_low_density.head(top_n).iterrows():
         entry = {
             "keyword": str(row[keyword_col]) if keyword_col else "N/A",
-            "search_volume": int(row["_search_volume_clean"]),
-            "title_density": _format_score(row["_title_density_clean"]),
+            "search_volume": int(row["_vol_clean"]),
+            "title_density": _format_score(row["_density_clean"]),
             "whitespace_score": _format_score(row["_whitespace_score"]),
         }
         high_search_low_density_keywords.append(entry)
 
-    # -----------------------------------------------------------------------
-    # 11. Opportunity distribution
-    # -----------------------------------------------------------------------
     opportunity_counts = df_valid["_opportunity_label"].value_counts().to_dict()
     opportunity_distribution = {
         "low_opportunity": int(opportunity_counts.get("low opportunity", 0)),
@@ -287,9 +229,6 @@ def run(
         "extreme_opportunity": int(opportunity_counts.get("extreme opportunity", 0)),
     }
 
-    # -----------------------------------------------------------------------
-    # 12. Generate interpretation
-    # -----------------------------------------------------------------------
     extreme_count = opportunity_distribution.get("extreme_opportunity", 0)
     high_count = opportunity_distribution.get("high_opportunity", 0)
     total_keywords = len(df_valid)
@@ -317,19 +256,14 @@ def run(
         )
 
     elapsed = round(time.time() - t0, 3)
-    logger.info(f"Whitespace complete: score={overall_score}, elapsed={elapsed}s")
 
     return {
         "status": "success",
         "metric_name": "Whitespace Opportunity",
         "summary": summary,
         "datasets_used": ["magnet"],
-        "columns_used": [col for col in [search_vol_col, title_density_col] if col],
-        "formula_used": (
-            "Whitespace Score = Norm(Search Volume) × (1 - Norm(Title Density)), "
-            "then normalized to 0-100. "
-            "Log scaling and percentile clipping applied before normalization."
-        ),
+        "columns_used": numeric_cols_cleaned,
+        "formula_used": "0.3*vol + 0.2*conv + 0.2*sales + 0.15*inv_density + 0.1*inv_comp + 0.05*trend. Capped at 60 if vol & sales < 20th percentile.",
         "results": {
             "overall_whitespace_score": overall_score,
             "top_whitespace_keywords": top_keywords,
