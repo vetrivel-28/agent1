@@ -51,7 +51,6 @@ _TITLE_CANDIDATES = ["Title", "title", "Product Title"]
 _ASIN_CANDIDATES  = ["ASIN", "asin"]
 _BRAND_CANDIDATES = ["Brand", "brand", "Seller", "seller"]
 
-# Configurable weights for BSR efficiency score calculation
 _WEIGHT_REVENUE = 0.6
 _WEIGHT_BSR     = 0.4
 
@@ -140,14 +139,6 @@ def run(
     )
     work["revenue"] = rev_clean
 
-    insufficient_revenue_mask = work["revenue"].isna() | (work["revenue"] == 0)
-    insufficient_revenue_products = work[insufficient_revenue_mask].copy()
-    if not insufficient_revenue_products.empty:
-        logger.warning(
-            f"BSR Efficiency: excluding {len(insufficient_revenue_products)} products with missing or zero revenue from efficiency ranking."
-        )
-        work = work[~insufficient_revenue_mask]
-
     if title_col:
         work["title"] = blackbox_df[title_col].astype(str).str[:120]
     if asin_col:
@@ -160,18 +151,6 @@ def run(
     work = work.dropna(subset=["bsr", "revenue"], how="all")
     rows_after_filter = len(work)
     rows_skipped = rows_before_filter - rows_after_filter
-    insufficient_revenue_data_products = []
-    if not insufficient_revenue_products.empty:
-        insufficient_revenue_data_products = [
-            {
-                "asin": str(row.get("asin", "")) if "asin" in row.index else None,
-                "title": str(row.get("title", "")) if "title" in row.index else None,
-                "brand": str(row.get("brand", "")) if "brand" in row.index else None,
-                "bsr": _sv(row.get("bsr")),
-                "revenue": _sv(row.get("revenue")),
-            }
-            for _, row in insufficient_revenue_products.head(top_n).iterrows()
-        ]
 
     logger.info(
         f"Rows after cleaning: {rows_after_filter} "
@@ -270,43 +249,8 @@ def run(
     # -----------------------------------------------------------------------
     # Market-level stats
     # -----------------------------------------------------------------------
-    market_efficiency = float(max(0.0, min(100.0, work["efficiency_score"].mean(skipna=True))))
+    market_efficiency = float(work["efficiency_score"].mean(skipna=True))
     market_median     = float(work["efficiency_score"].median(skipna=True))
-
-    # Quadrant Classification (for all valid products)
-    work["_quad_bsr"] = pd.to_numeric(work["bsr"], errors="coerce")
-    work["_quad_rev"] = pd.to_numeric(work["revenue"], errors="coerce")
-    valid_quad_df = work.dropna(subset=["_quad_bsr", "_quad_rev"]).copy()
-    valid_quad_df = valid_quad_df[(valid_quad_df["_quad_bsr"] > 0) & (valid_quad_df["_quad_rev"] > 0)]
-
-    if not valid_quad_df.empty:
-        median_bsr_val = float(valid_quad_df["_quad_bsr"].median())
-        median_rev_val = float(valid_quad_df["_quad_rev"].median())
-        
-        leaders = valid_quad_df[(valid_quad_df["_quad_bsr"] <= median_bsr_val) & (valid_quad_df["_quad_rev"] >= median_rev_val)]
-        gaps = valid_quad_df[(valid_quad_df["_quad_bsr"] <= median_bsr_val) & (valid_quad_df["_quad_rev"] < median_rev_val)]
-        winners = valid_quad_df[(valid_quad_df["_quad_bsr"] > median_bsr_val) & (valid_quad_df["_quad_rev"] >= median_rev_val)]
-        weak = valid_quad_df[(valid_quad_df["_quad_bsr"] > median_bsr_val) & (valid_quad_df["_quad_rev"] < median_rev_val)]
-        
-        quadrant_summary = {
-            "valid_products_count": len(valid_quad_df),
-            "rank_threshold_bsr": _sv(median_bsr_val),
-            "revenue_threshold": _sv(median_rev_val),
-            "market_leaders_count": len(leaders),
-            "optimization_gaps_count": len(gaps),
-            "hidden_winners_count": len(winners),
-            "weak_listings_count": len(weak)
-        }
-    else:
-        quadrant_summary = {
-            "valid_products_count": 0,
-            "rank_threshold_bsr": 0,
-            "revenue_threshold": 0,
-            "market_leaders_count": 0,
-            "optimization_gaps_count": 0,
-            "hidden_winners_count": 0,
-            "weak_listings_count": 0
-        }
 
     if market_efficiency >= 60:
         interpretation = (
@@ -350,11 +294,12 @@ def run(
         "datasets_used": ["blackbox"],
         "columns_used": columns_used,
         "formula_used": (
-            "BSR Efficiency = normalized revenue strength × 0.6 + normalized rank strength × 0.4. "
-            "Rank strength is computed by inverse log-normalized BSR because lower BSR indicates better rank. "
-            "norm_bsr = 100 - min_max_normalize(log1p(BSR)); "
-            "norm_revenue = min_max_normalize(log1p(Revenue)). "
-            "Rows excluded if BSR or Revenue is missing, blank, non-numeric, or zero."
+            f"Step 1: Norm BSR = (1 - BSR / max_BSR) × 100  "
+            f"[lower BSR = better rank = higher score, max_bsr={max_bsr:.0f}]. "
+            f"Step 2: Norm Revenue = min-max normalised to 0-100. "
+            f"Step 3: Efficiency = (Norm Revenue × {_WEIGHT_REVENUE}) + "
+            f"(Norm BSR × {_WEIGHT_BSR}). "
+            "Classification: p75 = efficient, p25 = inefficient."
         ),
         "results": {
             "market_efficiency_score": round(market_efficiency, 2),
@@ -364,10 +309,8 @@ def run(
             "inefficient_products_count": len(inefficient_df),
             "efficient_products": efficient_products,
             "inefficient_products": inefficient_products,
-            "insufficient_revenue_data_products": insufficient_revenue_data_products,
             "bsr_distribution": bsr_stats_out,
             "revenue_distribution": rev_stats_out,
-            "quadrant_summary": quadrant_summary,
             "graph_scaling": {
                 "bsr_axis": adaptive_scaling(work["bsr"]),
                 "revenue_axis": adaptive_scaling(work["revenue"]),
@@ -380,14 +323,7 @@ def run(
             "rows_before_cleaning": rows_original,
             "rows_after_cleaning": len(work),
             "rows_skipped": rows_skipped,
-            "columns_used": columns_used,
             "numeric_columns_cleaned": [bsr_col, rev_col],
-            "products_excluded_missing_revenue_count": len(insufficient_revenue_data_products),
-            "products_excluded_missing_bsr_count": int(bsr_clean.isna().sum()) if bsr_col else 0,
-            "warnings": (
-                [f"{len(insufficient_revenue_data_products)} products excluded due to missing or zero revenue."]
-                if insufficient_revenue_data_products else []
-            ),
         },
         "processing_time_seconds": elapsed,
     }
@@ -399,11 +335,7 @@ def run(
 
 def _product_records(df: pd.DataFrame, n: int) -> List[Dict]:
     records = []
-    for _, row in df.iterrows():
-        if row.get("norm_revenue") is None or (
-            isinstance(row.get("norm_revenue"), float) and np.isnan(row.get("norm_revenue"))
-        ):
-            continue
+    for _, row in df.head(n).iterrows():
         rec: Dict[str, Any] = {
             "efficiency_score": _sv(row.get("efficiency_score")),
             "bsr":              _sv(row.get("bsr")),
@@ -415,8 +347,6 @@ def _product_records(df: pd.DataFrame, n: int) -> List[Dict]:
             if field in row.index:
                 rec[field] = str(row[field])
         records.append(rec)
-        if len(records) >= n:
-            break
     return records
 
 

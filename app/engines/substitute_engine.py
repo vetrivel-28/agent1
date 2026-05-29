@@ -26,20 +26,14 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from app.utils.column_mapper import find_column
-from app.utils.ecosystem_scoring import (
-    category_proximity_score,
-    is_accessory_product,
-    is_direct_competitor,
-    is_towel_like_product,
-    price_compatibility_score,
-    use_case_similarity_score,
-    weighted_score,
-)
+from app.utils.column_mapper import find_column, minmax_normalize
 from app.utils.logger import get_logger
 from app.utils.numeric_cleaner import clean_numeric_series
-from app.utils.text_matching import keyword_overlap_score
-from app.utils.validation_helpers import build_validation
+from app.utils.text_matching import (
+    combined_similarity,
+    contains_any_token,
+    tokenize_text,
+)
 
 logger = get_logger("substitute_engine")
 
@@ -56,17 +50,11 @@ _ASIN_CANDIDATES        = ["ASIN", "asin"]
 _BRAND_CANDIDATES       = ["Brand", "brand", "Seller", "seller"]
 _REVENUE_CANDIDATES     = ["ASIN Revenue", "asin revenue", "Revenue", "revenue"]
 _BSR_CANDIDATES         = ["BSR", "bsr"]
-_PRICE_CANDIDATES       = ["Price", "price", "List Price", "list price"]
-_SALES_CANDIDATES       = ["ASIN Sales", "asin sales", "Parent Level Sales"]
 
-_SUBSTITUTE_WEIGHTS = {
-    "use_case_similarity": 0.4,
-    "keyword_overlap": 0.25,
-    "category_proximity": 0.2,
-    "price_proximity": 0.15,
-}
-
-MIN_SUBSTITUTE_SCORE = 22.0
+# Minimum combined_similarity to count as a match
+MIN_MATCH_SCORE = 15.0
+# Minimum score to include in top substitute products output
+MIN_PRODUCT_SCORE = 10.0
 
 
 # ---------------------------------------------------------------------------
@@ -145,128 +133,105 @@ def run(
     brand_col   = find_column(blackbox_df, _BRAND_CANDIDATES)
     rev_col     = find_column(blackbox_df, _REVENUE_CANDIDATES)
     bsr_col     = find_column(blackbox_df, _BSR_CANDIDATES)
-    price_col   = find_column(blackbox_df, _PRICE_CANDIDATES)
 
     if title_col is None:
         return _error("Title column not found in BlackBox dataset.", t0, missing=["Title"])
 
-    columns_used = [c for c in [kw_col, class_col, vol_col, title_col, subcat_col, cat_col, asin_col, price_col] if c]
-    sub_kw_list = [k["keyword"] for k in sub_keywords]
+    # -----------------------------------------------------------------------
+    # Pre-compute token sets for fast filtering
+    # -----------------------------------------------------------------------
+    # Build a frozenset of all unique tokens from substitute keywords
+    all_sub_tokens = frozenset(
+        tok
+        for kw_entry in sub_keywords
+        for tok in tokenize_text(kw_entry["keyword"])
+    )
+    logger.info(f"Substitute token vocabulary size: {len(all_sub_tokens)}")
 
+    # -----------------------------------------------------------------------
+    # Score BlackBox products against substitute keywords
+    # Vectorised approach: pre-filter by token presence, then score
+    # -----------------------------------------------------------------------
     bb = blackbox_df.copy()
-    bb["_title"] = bb[title_col].astype(str)
-    bb["_subcat"] = bb[subcat_col].astype(str) if subcat_col else ""
-    bb["_cat"] = bb[cat_col].astype(str) if cat_col else ""
-    if asin_col:
-        bb["_asin"] = bb[asin_col].astype(str)
-    else:
-        bb["_asin"] = bb.index.astype(str)
-    if price_col:
-        bb["_price"], _ = clean_numeric_series(bb[price_col], price_col)
-    else:
-        bb["_price"] = np.nan
-    sales_col_bb = find_column(blackbox_df, _SALES_CANDIDATES)
-    if sales_col_bb:
-        bb["_sales"], _ = clean_numeric_series(blackbox_df[sales_col_bb], sales_col_bb)
-    else:
-        bb["_sales"] = 0.0
+    bb["_title_clean"]  = bb[title_col].astype(str).str.lower()
+    bb["_subcat_clean"] = bb[subcat_col].astype(str).str.lower() if subcat_col else ""
 
-    # Reference primary market (towel-like, non-accessory) for competitor exclusion
-    primary_pool = bb[~bb["_title"].apply(is_accessory_product)]
-    if primary_pool.empty:
-        primary_pool = bb
-    towel_primaries = primary_pool[primary_pool["_title"].apply(lambda t: is_towel_like_product(t))]
-    if towel_primaries.empty:
-        towel_primaries = primary_pool.head(max(1, len(primary_pool) // 4))
-    hero_row = towel_primaries.sort_values("_sales", ascending=False).iloc[0]
-    hero_asin = str(hero_row["_asin"])
-    primary_asins = {hero_asin}
-    ref_category = str(towel_primaries["_cat"].mode().iloc[0]) if cat_col and not towel_primaries["_cat"].mode().empty else ""
-    ref_subcategory = str(towel_primaries["_subcat"].mode().iloc[0]) if subcat_col and not towel_primaries["_subcat"].mode().empty else ""
-    ref_prices = [float(p) for p in towel_primaries["_price"].dropna().tolist() if float(p) > 0]
+    # Fast pre-filter: keep only rows that share at least one token with substitutes
+    has_token = bb["_title_clean"].apply(
+        lambda t: contains_any_token(t, all_sub_tokens)
+    ) | bb["_subcat_clean"].apply(
+        lambda t: contains_any_token(t, all_sub_tokens)
+    )
+    candidate_bb = bb[has_token].copy()
+    logger.info(
+        f"BlackBox candidates after token pre-filter: "
+        f"{len(candidate_bb)}/{rows_bb}"
+    )
 
-    products_evaluated = len(bb)
-    accessory_products_excluded = 0
-    competitors_excluded = 0
+    if candidate_bb.empty:
+        # Fall back to full scan with lower threshold
+        candidate_bb = bb.copy()
+        logger.info("No token pre-filter matches — falling back to full scan")
+
+    # -----------------------------------------------------------------------
+    # Score each candidate product against each substitute keyword
+    # -----------------------------------------------------------------------
+    product_scores: Dict[int, Dict] = {}  # index → best match info
+
+    for kw_entry in sub_keywords:
+        kw = kw_entry["keyword"]
+        kw_sv = kw_entry["search_volume"] or 0
+
+        for idx, row in candidate_bb.iterrows():
+            title_score  = combined_similarity(kw, row["_title_clean"])
+            subcat_score = combined_similarity(kw, row["_subcat_clean"]) if subcat_col else 0.0
+            score = max(title_score, subcat_score)
+
+            if score < MIN_MATCH_SCORE:
+                continue
+
+            if idx not in product_scores:
+                product_scores[idx] = {
+                    "max_score": score,
+                    "matched_keywords": [kw],
+                    "keyword_search_volumes": [kw_sv],
+                }
+            else:
+                if score > product_scores[idx]["max_score"]:
+                    product_scores[idx]["max_score"] = score
+                if kw not in product_scores[idx]["matched_keywords"]:
+                    product_scores[idx]["matched_keywords"].append(kw)
+                    product_scores[idx]["keyword_search_volumes"].append(kw_sv)
+
+    logger.info(f"Products matched as substitutes: {len(product_scores)}")
+
+    # -----------------------------------------------------------------------
+    # Build substitute products list
+    # -----------------------------------------------------------------------
     substitute_products: List[Dict] = []
-
-    for idx, row in bb.iterrows():
-        title = str(row["_title"])
-        subcat = str(row["_subcat"])
-        asin = str(row["_asin"])
-
-        if asin in primary_asins:
-            continue
-
-        if is_accessory_product(title):
-            accessory_products_excluded += 1
-            continue
-
-        if is_direct_competitor(
-            title, subcat, str(hero_row["_title"]), str(hero_row["_subcat"])
-        ) and asin != hero_asin:
-            competitors_excluded += 1
-            continue
-
-        best_kw = ""
-        best_components: Dict[str, float] = {}
-        best_score = 0.0
-        for kw in sub_kw_list:
-            use_case = use_case_similarity_score(kw, title, subcat)
-            overlap = keyword_overlap_score(kw, title)
-            cat_prox = category_proximity_score(
-                str(row["_cat"]), subcat, ref_category, ref_subcategory
-            )
-            price_val = row["_price"] if not pd.isna(row["_price"]) else None
-            price_prox = price_compatibility_score(price_val, ref_prices)
-            components = {
-                "use_case_similarity": use_case,
-                "keyword_overlap": overlap,
-                "category_proximity": cat_prox,
-                "price_proximity": price_prox,
-            }
-            score = weighted_score(components, _SUBSTITUTE_WEIGHTS)
-            if score > best_score:
-                best_score = score
-                best_kw = kw
-                best_components = components
-
-        if best_score < MIN_SUBSTITUTE_SCORE:
-            continue
-
-        reasons = []
-        if best_components.get("use_case_similarity", 0) >= 40:
-            reasons.append("use-case similarity")
-        if best_components.get("keyword_overlap", 0) >= 30:
-            reasons.append("keyword overlap")
-        if best_components.get("category_proximity", 0) >= 50:
-            reasons.append("category proximity")
-        if best_components.get("price_proximity", 0) >= 45:
-            reasons.append("price proximity")
-
+    for idx, match_info in product_scores.items():
+        row = blackbox_df.loc[idx]
         prod: Dict[str, Any] = {
-            "substitute_score": best_score,
-            "similarity_score": best_score,
-            "score_components": {k: round(v, 2) for k, v in best_components.items()},
-            "substitute_reason": (
-                " + ".join(reasons) if reasons else "same need, different product positioning"
+            "similarity_score": round(match_info["max_score"], 2),
+            "matched_keywords": match_info["matched_keywords"][:5],
+            "total_search_volume": sum(
+                v for v in match_info["keyword_search_volumes"] if v
             ),
-            "matched_keyword": best_kw,
-            "matched_keywords": [best_kw] if best_kw else [],
         }
-        prod["asin"] = asin
-        prod["title"] = title[:120]
+        if asin_col:
+            prod["asin"] = str(row[asin_col])
+        if title_col:
+            prod["title"] = str(row[title_col])[:120]
         if brand_col:
             prod["brand"] = str(row[brand_col])
         if cat_col:
-            prod["category"] = str(row["_cat"])
+            prod["category"] = str(row[cat_col])
         if subcat_col:
-            prod["subcategory"] = subcat
+            prod["subcategory"] = str(row[subcat_col])
         substitute_products.append(prod)
 
-    substitute_products.sort(key=lambda x: x["substitute_score"], reverse=True)
-    substitutes_detected = len(substitute_products)
-    logger.info(f"Substitutes detected: {substitutes_detected} / {products_evaluated}")
+    # Sort by similarity score descending
+    substitute_products.sort(key=lambda x: x["similarity_score"], reverse=True)
 
     # -----------------------------------------------------------------------
     # Cluster by subcategory
@@ -281,7 +246,7 @@ def run(
             "subcategory": subcat,
             "product_count": len(prods),
             "avg_similarity": round(
-                sum(p["substitute_score"] for p in prods) / len(prods), 2
+                sum(p["similarity_score"] for p in prods) / len(prods), 2
             ),
             "top_product": prods[0].get("title", "")[:80] if prods else "",
         }
@@ -296,7 +261,7 @@ def run(
     # = normalised density: (matched products / total products) * mean similarity
     if substitute_products:
         density = len(substitute_products) / rows_bb
-        mean_sim = float(np.mean([p["substitute_score"] for p in substitute_products]))
+        mean_sim = float(np.mean([p["similarity_score"] for p in substitute_products]))
         market_overlap_score = round(min(density * mean_sim * 3, 100.0), 2)
     else:
         market_overlap_score = 0.0
@@ -304,7 +269,7 @@ def run(
     # -----------------------------------------------------------------------
     # Interpretation
     # -----------------------------------------------------------------------
-    n_subs = substitutes_detected
+    n_subs = len(substitute_products)
     if market_overlap_score >= 60:
         summary = (
             f"High substitute threat detected. {n_subs} products identified as "
@@ -335,11 +300,11 @@ def run(
         "metric_name": "Substitute Intelligence",
         "summary": summary,
         "datasets_used": ["keyword_classification", "blackbox"],
-        "columns_used": columns_used,
+        "columns_used": [c for c in [kw_col, class_col, vol_col, title_col, subcat_col] if c],
         "formula_used": (
-            "Substitute Score = Use-case Similarity × 0.4 + Keyword Overlap × 0.25 "
-            "+ Category Proximity × 0.2 + Price Proximity × 0.15. "
-            "Accessories are complements, not substitutes. Direct competitors are excluded."
+            "Similarity = 0.4 × bigram_overlap(keyword, title) + "
+            "0.6 × token_jaccard(keyword, title). "
+            "Market Overlap Score = min(density × mean_similarity × 3, 100)."
         ),
         "results": {
             "substitute_keywords": sub_keywords,
@@ -349,21 +314,16 @@ def run(
             "total_substitute_keywords": len(sub_keywords),
             "total_substitute_products": n_subs,
         },
-        "validation": build_validation(
-            rows_before_cleaning=rows_kc + rows_bb,
-            rows_after_cleaning=substitutes_detected,
-            columns_used=columns_used,
-            valid_rows_by_metric={"substitutes": substitutes_detected},
-            skipped_rows_by_metric={
-                "accessories": accessory_products_excluded,
-                "competitors": competitors_excluded,
-            },
-            warnings=[],
-            products_evaluated=products_evaluated,
-            substitutes_detected=substitutes_detected,
-            accessory_products_excluded=accessory_products_excluded,
-            competitors_excluded=competitors_excluded,
-        ),
+        "validation": {
+            "status": "passed",
+            "rows_before_cleaning": rows_kc + rows_bb,
+            "rows_after_cleaning": rows_kc + rows_bb,
+            "rows_skipped": 0,
+            "numeric_columns_cleaned": [vol_col] if vol_col else [],
+            "matched_records": n_subs,
+            "substitute_keywords_found": len(sub_keywords),
+            "blackbox_candidates_scanned": len(candidate_bb),
+        },
         "processing_time_seconds": elapsed,
     }
 
@@ -404,13 +364,14 @@ def _error(message: str, t0: float, missing: Optional[List[str]] = None) -> Dict
             "total_substitute_keywords": 0,
             "total_substitute_products": 0,
         },
-        "validation": build_validation(
-            rows_before_cleaning=0,
-            rows_after_cleaning=0,
-            columns_used=[],
-            warnings=[message],
-            status="failed",
-            missing_columns=missing or [],
-        ),
+        "validation": {
+            "status": "failed",
+            "message": message,
+            "missing_columns": missing or [],
+            "rows_before_cleaning": 0,
+            "rows_after_cleaning": 0,
+            "rows_skipped": 0,
+            "matched_records": 0,
+        },
         "processing_time_seconds": round(time.time() - t0, 3),
     }

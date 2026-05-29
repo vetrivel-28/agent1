@@ -212,13 +212,6 @@ export default function DatasetUpload() {
                           ))}
                         </div>
                       )}
-                      {uploadStatus.details?.alignment_warnings?.length > 0 && (
-                        <ul className="mt-3 space-y-1 text-sm text-warning list-disc pl-4">
-                          {uploadStatus.details.alignment_warnings.map((w: string, i: number) => (
-                            <li key={i}>{w}</li>
-                          ))}
-                        </ul>
-                      )}
                     </div>
                   </div>
                 </motion.div>
@@ -245,7 +238,7 @@ export default function DatasetUpload() {
             <CardContent className="text-sm text-muted-foreground space-y-2">
               <p>• BlackBox datasets are required for most analyses (e.g. Sales Momentum, Market Concentration).</p>
               <p>• Magnet datasets are required for Search-specific insights.</p>
-              <p>• BlackBox and Magnet datasets are combined at market level. Please ensure both files belong to the same product niche/category.</p>
+              <p>• Ensure both datasets are from the exact same market niche for accurate correlation.</p>
             </CardContent>
           </Card>
         </div>

@@ -11,7 +11,7 @@ Numeric cleaning is applied before every normalisation step.
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -20,7 +20,6 @@ from app.utils.column_mapper import find_column
 from app.utils.logger import get_logger
 from app.utils.normalization import min_max_normalize
 from app.utils.numeric_cleaner import clean_numeric_series
-from app.utils.validation_helpers import build_validation
 
 logger = get_logger("price_elasticity_engine")
 
@@ -139,7 +138,7 @@ def run(
         logger.warning("Price Elasticity: no BlackBox dataset provided.")
         return {
             "status": "error",
-            "metric_name": "Price Range Performance",
+            "metric_name": "Price Elasticity",
             "summary": "No BlackBox products dataset available.",
             "datasets_used": [],
             "columns_used": [],
@@ -175,7 +174,7 @@ def run(
         logger.warning("Price Elasticity: Price column not found.")
         return {
             "status": "error",
-            "metric_name": "Price Range Performance",
+            "metric_name": "Price Elasticity",
             "summary": "Required column 'Price' not found in BlackBox dataset.",
             "datasets_used": ["blackbox"],
             "columns_used": [],
@@ -284,7 +283,7 @@ def run(
         logger.warning("Price Elasticity: no valid rows after cleaning price.")
         return {
             "status": "error",
-            "metric_name": "Price Range Performance",
+            "metric_name": "Price Elasticity",
             "summary": "No valid product data after cleaning.",
             "datasets_used": ["blackbox"],
             "columns_used": [price_col],
@@ -319,28 +318,53 @@ def run(
         include_lowest=True,
     )
 
-    min_bucket_size = max(3, rows_after // max(n_buckets * 4, 1))
-    columns_used = [c for c in [price_col, asin_sales_col, revenue_col, bsr_col] if c]
-
     # -----------------------------------------------------------------------
-    # 6. Analyze each bucket (aggregate then normalize across buckets)
+    # 6. Analyze each bucket
     # -----------------------------------------------------------------------
     price_buckets: List[Dict[str, Any]] = []
-    raw_bucket_rows: List[Dict[str, Any]] = []
+    bucket_stats: List[Dict[str, Any]] = []
 
     for bucket_idx, (lower, upper) in enumerate(buckets):
         bucket_data = df_valid[df_valid["_bucket_idx"] == bucket_idx]
+        
         if bucket_data.empty:
             continue
 
         bucket_size = len(bucket_data)
-        total_sales = float(bucket_data["_asin_sales_clean"].sum())
-        total_revenue = float(bucket_data["_revenue_clean"].sum())
-        median_bsr = float(bucket_data["_bsr_clean"].median())
-        avg_bsr = float(bucket_data["_bsr_clean"].mean())
+        total_sales = int(bucket_data["_asin_sales_clean"].sum())
+        avg_revenue = _format_price(bucket_data["_revenue_clean"].mean())
+        avg_bsr = _format_price(bucket_data["_bsr_clean"].mean())
         avg_price = _format_price(bucket_data["_price_clean"].mean())
 
-        raw_bucket_rows.append({
+        # Calculate demand score
+        # Normalize metrics within this bucket
+        sales_norm = min_max_normalize(bucket_data["_asin_sales_clean"])
+        revenue_norm = min_max_normalize(bucket_data["_revenue_clean"])
+        
+        # Lower BSR = better, so invert it (higher score = better rank)
+        # Use percentile inversion for BSR
+        bsr_percentile = bucket_data["_bsr_clean"].rank(pct=True)
+        bsr_score = 100.0 * (1.0 - bsr_percentile.mean())  # Invert percentile
+        
+        # Demand score combines sales, revenue, and BSR performance
+        valid_sales_scores = sales_norm.dropna()
+        valid_revenue_scores = revenue_norm.dropna()
+        
+        scores_to_average = []
+        if not valid_sales_scores.empty:
+            scores_to_average.append(float(valid_sales_scores.mean()))
+        if not valid_revenue_scores.empty:
+            scores_to_average.append(float(valid_revenue_scores.mean()))
+        if not np.isnan(bsr_score):
+            scores_to_average.append(bsr_score)
+        
+        demand_score = np.mean(scores_to_average) if scores_to_average else 0.0
+        
+        # Calculate market share for this bucket
+        total_all_sales = df_valid["_asin_sales_clean"].sum()
+        market_share = (total_sales / total_all_sales * 100.0) if total_all_sales > 0 else 0.0
+
+        bucket_info = {
             "bucket_index": bucket_idx,
             "price_range": {
                 "min": _format_price(lower),
@@ -350,69 +374,19 @@ def run(
             "average_price": avg_price,
             "product_count": bucket_size,
             "total_sales": total_sales,
-            "total_revenue": total_revenue,
-            "median_bsr": _format_price(median_bsr),
-            "average_bsr": _format_price(avg_bsr),
-        })
-
-    if not raw_bucket_rows:
-        return {
-            "status": "error",
-            "metric_name": "Price Range Performance",
-            "summary": "No price buckets could be populated.",
-            "datasets_used": ["blackbox"],
-            "columns_used": columns_used,
-            "formula_used": "This is a proxy price-band performance analysis, not causal price elasticity.",
-            "results": {},
-            "validation": build_validation(
-                rows_before_cleaning=rows_before,
-                rows_after_cleaning=0,
-                columns_used=columns_used,
-                warnings=["No buckets populated after assignment."],
-            ),
-            "processing_time_seconds": round(time.time() - t0, 3),
-        }
-
-    sales_series = pd.Series([b["total_sales"] for b in raw_bucket_rows])
-    rev_series = pd.Series([b["total_revenue"] for b in raw_bucket_rows])
-    bsr_series = pd.Series([b["median_bsr"] for b in raw_bucket_rows])
-
-    norm_sales = min_max_normalize(sales_series)
-    norm_revenue = min_max_normalize(rev_series)
-    inverse_bsr = 100.0 - min_max_normalize(bsr_series)
-
-    total_all_sales = float(df_valid["_asin_sales_clean"].sum())
-    sales_p25 = float(sales_series.quantile(0.25))
-    rev_p25 = float(rev_series.quantile(0.25))
-    bsr_p75 = float(bsr_series.quantile(0.75))
-    demand_p25 = 30.0
-
-    for i, raw in enumerate(raw_bucket_rows):
-        demand_score = (
-            float(norm_sales.iloc[i]) * 0.4
-            + float(norm_revenue.iloc[i]) * 0.3
-            + float(inverse_bsr.iloc[i]) * 0.3
-        )
-        market_share = (
-            (raw["total_sales"] / total_all_sales * 100.0) if total_all_sales > 0 else 0.0
-        )
-        is_dead_zone = (
-            raw["product_count"] >= min_bucket_size
-            and demand_score < demand_p25
-            and raw["total_sales"] <= sales_p25
-            and raw["total_revenue"] <= rev_p25
-            and raw["median_bsr"] >= bsr_p75
-        )
-        price_buckets.append({
-            **raw,
-            "total_sales": int(raw["total_sales"]),
-            "total_revenue": round(raw["total_revenue"], 2),
+            "average_revenue": avg_revenue,
+            "average_bsr": avg_bsr,
             "demand_score": _format_score(demand_score),
             "market_share": _format_score(market_share),
-            "is_dead_zone": bool(is_dead_zone),
+        }
+        price_buckets.append(bucket_info)
+        bucket_stats.append({
+            "bucket_idx": bucket_idx,
+            "total_sales": total_sales,
+            "demand_score": demand_score,
         })
 
-    logger.info(f"Analyzed {len(price_buckets)} price buckets (min_bucket_size={min_bucket_size})")
+    logger.info(f"Analyzed {len(price_buckets)} price buckets")
 
     # -----------------------------------------------------------------------
     # 7. Identify strongest price ranges
@@ -422,24 +396,41 @@ def run(
     )[:3]
 
     # -----------------------------------------------------------------------
-    # 8. Dead zones (low sales + revenue + poor BSR, sufficient bucket size)
+    # 8. Detect dead zones (sharp demand drops)
     # -----------------------------------------------------------------------
     dead_zones: List[Dict[str, Any]] = []
-    for bucket in price_buckets:
-        if bucket.get("is_dead_zone"):
-            dead_zones.append({
-                "bucket_index": bucket["bucket_index"],
-                "price_range": bucket["price_range"],
-                "product_count": bucket["product_count"],
-                "total_sales": bucket["total_sales"],
-                "total_revenue": bucket["total_revenue"],
-                "median_bsr": bucket["median_bsr"],
-                "demand_score": bucket["demand_score"],
-                "reason": (
-                    "Low sales, low revenue, and weak rank with enough products in bucket."
-                ),
-            })
-    dead_zone_count = len(dead_zones)
+
+    for i in range(len(bucket_stats) - 1):
+        current_sales = bucket_stats[i]["total_sales"]
+        next_sales = bucket_stats[i + 1]["total_sales"]
+        
+        if current_sales == 0:
+            continue
+        
+        # Calculate relative sales decline
+        sales_decline_pct = abs((next_sales - current_sales) / current_sales * 100.0)
+        
+        # Dead zone: >50% drop to next bucket
+        if sales_decline_pct > 50 and current_sales > next_sales:
+            current_bucket = price_buckets[i]
+            next_bucket = price_buckets[i + 1]
+            
+            dead_zone = {
+                "between_buckets": f"{i} -> {i+1}",
+                "before_range": {
+                    "min": current_bucket["price_range"]["min"],
+                    "max": current_bucket["price_range"]["max"],
+                },
+                "after_range": {
+                    "min": next_bucket["price_range"]["min"],
+                    "max": next_bucket["price_range"]["max"],
+                },
+                "before_sales": current_bucket["total_sales"],
+                "after_sales": next_bucket["total_sales"],
+                "sales_drop_percentage": _format_score(sales_decline_pct),
+                "severity": "critical" if sales_decline_pct > 70 else "high",
+            }
+            dead_zones.append(dead_zone)
 
     # -----------------------------------------------------------------------
     # 9. Build pricing insights
@@ -462,22 +453,22 @@ def run(
         )
 
     if dead_zones:
-        worst = dead_zones[0]
+        worst_dead_zone = sorted(
+            dead_zones, key=lambda x: x["sales_drop_percentage"], reverse=True
+        )[0]
         insights.append(
-            f"Dead zone detected in ${worst['price_range']['min']}-${worst['price_range']['max']} "
-            f"(demand score {worst['demand_score']}, {worst['product_count']} products)."
+            f"Demand weakens significantly from ${worst_dead_zone['before_range']['max']} "
+            f"to ${worst_dead_zone['after_range']['min']} "
+            f"(drop: {worst_dead_zone['sales_drop_percentage']}%)."
         )
 
     if not insights:
-        insights.append("Price range performance analysis complete. See bucket details for insights.")
+        insights.append("Price elasticity analysis complete. See bucket details for insights.")
 
     # -----------------------------------------------------------------------
     # 10. Generate summary
     # -----------------------------------------------------------------------
-    summary = (
-        f"Price range performance analyzed across {len(price_buckets)} buckets. "
-        + " ".join(insights[:2])
-    )
+    summary = f"Price elasticity analyzed across {len(price_buckets)} price ranges. " + " ".join(insights[:2])
 
     # -----------------------------------------------------------------------
     # 11. Sales distribution
@@ -498,15 +489,14 @@ def run(
 
     return {
         "status": "success",
-        "metric_name": "Price Range Performance",
+        "metric_name": "Price Elasticity",
         "summary": summary,
         "datasets_used": ["blackbox"],
         "columns_used": [c for c in [price_col, asin_sales_col, revenue_col, bsr_col] if c],
         "formula_used": (
-            "This is a proxy price-band analysis, not causal price elasticity. "
-            "Price Bucket Demand Score = Normalized Sales × 0.4 + Normalized Revenue × 0.3 "
-            "+ Inverse Normalized BSR × 0.3. Dead zones require low sales, low revenue, poor BSR, "
-            "and enough products in the bucket."
+            "Demand Score = avg(Norm(ASIN Sales), Norm(Revenue), Norm(1/BSR)). "
+            "Dead zones detected by >50% sales decline between adjacent buckets. "
+            "Price buckets created using adaptive quantile-based sizing."
         ),
         "results": {
             "price_buckets": price_buckets,
@@ -515,19 +505,13 @@ def run(
             "sales_distribution": sales_distribution,
             "pricing_insights": insights,
             "bucket_count": len(price_buckets),
-            "market_demand_score": round(
-                float(np.mean([b["demand_score"] for b in price_buckets])), 2
-            ) if price_buckets else 0.0,
         },
-        "validation": build_validation(
-            rows_before_cleaning=rows_before,
-            rows_after_cleaning=rows_after,
-            columns_used=columns_used,
-            warnings=[],
-            buckets_created=len(price_buckets),
-            min_bucket_size=min_bucket_size,
-            dead_zone_count=dead_zone_count,
-            numeric_columns_cleaned=numeric_cols_cleaned,
-        ),
+        "validation": {
+            "rows_before_cleaning": rows_before,
+            "rows_after_cleaning": rows_after,
+            "rows_skipped": rows_skipped,
+            "numeric_columns_cleaned": numeric_cols_cleaned,
+            "missing_columns": [],
+        },
         "processing_time_seconds": elapsed,
     }

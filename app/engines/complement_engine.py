@@ -19,27 +19,19 @@ All scoring is deterministic — no AI, no embeddings.
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
 
-from app.utils.column_mapper import find_column
-from app.utils.ecosystem_scoring import (
-    ACCESSORY_TOKENS,
-    accessory_relationship_score,
-    different_subcategory_score,
-    is_accessory_product,
-    is_direct_competitor,
-    is_towel_like_product,
-    price_compatibility_score,
-    shared_keyword_context_score,
-    weighted_score,
-)
+from app.utils.column_mapper import find_column, minmax_normalize
 from app.utils.logger import get_logger
 from app.utils.numeric_cleaner import clean_numeric_series
-from app.utils.text_matching import contains_any_token, tokenize_text
-from app.utils.validation_helpers import build_validation
+from app.utils.text_matching import (
+    combined_similarity,
+    contains_any_token,
+    tokenize_text,
+)
 
 logger = get_logger("complement_engine")
 
@@ -56,16 +48,8 @@ _ASIN_CANDIDATES      = ["ASIN", "asin"]
 _BRAND_CANDIDATES     = ["Brand", "brand", "Seller", "seller"]
 _REVENUE_CANDIDATES   = ["ASIN Revenue", "asin revenue", "Revenue", "revenue"]
 _SALES_CANDIDATES     = ["ASIN Sales", "asin sales", "Parent Level Sales"]
-_PRICE_CANDIDATES     = ["Price", "price", "List Price", "list price"]
 
-_COMPLEMENT_WEIGHTS = {
-    "accessory_relationship": 0.4,
-    "shared_keyword_context": 0.25,
-    "different_subcategory": 0.2,
-    "price_compatibility": 0.15,
-}
-
-MIN_COMPLEMENT_SCORE = 25.0
+MIN_MATCH_SCORE = 15.0
 
 
 # ---------------------------------------------------------------------------
@@ -142,142 +126,118 @@ def run(
     brand_col  = find_column(blackbox_df, _BRAND_CANDIDATES)
     rev_col    = find_column(blackbox_df, _REVENUE_CANDIDATES)
     sales_col  = find_column(blackbox_df, _SALES_CANDIDATES)
-    price_col  = find_column(blackbox_df, _PRICE_CANDIDATES)
 
     if title_col is None:
         return _error("Title column not found in BlackBox dataset.", t0, missing=["Title"])
 
-    columns_used = [c for c in [kw_col, class_col, vol_col, title_col, subcat_col, cat_col, asin_col, price_col, sales_col] if c]
-
-    # Substitute keywords from classification file — complements must not be substitutes
-    sub_mask = kc_df[class_col].astype(str).str.strip().str.lower() == "substitute"
-    substitute_kw_list = kc_df.loc[sub_mask, kw_col].astype(str).str.strip().tolist() if kw_col else []
-    comp_kw_list = [k["keyword"] for k in comp_keywords]
-
-    bb = blackbox_df.copy()
-    bb["_title"] = bb[title_col].astype(str)
-    bb["_subcat"] = bb[subcat_col].astype(str) if subcat_col else ""
-    bb["_cat"] = bb[cat_col].astype(str) if cat_col else ""
-    if asin_col:
-        bb["_asin"] = bb[asin_col].astype(str)
-    else:
-        bb["_asin"] = bb.index.astype(str)
-    if price_col:
-        bb["_price"], _ = clean_numeric_series(bb[price_col], price_col)
-    else:
-        bb["_price"] = np.nan
-    if sales_col:
-        bb["_sales"], _ = clean_numeric_series(bb[sales_col], sales_col)
-    else:
-        bb["_sales"] = 0.0
-
-    # Primary products = core market items (not accessories), ranked by sales
-    primary_candidates = bb[~bb["_title"].apply(is_accessory_product)].copy()
-    if primary_candidates.empty:
-        primary_candidates = bb.copy()
-    primary_candidates = primary_candidates.sort_values("_sales", ascending=False)
-    n_primary = max(1, min(len(primary_candidates), int(len(primary_candidates) * 0.35) or 1))
-    primary_rows = primary_candidates.head(n_primary)
-    primary_asins: Set[str] = set(primary_rows["_asin"].astype(str))
-    primary_subcategory = (
-        str(primary_rows["_subcat"].mode().iloc[0])
-        if subcat_col and not primary_rows["_subcat"].mode().empty
-        else ""
+    # -----------------------------------------------------------------------
+    # Pre-compute token vocabulary for fast filtering
+    # -----------------------------------------------------------------------
+    all_comp_tokens = frozenset(
+        tok
+        for kw_entry in comp_keywords
+        for tok in tokenize_text(kw_entry["keyword"])
     )
-    primary_prices = [
-        float(p) for p in primary_rows["_price"].dropna().tolist() if float(p) > 0
-    ]
+    logger.info(f"Complement token vocabulary size: {len(all_comp_tokens)}")
 
-    products_evaluated = len(bb)
-    excluded_same_asin = 0
-    excluded_competitors = 0
-    excluded_substitutes = 0
-    complement_products: List[Dict] = []
+    # -----------------------------------------------------------------------
+    # Pre-filter BlackBox candidates
+    # -----------------------------------------------------------------------
+    bb = blackbox_df.copy()
+    bb["_title_clean"]  = bb[title_col].astype(str).str.lower()
+    bb["_subcat_clean"] = bb[subcat_col].astype(str).str.lower() if subcat_col else ""
 
-    for idx, row in bb.iterrows():
-        asin = str(row["_asin"])
-        title = str(row["_title"])
-        subcat = str(row["_subcat"])
+    has_token = bb["_title_clean"].apply(
+        lambda t: contains_any_token(t, all_comp_tokens)
+    ) | bb["_subcat_clean"].apply(
+        lambda t: contains_any_token(t, all_comp_tokens)
+    )
+    candidate_bb = bb[has_token].copy()
+    logger.info(
+        f"BlackBox candidates after token pre-filter: "
+        f"{len(candidate_bb)}/{rows_bb}"
+    )
 
-        if asin in primary_asins:
-            excluded_same_asin += 1
-            continue
+    if candidate_bb.empty:
+        candidate_bb = bb.copy()
+        logger.info("No token pre-filter matches — falling back to full scan")
 
-        is_competitor = any(
-            is_direct_competitor(title, subcat, str(prow["_title"]), str(prow["_subcat"]))
-            for _, prow in primary_rows.iterrows()
-        )
-        if is_competitor:
-            excluded_competitors += 1
-            continue
+    # -----------------------------------------------------------------------
+    # Score each candidate product against each complement keyword
+    # -----------------------------------------------------------------------
+    product_scores: Dict[int, Dict] = {}
 
-        if not is_accessory_product(title):
-            sub_kw_hit = any(
-                shared_keyword_context_score(title, [skw]) >= 40 for skw in substitute_kw_list
-            )
-            if sub_kw_hit and not any(
-                shared_keyword_context_score(title, [ckw]) >= 35 for ckw in comp_kw_list
-            ):
-                excluded_substitutes += 1
+    for kw_entry in comp_keywords:
+        kw    = kw_entry["keyword"]
+        kw_sv = kw_entry["search_volume"] or 0
+
+        for idx, row in candidate_bb.iterrows():
+            title_score  = combined_similarity(kw, row["_title_clean"])
+            subcat_score = combined_similarity(kw, row["_subcat_clean"]) if subcat_col else 0.0
+            score = max(title_score, subcat_score)
+
+            if score < MIN_MATCH_SCORE:
                 continue
 
-        kw_context = shared_keyword_context_score(title, comp_kw_list)
-        accessory_score = accessory_relationship_score(title)
-        if accessory_score < 20 and kw_context < MIN_COMPLEMENT_SCORE:
-            continue
+            if idx not in product_scores:
+                product_scores[idx] = {
+                    "max_score": score,
+                    "matched_keywords": [kw],
+                    "keyword_search_volumes": [kw_sv],
+                    "keyword_count": 1,
+                }
+            else:
+                if score > product_scores[idx]["max_score"]:
+                    product_scores[idx]["max_score"] = score
+                if kw not in product_scores[idx]["matched_keywords"]:
+                    product_scores[idx]["matched_keywords"].append(kw)
+                    product_scores[idx]["keyword_search_volumes"].append(kw_sv)
+                    product_scores[idx]["keyword_count"] += 1
 
-        subcat_score = different_subcategory_score(subcat, primary_subcategory)
-        price_val = row["_price"] if not pd.isna(row["_price"]) else None
-        price_score = price_compatibility_score(price_val, primary_prices)
+    logger.info(f"Products matched as complements: {len(product_scores)}")
 
-        components = {
-            "accessory_relationship": accessory_score,
-            "shared_keyword_context": kw_context,
-            "different_subcategory": subcat_score,
-            "price_compatibility": price_score,
-        }
-        strength = weighted_score(components, _COMPLEMENT_WEIGHTS)
-        if strength < MIN_COMPLEMENT_SCORE:
-            continue
+    # -----------------------------------------------------------------------
+    # Compute complement_strength (normalised 0-100)
+    # strength = weighted combination of similarity score + keyword breadth
+    # -----------------------------------------------------------------------
+    if product_scores:
+        max_kw_count = max(v["keyword_count"] for v in product_scores.values())
+    else:
+        max_kw_count = 1
 
-        matched_kws = [
-            ckw for ckw in comp_kw_list
-            if shared_keyword_context_score(title, [ckw]) >= 25
-        ][:5]
-        reasons = []
-        if accessory_score >= 50:
-            reasons.append("accessory relationship")
-        if kw_context >= 30:
-            reasons.append("shared keyword context")
-        if subcat_score >= 70:
-            reasons.append("different subcategory")
-        if price_score >= 50:
-            reasons.append("price compatibility")
+    complement_products: List[Dict] = []
+    for idx, match_info in product_scores.items():
+        row = blackbox_df.loc[idx]
+
+        # Complement strength: 70% similarity + 30% keyword breadth
+        breadth_norm = (match_info["keyword_count"] / max(max_kw_count, 1)) * 100
+        strength = round(
+            match_info["max_score"] * 0.7 + breadth_norm * 0.3, 2
+        )
 
         prod: Dict[str, Any] = {
             "complement_strength": strength,
-            "complement_score": strength,
-            "score_components": {k: round(v, 2) for k, v in components.items()},
-            "complement_reason": (
-                " + ".join(reasons) if reasons else "complementary market-level fit"
+            "similarity_score": round(match_info["max_score"], 2),
+            "matched_keyword": match_info["matched_keywords"][0],
+            "all_matched_keywords": match_info["matched_keywords"][:5],
+            "keyword_match_count": match_info["keyword_count"],
+            "total_search_volume": sum(
+                v for v in match_info["keyword_search_volumes"] if v
             ),
-            "matched_keyword": matched_kws[0] if matched_kws else "",
-            "all_matched_keywords": matched_kws,
-            "keyword_match_count": len(matched_kws),
         }
-        prod["asin"] = asin
-        prod["title"] = title[:120]
+        if asin_col:
+            prod["asin"] = str(row[asin_col])
+        if title_col:
+            prod["title"] = str(row[title_col])[:120]
         if brand_col:
             prod["brand"] = str(row[brand_col])
         if cat_col:
-            prod["category"] = str(row["_cat"])
+            prod["category"] = str(row[cat_col])
         if subcat_col:
-            prod["subcategory"] = subcat
+            prod["subcategory"] = str(row[subcat_col])
         complement_products.append(prod)
 
     complement_products.sort(key=lambda x: x["complement_strength"], reverse=True)
-    complements_detected = len(complement_products)
-    logger.info(f"Complements detected: {complements_detected} / {products_evaluated} evaluated")
 
     # -----------------------------------------------------------------------
     # Ecosystem clusters (by subcategory)
@@ -315,7 +275,7 @@ def run(
     # -----------------------------------------------------------------------
     # Ecosystem strength score
     # -----------------------------------------------------------------------
-    n_comps = complements_detected
+    n_comps = len(complement_products)
     if complement_products:
         density   = n_comps / rows_bb
         mean_str  = float(np.mean([p["complement_strength"] for p in complement_products]))
@@ -356,12 +316,11 @@ def run(
         "metric_name": "Complement Intelligence",
         "summary": summary,
         "datasets_used": ["keyword_classification", "blackbox"],
-        "columns_used": columns_used,
+        "columns_used": [c for c in [kw_col, class_col, vol_col, title_col, subcat_col] if c],
         "formula_used": (
-            "Complement products are accessories or products commonly used with the target product, "
-            "not direct substitutes or competitors. "
-            "Complement Score = Accessory Relationship × 0.4 + Shared Keyword Context × 0.25 "
-            "+ Different Subcategory × 0.2 + Price Compatibility × 0.15."
+            "Complement Strength = 0.7 × combined_similarity + 0.3 × keyword_breadth_normalised. "
+            "combined_similarity = 0.4 × bigram_overlap + 0.6 × token_jaccard. "
+            "Ecosystem Strength = min(density × mean_strength × 3, 100)."
         ),
         "results": {
             "complement_keywords": comp_keywords,
@@ -372,23 +331,16 @@ def run(
             "total_complement_keywords": len(comp_keywords),
             "total_complement_products": n_comps,
         },
-        "validation": build_validation(
-            rows_before_cleaning=rows_kc + rows_bb,
-            rows_after_cleaning=complements_detected,
-            columns_used=columns_used,
-            valid_rows_by_metric={"complements": complements_detected},
-            skipped_rows_by_metric={
-                "same_asin": excluded_same_asin,
-                "competitors": excluded_competitors,
-                "substitutes": excluded_substitutes,
-            },
-            warnings=[],
-            products_evaluated=products_evaluated,
-            complements_detected=complements_detected,
-            excluded_same_asin=excluded_same_asin,
-            excluded_competitors=excluded_competitors,
-            excluded_substitutes=excluded_substitutes,
-        ),
+        "validation": {
+            "status": "passed",
+            "rows_before_cleaning": rows_kc + rows_bb,
+            "rows_after_cleaning": rows_kc + rows_bb,
+            "rows_skipped": 0,
+            "numeric_columns_cleaned": [vol_col] if vol_col else [],
+            "matched_records": n_comps,
+            "complement_keywords_found": len(comp_keywords),
+            "blackbox_candidates_scanned": len(candidate_bb),
+        },
         "processing_time_seconds": elapsed,
     }
 
@@ -465,13 +417,14 @@ def _error(message: str, t0: float, missing: Optional[List[str]] = None) -> Dict
             "total_complement_keywords": 0,
             "total_complement_products": 0,
         },
-        "validation": build_validation(
-            rows_before_cleaning=0,
-            rows_after_cleaning=0,
-            columns_used=[],
-            warnings=[message],
-            status="failed",
-            missing_columns=missing or [],
-        ),
+        "validation": {
+            "status": "failed",
+            "message": message,
+            "missing_columns": missing or [],
+            "rows_before_cleaning": 0,
+            "rows_after_cleaning": 0,
+            "rows_skipped": 0,
+            "matched_records": 0,
+        },
         "processing_time_seconds": round(time.time() - t0, 3),
     }

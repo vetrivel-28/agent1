@@ -21,14 +21,10 @@ import pandas as pd
 
 from app.utils.column_mapper import find_column
 from app.utils.logger import get_logger
-from app.utils.normalization import rolling_trend_smoothing, safe_log_normalize
+from app.utils.normalization import min_max_normalize, rolling_trend_smoothing, safe_log_normalize
 from app.utils.numeric_cleaner import clean_numeric_series
 
 logger = get_logger("sales_momentum_engine")
-
-# Configurable thresholds for market direction classification
-_SALES_TREND_DECLINING_THRESHOLD = -0.5
-_SALES_TREND_GROWING_THRESHOLD = 0.5
 
 # ---------------------------------------------------------------------------
 # Column candidate lists
@@ -111,28 +107,23 @@ def run(
         columns_used.append(asin_sales_col)
         metrics_available.append("ASIN Sales")
 
-    if trend_col is None or asin_sales_col is None:
+    if not metrics_available:
         return {
-            "status": "warning",
+            "status": "error",
             "metric_name": "Sales Momentum",
-            "message": "Required columns missing or no valid numeric sales trend values found.",
-            "summary": "Required columns missing or no valid numeric sales trend values found.",
+            "summary": "No sales metric columns found in BlackBox dataset.",
             "datasets_used": ["blackbox"],
             "columns_used": columns_used,
             "formula_used": "",
             "results": {},
             "validation": {
-                "status": "warning",
-                "message": "Required columns missing or no valid numeric sales trend values found.",
-                "required_columns": ["Sales Trend (90 days) (%)", "ASIN Sales or Parent Level Sales"],
-                "columns_found": columns_used,
+                "status": "failed",
+                "message": "No sales metric columns found.",
+                "missing_columns": _SALES_TREND_CANDIDATES[:2] + _ASIN_SALES_CANDIDATES[:2],
                 "rows_before_cleaning": rows_original,
                 "rows_after_cleaning": 0,
                 "rows_skipped": rows_original,
-                "columns_used": columns_used,
-                "valid_rows_by_metric": {},
-                "skipped_rows_by_metric": {},
-                "warnings": ["Sales Trend and ASIN Sales / Parent Level Sales are both required."],
+                "numeric_columns_cleaned": [],
             },
             "processing_time_seconds": round(time.time() - t0, 3),
         }
@@ -153,17 +144,8 @@ def run(
             f"cleaned={trend_stats['cleaned_count']}, "
             f"nan={trend_stats['nan_introduced']}"
         )
-        invalid_trend_mask = trend_clean < -100
-        invalid_sales_trend_count = int(invalid_trend_mask.sum())
-        if invalid_sales_trend_count:
-            logger.warning(
-                f"Sales Momentum: excluded {invalid_sales_trend_count} rows with invalid sales trend < -100%."
-            )
-            trend_clean = trend_clean.mask(invalid_trend_mask, np.nan)
         work["sales_trend"] = trend_clean
         numeric_cols_cleaned.append(trend_col)
-    else:
-        invalid_sales_trend_count = 0
 
     if asin_sales_col:
         sales_clean, sales_stats = clean_numeric_series(
@@ -207,9 +189,22 @@ def run(
         brand_agg["norm_asin_sales"] = safe_log_normalize(brand_agg["asin_sales"])
         norm_cols.append("norm_asin_sales")
 
+    # Volatility-adjusted trend strength based on smoothed trend variability.
+    if "smooth_sales_trend" in brand_agg.columns:
+        trend_std = float(brand_agg["smooth_sales_trend"].std(skipna=True)) or 1.0
+        brand_agg["sales_consistency"] = (1.0 - (brand_agg["smooth_sales_trend"].abs() / (trend_std * 3.0))).clip(0.0, 1.0) * 100.0
+        brand_agg["trend_acceleration"] = min_max_normalize(
+            brand_agg["smooth_sales_trend"].diff().fillna(0.0).abs()
+        )
+    else:
+        brand_agg["sales_consistency"] = 50.0
+        brand_agg["trend_acceleration"] = 50.0
+
     brand_agg["momentum_score"] = (
-        brand_agg.get("norm_sales_trend", 50.0) * 0.6
-        + brand_agg.get("norm_asin_sales", 50.0) * 0.4
+        brand_agg.get("norm_sales_trend", 50.0) * 0.4
+        + brand_agg.get("norm_asin_sales", 50.0) * 0.3
+        + brand_agg["sales_consistency"] * 0.2
+        + (100.0 - brand_agg["trend_acceleration"]) * 0.1
     ).clip(0.0, 100.0)
 
     # -----------------------------------------------------------------------
@@ -219,14 +214,8 @@ def run(
     p25 = brand_agg["momentum_score"].quantile(0.25)
 
     brand_sorted = brand_agg.sort_values("momentum_score", ascending=False)
-    if "sales_trend" in brand_agg.columns:
-        fastest_trend_brands = _brand_records(
-            brand_agg[brand_agg["sales_trend"] > 0].sort_values("sales_trend", ascending=False),
-            top_n,
-        )
-    else:
-        fastest_trend_brands = []
-    top_momentum_brands = _brand_records(
+
+    fastest_growing = _brand_records(
         brand_sorted[brand_sorted["momentum_score"] >= p75], top_n
     )
     declining = _brand_records(
@@ -234,24 +223,19 @@ def run(
         top_n,
     )
     all_brands = _brand_records(brand_sorted, len(brand_sorted))
-    bottom_quartile = brand_sorted[brand_sorted["momentum_score"] <= p25]
-    bottom_quartile_brand_count = int(bottom_quartile.shape[0])
 
     # -----------------------------------------------------------------------
     # Market direction
     # -----------------------------------------------------------------------
-    mean_sales_trend = float(brand_agg["sales_trend"].mean(skipna=True)) if "sales_trend" in brand_agg else 0.0
-    median_sales_trend = float(brand_agg["sales_trend"].median(skipna=True)) if "sales_trend" in brand_agg else 0.0
-
-    if median_sales_trend < _SALES_TREND_DECLINING_THRESHOLD:
-        direction = "Declining"
-    elif median_sales_trend <= _SALES_TREND_GROWING_THRESHOLD:
-        direction = "Stable"
-    else:
-        direction = "Growing"
-
     market_mean   = float(brand_agg["momentum_score"].mean(skipna=True))
     market_median = float(brand_agg["momentum_score"].median(skipna=True))
+
+    if market_mean >= 60:
+        direction = "Accelerating"
+    elif market_mean >= 40:
+        direction = "Stable"
+    else:
+        direction = "Decelerating"
 
     elapsed = round(time.time() - t0, 3)
     logger.info(
@@ -263,34 +247,25 @@ def run(
         "status": "success",
         "metric_name": "Sales Momentum",
         "summary": (
-            f"Market sales direction is {direction.lower()} based on median brand sales trend. "
-            f"Mean sales trend is reported for metadata only. "
-            f"{bottom_quartile_brand_count} brands are in the bottom sales momentum quartile."
+            f"Market sales momentum is {direction.lower()}. "
+            f"Mean brand score: {round(market_mean, 2)}/100. "
+            f"{len(fastest_growing)} brands in top quartile, "
+            f"{len(declining)} in bottom quartile."
         ),
         "datasets_used": ["blackbox"],
         "columns_used": columns_used,
         "formula_used": (
-            "Sales Momentum Score = (Normalized Sales Trend × 0.6) + (Normalized Sales Volume × 0.4). "
-            "Sales Trend = growth direction; ASIN Sales / Parent Level Sales = sales strength. "
-            "Aggregated at brand level. Market direction is determined by median sales trend. "
+            "Sales Momentum = mean( norm_sales_trend, norm_asin_sales ) "
+            "aggregated at brand level. Each metric min-max normalised to 0-100. "
             f"Metrics used: {metrics_available}"
         ),
         "results": {
             "market_momentum_direction": direction,
-            "mean_sales_trend_pct": round(mean_sales_trend, 4),
-            "median_sales_trend_pct": round(median_sales_trend, 4),
-            "sales_direction_basis": "median",
             "market_mean_score": round(market_mean, 2),
             "market_median_score": round(market_median, 2),
             "total_brands_analysed": len(brand_agg),
-            "fastest_growing_brands": fastest_trend_brands,
-            "leading_brands_by_sales_volume_and_trend": top_momentum_brands,
+            "fastest_growing_brands": fastest_growing,
             "declining_brands": declining,
-            "bottom_quartile_brand_count": bottom_quartile_brand_count,
-            "bottom_quartile_cutoff": round(p25, 4),
-            "bottom_quartile_sample_brands": _brand_records(
-                bottom_quartile.sort_values("momentum_score"), top_n
-            ),
             "all_brands_momentum": all_brands,
         },
         "validation": {
@@ -299,21 +274,8 @@ def run(
             "rows_before_cleaning": rows_original,
             "rows_after_cleaning": rows_after_cleaning,
             "rows_skipped": rows_original - rows_after_cleaning,
-            "columns_used": columns_used,
-            "valid_rows_by_metric": {
-                "sales_trend": int(work["sales_trend"].notna().sum()) if "sales_trend" in work.columns else 0,
-                "asin_sales": int(work["asin_sales"].notna().sum()) if "asin_sales" in work.columns else 0,
-            },
-            "skipped_rows_by_metric": {
-                "invalid_sales_trend": invalid_sales_trend_count,
-            },
             "numeric_columns_cleaned": numeric_cols_cleaned,
             "brands_found": len(brand_agg),
-            "invalid_sales_trend_count": invalid_sales_trend_count,
-            "warnings": (
-                ["Sales trend values below -100% were found and handled."]
-                if invalid_sales_trend_count > 0 else []
-            ),
         },
         "processing_time_seconds": elapsed,
     }
@@ -330,7 +292,8 @@ def _brand_records(df: pd.DataFrame, n: int) -> List[Dict]:
             "brand": str(row["brand"]),
             "momentum_score": _sv(row.get("momentum_score")),
             "trend_strength_score": _sv(row.get("norm_sales_trend")),
-            "sales_volume_score": _sv(row.get("norm_asin_sales")),
+            "consistency_score": _sv(row.get("sales_consistency")),
+            "acceleration_score": _sv(100.0 - row.get("trend_acceleration", 0.0)),
         }
         if "sales_trend" in row.index:
             rec["avg_sales_trend_pct"] = _sv(row.get("sales_trend"))

@@ -175,28 +175,6 @@ def best_keyword_match(
     return best_text, best_score
 
 
-def _stem_token(token: str) -> str:
-    """Simple singular/plural normalization for token matching."""
-    if len(token) > 3 and token.endswith("s") and not token.endswith("ss"):
-        return token[:-1]
-    return token
-
-
-def title_token_density(keyword: str, title: str) -> float:
-    """
-    Fraction of keyword tokens found in a product title (0.0–1.0).
-    Uses token overlap with basic singular/plural normalization.
-    """
-    kw_tokens = [_stem_token(t) for t in tokenize_text(keyword)]
-    if not kw_tokens:
-        return 0.0
-    title_tokens = {_stem_token(t) for t in tokenize_text(title)}
-    if not title_tokens:
-        return 0.0
-    matched = sum(1 for t in kw_tokens if t in title_tokens)
-    return matched / len(kw_tokens)
-
-
 def contains_any_token(text: str, token_set: frozenset) -> bool:
     """
     Return True if any token from token_set appears in the tokenized text.

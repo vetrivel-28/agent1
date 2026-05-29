@@ -45,7 +45,7 @@ export default function PriceElasticity() {
   const strongestBucket = peResults.strongest_price_ranges?.[0];
   const highestDemand = strongestBucket?.bucket || (strongestBucket ? `$${strongestBucket.price_range?.min} - $${strongestBucket.price_range?.max}` : '—');
   
-  const revenueSorted = [...peBuckets].sort((a, b) => (b.total_revenue || 0) - (a.total_revenue || 0));
+  const revenueSorted = [...peBuckets].sort((a, b) => (b.average_revenue || 0) - (a.average_revenue || 0));
   const highestRevenue = revenueSorted[0]?.bucket || '—';
 
   const deadZones = peResults.dead_zones || [];
@@ -54,7 +54,8 @@ export default function PriceElasticity() {
   const peColumns: Column<any>[] = [
     { header: "Price Range", accessorKey: "bucket", cell: (r) => r.bucket || '—' },
     { header: "Total Sales", accessorKey: "total_sales", cell: (r) => r.total_sales != null ? formatNumber(r.total_sales) : '—' },
-    { header: "Total Revenue", accessorKey: "total_revenue", cell: (r) => r.total_revenue != null ? formatCurrency(r.total_revenue) : '—' },
+    { header: "Avg Revenue", accessorKey: "average_revenue", cell: (r) => r.average_revenue != null ? formatCurrency(r.average_revenue) : '—' },
+    { header: "Avg BSR", accessorKey: "average_bsr", cell: (r) => r.average_bsr != null ? formatNumber(r.average_bsr) : '—' },
     { header: "Demand Score", accessorKey: "demand_score", cell: (r) => r.demand_score != null ? Number(r.demand_score).toFixed(1) : '—' },
     { header: "Market Share", accessorKey: "market_share", cell: (r) => r.market_share != null ? `${Number(r.market_share).toFixed(1)}%` : '—' },
   ];
@@ -62,9 +63,8 @@ export default function PriceElasticity() {
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight text-gradient-primary">Price Range Performance</h1>
+        <h1 className="text-3xl font-bold tracking-tight text-gradient-primary">Price Elasticity</h1>
         <p className="text-muted-foreground mt-1">Find strongest-performing price ranges and identify demand dead zones.</p>
-        <p className="text-sm text-muted-foreground">This is a proxy price-band performance analysis, not causal price elasticity.</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
@@ -123,7 +123,7 @@ export default function PriceElasticity() {
                 <XAxis dataKey="bucket" stroke="hsl(var(--muted-foreground))" fontSize={12} />
                 <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} tickFormatter={(val) => `$${formatNumber(val)}`} />
                 <Tooltip formatter={(val: any) => formatCurrency(val)} />
-                <Area type="monotone" dataKey="total_revenue" stroke="hsl(var(--success))" fill="hsl(var(--success))" fillOpacity={0.2} />
+                <Area type="monotone" dataKey="average_revenue" stroke="hsl(var(--success))" fill="hsl(var(--success))" fillOpacity={0.2} />
               </AreaChart>
             </ResponsiveContainer>
           </CardContent>

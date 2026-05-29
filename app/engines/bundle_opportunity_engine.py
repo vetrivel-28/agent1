@@ -28,17 +28,10 @@ import numpy as np
 import pandas as pd
 
 from app.engines import complement_engine
-from app.utils.column_mapper import find_column
-from app.utils.ecosystem_scoring import (
-    price_compatibility_score,
-    product_type_key,
-    shared_keyword_context_score,
-    weighted_score,
-)
+from app.utils.column_mapper import find_column, minmax_normalize
 from app.utils.logger import get_logger
 from app.utils.numeric_cleaner import clean_numeric_series
-from app.utils.text_matching import combined_similarity
-from app.utils.validation_helpers import build_validation
+from app.utils.text_matching import combined_similarity, tokenize_text
 
 logger = get_logger("bundle_opportunity_engine")
 
@@ -55,20 +48,11 @@ _ASIN_CANDIDATES      = ["ASIN", "asin"]
 _BRAND_CANDIDATES     = ["Brand", "brand", "Seller", "seller"]
 _REVENUE_CANDIDATES   = ["ASIN Revenue", "asin revenue", "Revenue", "revenue"]
 _SALES_CANDIDATES     = ["ASIN Sales", "asin sales", "Parent Level Sales"]
-_PRICE_CANDIDATES     = ["Price", "price", "List Price", "list price"]
 
-_BUNDLE_WEIGHTS = {
-    "complement_score": 0.4,
-    "shared_keyword_demand": 0.25,
-    "price_compatibility": 0.2,
-    "category_fit": 0.15,
-}
-
+# Minimum complement_strength to consider a product for bundling
 MIN_COMPLEMENT_STRENGTH = 15.0
-MIN_BUNDLE_SCORE = 15.0
-MAX_BUNDLES_PER_PRIMARY = 2
-MAX_BUNDLES_PER_COMPLEMENT = 2
-MAX_BUNDLES_PER_COMPLEMENT_CATEGORY = 3
+# Minimum bundle score to include in output
+MIN_BUNDLE_SCORE = 10.0
 
 
 # ---------------------------------------------------------------------------
@@ -128,7 +112,6 @@ def run(
     brand_col  = find_column(blackbox_df, _BRAND_CANDIDATES)
     rev_col    = find_column(blackbox_df, _REVENUE_CANDIDATES)
     sales_col  = find_column(blackbox_df, _SALES_CANDIDATES)
-    price_col  = find_column(blackbox_df, _PRICE_CANDIDATES)
 
     if title_col is None:
         return _error("Title column not found in BlackBox dataset.", t0, missing=["Title"])
@@ -159,146 +142,105 @@ def run(
 
     logger.info(f"Primary product pool: {len(primary_bb)} products")
 
-    primary_prices: List[float] = []
-    if price_col:
-        primary_prices = [
-            float(p)
-            for p in clean_numeric_series(primary_bb[price_col], price_col)[0].dropna()
-            if float(p) > 0
-        ]
-
-    columns_used = [c for c in [title_col, subcat_col, cat_col, asin_col, price_col] if c]
+    # -----------------------------------------------------------------------
+    # Step 5: Score bundle pairs
+    # -----------------------------------------------------------------------
     bundle_pairs: List[Dict] = []
-    raw_bundle_pairs_generated = 0
 
+    # Only process top complement products (by strength) for performance
     top_comp_products = sorted(
         [p for p in comp_products if p.get("complement_strength", 0) >= MIN_COMPLEMENT_STRENGTH],
         key=lambda x: x.get("complement_strength", 0),
         reverse=True,
-    )[:min(len(comp_products), 50)]
+    )[:min(len(comp_products), 50)]  # cap at 50 complement products
 
     logger.info(f"Processing {len(top_comp_products)} complement products for bundle scoring")
 
     for comp_prod in top_comp_products:
-        comp_title = comp_prod.get("title", "")
-        comp_asin = comp_prod.get("asin", "")
-        comp_subcat = comp_prod.get("subcategory", "")
-        comp_cat = comp_prod.get("category", "")
-        comp_strength = float(comp_prod.get("complement_strength", 0))
+        comp_title    = comp_prod.get("title", "")
+        comp_asin     = comp_prod.get("asin", "")
+        comp_subcat   = comp_prod.get("subcategory", "")
+        comp_cat      = comp_prod.get("category", "")
+        comp_strength = comp_prod.get("complement_strength", 0)
         comp_keywords_matched = comp_prod.get("all_matched_keywords", [])
+
+        # Total search volume of matched keywords
         comp_sv = sum(kw_vol_map.get(kw, 0) for kw in comp_keywords_matched)
-        comp_price = None
 
+        # Find primary products that share keywords with this complement
         for idx, prow in primary_bb.iterrows():
-            p_title = str(prow[title_col]) if title_col else ""
+            p_title  = str(prow[title_col]) if title_col else ""
             p_subcat = str(prow[subcat_col]) if subcat_col else ""
-            p_cat = str(prow[cat_col]) if cat_col else ""
-            p_asin = str(prow[asin_col]) if asin_col else ""
+            p_cat    = str(prow[cat_col]) if cat_col else ""
 
-            if p_asin == comp_asin:
+            # Keyword overlap between complement keywords and primary title
+            kw_overlap_scores = [
+                combined_similarity(kw, p_title)
+                for kw in comp_keywords_matched
+            ]
+            if not kw_overlap_scores:
                 continue
 
-            kw_demand = shared_keyword_context_score(p_title, comp_keywords_matched)
-            if kw_demand < MIN_BUNDLE_SCORE:
+            demand_overlap = max(kw_overlap_scores)
+            if demand_overlap < MIN_BUNDLE_SCORE:
                 continue
 
-            p_price = None
-            if price_col:
-                p_clean, _ = clean_numeric_series(pd.Series([prow[price_col]]), price_col)
-                p_price = float(p_clean.iloc[0]) if not p_clean.empty and not pd.isna(p_clean.iloc[0]) else None
-
-            price_score = price_compatibility_score(p_price, primary_prices or [p_price or 0])
-            category_fit = 100.0 if p_cat and comp_cat and p_cat == comp_cat else (
-                70.0 if p_subcat and comp_subcat and p_subcat != comp_subcat else 40.0
+            # Category adjacency bonus
+            cat_adjacency = 20.0 if p_cat == comp_cat else (
+                10.0 if p_subcat == comp_subcat else 0.0
             )
-            keyword_demand_norm = min(100.0, kw_demand + min(comp_sv / 1000.0, 25.0))
 
-            bundle_score = weighted_score(
-                {
-                    "complement_score": comp_strength,
-                    "shared_keyword_demand": keyword_demand_norm,
-                    "price_compatibility": price_score,
-                    "category_fit": category_fit,
-                },
-                _BUNDLE_WEIGHTS,
+            # Bundle score = weighted combination
+            bundle_score = round(
+                comp_strength * 0.4
+                + demand_overlap * 0.4
+                + cat_adjacency * 0.2,
+                2,
             )
+
             if bundle_score < MIN_BUNDLE_SCORE:
                 continue
 
-            raw_bundle_pairs_generated += 1
-            reasons = []
-            if comp_strength >= 40:
-                reasons.append("complement score")
-            if kw_demand >= 30:
-                reasons.append("shared keyword demand")
-            if price_score >= 45:
-                reasons.append("price compatibility")
-            if category_fit >= 50:
-                reasons.append("category fit")
-
-            bundle_pairs.append({
+            pair: Dict[str, Any] = {
                 "bundle_score": bundle_score,
+                "complement_strength": round(comp_strength, 2),
+                "demand_overlap": round(demand_overlap, 2),
+                "category_adjacency": cat_adjacency,
                 "primary_product": {
-                    "asin": p_asin,
-                    "title": p_title[:100],
-                    "brand": str(prow[brand_col]) if brand_col else "",
+                    "asin":       str(prow[asin_col]) if asin_col else "",
+                    "title":      p_title[:100],
+                    "brand":      str(prow[brand_col]) if brand_col else "",
                     "subcategory": p_subcat,
-                    "product_type": product_type_key(p_title, p_subcat),
                 },
                 "complement_product": {
-                    "asin": comp_asin,
-                    "title": comp_title[:100],
+                    "asin":       comp_asin,
+                    "title":      comp_title[:100],
                     "subcategory": comp_subcat,
-                    "product_type": product_type_key(comp_title, comp_subcat),
                 },
                 "shared_keywords": comp_keywords_matched[:3],
-                "bundle_reason": " + ".join(reasons) if reasons else "complementary pairing",
+                "combined_search_volume": comp_sv,
                 "insight": _bundle_insight(p_title, comp_title, comp_keywords_matched),
-            })
+            }
+            bundle_pairs.append(pair)
 
-    logger.info(f"Raw bundle pairs generated: {raw_bundle_pairs_generated}")
+    logger.info(f"Raw bundle pairs generated: {len(bundle_pairs)}")
 
     # -----------------------------------------------------------------------
-    # Step 6: Deduplicate with caps
+    # Step 6: Deduplicate and rank
+    # Keep only the best pair per (primary_asin, complement_asin) combination
     # -----------------------------------------------------------------------
-    seen_asin_pairs: set = set()
-    primary_counts: Dict[str, int] = {}
-    complement_counts: Dict[str, int] = {}
-    complement_category_counts: Dict[str, int] = {}
-    seen_type_pairs: set = set()
+    seen_pairs: set = set()
     deduped_pairs: List[Dict] = []
-
     for pair in sorted(bundle_pairs, key=lambda x: x["bundle_score"], reverse=True):
-        p_asin = pair["primary_product"].get("asin", "")
-        c_asin = pair["complement_product"].get("asin", "")
-        asin_key = (p_asin, c_asin)
-        if asin_key in seen_asin_pairs:
-            continue
+        key = (
+            pair["primary_product"].get("asin", ""),
+            pair["complement_product"].get("asin", ""),
+        )
+        if key not in seen_pairs:
+            seen_pairs.add(key)
+            deduped_pairs.append(pair)
 
-        p_type = pair["primary_product"].get("product_type", "")
-        c_type = pair["complement_product"].get("product_type", "")
-        type_key = (p_type, c_type)
-        if type_key in seen_type_pairs:
-            continue
-
-        c_subcat = pair["complement_product"].get("subcategory", "Unknown")
-        if primary_counts.get(p_asin, 0) >= MAX_BUNDLES_PER_PRIMARY:
-            continue
-        if complement_counts.get(c_asin, 0) >= MAX_BUNDLES_PER_COMPLEMENT:
-            continue
-        if complement_category_counts.get(c_subcat, 0) >= MAX_BUNDLES_PER_COMPLEMENT_CATEGORY:
-            continue
-
-        seen_asin_pairs.add(asin_key)
-        seen_type_pairs.add(type_key)
-        primary_counts[p_asin] = primary_counts.get(p_asin, 0) + 1
-        complement_counts[c_asin] = complement_counts.get(c_asin, 0) + 1
-        complement_category_counts[c_subcat] = complement_category_counts.get(c_subcat, 0) + 1
-        deduped_pairs.append(pair)
-
-    duplicates_removed_count = raw_bundle_pairs_generated - len(deduped_pairs)
-    bundle_pairs_after_dedupe = len(deduped_pairs)
-    logger.info(f"Deduplicated bundle pairs: {bundle_pairs_after_dedupe}")
+    logger.info(f"Deduplicated bundle pairs: {len(deduped_pairs)}")
 
     # -----------------------------------------------------------------------
     # Step 7: Normalise bundle scores to 0-100
@@ -381,11 +323,11 @@ def run(
         "metric_name": "Bundle Opportunity",
         "summary": summary,
         "datasets_used": ["keyword_classification", "blackbox"],
-        "columns_used": columns_used,
+        "columns_used": [c for c in [title_col, subcat_col, cat_col, asin_col] if c],
         "formula_used": (
-            "Bundle Score = Complement Score × 0.4 + Shared Keyword Demand × 0.25 "
-            "+ Price Compatibility × 0.2 + Category Fit × 0.15. "
-            "Pairs are deduplicated by ASIN, product type, and per-primary/complement limits."
+            "Bundle Score = (complement_strength × 0.4) + "
+            "(demand_overlap × 0.4) + (category_adjacency × 0.2). "
+            "Ecosystem Strength = min(density × mean_score × 5, 100)."
         ),
         "results": {
             "bundle_opportunities": deduped_pairs[:top_n],
@@ -398,17 +340,16 @@ def run(
             "total_bundle_opportunities": n_bundles,
             "complement_products_used": len(top_comp_products),
         },
-        "validation": build_validation(
-            rows_before_cleaning=rows_bb,
-            rows_after_cleaning=bundle_pairs_after_dedupe,
-            columns_used=columns_used,
-            warnings=[],
-            raw_bundle_pairs_generated=raw_bundle_pairs_generated,
-            bundle_pairs_after_dedupe=bundle_pairs_after_dedupe,
-            duplicates_removed_count=duplicates_removed_count,
-            complement_products_analysed=len(top_comp_products),
-            primary_products_scanned=len(primary_bb),
-        ),
+        "validation": {
+            "status": "passed",
+            "rows_before_cleaning": rows_bb,
+            "rows_after_cleaning": rows_bb,
+            "rows_skipped": 0,
+            "numeric_columns_cleaned": [],
+            "matched_records": n_bundles,
+            "complement_products_analysed": len(top_comp_products),
+            "primary_products_scanned": len(primary_bb),
+        },
         "processing_time_seconds": elapsed,
     }
 
@@ -456,13 +397,14 @@ def _error(message: str, t0: float, missing: Optional[List[str]] = None) -> Dict
             "ecosystem_strength": 0.0,
             "total_bundle_opportunities": 0,
         },
-        "validation": build_validation(
-            rows_before_cleaning=0,
-            rows_after_cleaning=0,
-            columns_used=[],
-            warnings=[message],
-            status="failed",
-            missing_columns=missing or [],
-        ),
+        "validation": {
+            "status": "failed",
+            "message": message,
+            "missing_columns": missing or [],
+            "rows_before_cleaning": 0,
+            "rows_after_cleaning": 0,
+            "rows_skipped": 0,
+            "matched_records": 0,
+        },
         "processing_time_seconds": round(time.time() - t0, 3),
     }

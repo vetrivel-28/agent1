@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '../services/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/Card';
 import { DataTable, type Column } from '../components/tables/DataTable';
+import { ScoreGauge } from '../components/ui/ScoreGauge';
 import { formatCurrency } from '../utils/cn';
 import { AlertCircle, Loader2 } from 'lucide-react';
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts';
@@ -67,30 +68,10 @@ export default function MarketConcentration() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        <Card className="flex flex-col justify-center p-8 border-l-4 border-l-primary">
-          <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-2">Market Structure</h3>
-          <div className="text-3xl font-bold text-foreground capitalize mb-6">
-            {results.market_structure_type || 'Unknown'}
-          </div>
-          
-          <div className="space-y-4">
-            <div>
-              <div className="text-sm text-muted-foreground mb-1">Raw HHI Index</div>
-              <div className="text-2xl font-mono font-medium">
-                {results.raw_hhi_index?.toLocaleString(undefined, {maximumFractionDigits: 2}) ?? results.hhi_score?.toLocaleString(undefined, {maximumFractionDigits: 2}) ?? '—'}
-              </div>
-            </div>
-            
-            <div className="pt-4 border-t">
-              <p className="text-sm text-muted-foreground">
-                {(results.raw_hhi_index ?? results.hhi_score ?? 0) < 1500
-                  ? 'HHI below 1500 indicates a fragmented market where revenue is spread across many brands.'
-                  : (results.raw_hhi_index ?? results.hhi_score ?? 0) < 2500
-                    ? 'HHI between 1500 and 2500 indicates a moderately concentrated market.'
-                    : 'HHI above 2500 indicates a highly concentrated market.'}
-              </p>
-            </div>
-          </div>
+        <Card className="flex flex-col items-center justify-center p-8">
+          <ScoreGauge score={results.hhi_normalized_score || 0} label="HHI Score (0-100)" size={180} />
+          <p className="font-bold text-2xl mt-4">{results.hhi_score?.toLocaleString()}</p>
+          <p className="text-muted-foreground text-sm uppercase tracking-wide">RAW INDEX</p>
         </Card>
 
         <Card className="md:col-span-2">

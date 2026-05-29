@@ -16,10 +16,7 @@ logger = get_logger("demand_velocity_engine")
 _SEARCH_TREND_CANDIDATES = ["Search Volume Trend", "Search Trend"]
 _YOY_TREND_CANDIDATES = ["YoY Search Trend", "Search YoY Trend"]
 _SALES_TREND_CANDIDATES = ["Sales Trend", "Sales Trend (90 days) (%)", "Sales Trend (%)"]
-_REVENUE_TREND_CANDIDATES = [
-    "Revenue Trend", "Revenue Trend (90 days) (%)",
-    "ASIN Revenue Trend", "Revenue Growth (%)",
-]
+_REVENUE_TREND_CANDIDATES = ["Revenue Trend", "Price Trend (90 days) (%)", "Price Trend (%)"]
 _KEYWORD_CANDIDATES = ["Keyword Phrase", "Keyword"]
 _TITLE_CANDIDATES = ["Title", "Product Title"]
 _ASIN_CANDIDATES = ["ASIN"]
@@ -104,32 +101,32 @@ def run(magnet_df: Optional[pd.DataFrame], blackbox_df: Optional[pd.DataFrame], 
 
     # Market-level deterministic velocity score from metric means.
     metric_mean_series = pd.Series(signal_values, dtype=float)
-    velocity_score = float(max(0.0, min(100.0, metric_mean_series.mean())))
-    if velocity_score >= 70:
+    velocity_score = float(metric_mean_series.mean())
+    p33 = float(metric_mean_series.quantile(0.33))
+    p66 = float(metric_mean_series.quantile(0.66))
+    if velocity_score >= p66:
         market_phase = "accelerating market"
-    elif velocity_score >= 40:
+    elif velocity_score >= p33:
         market_phase = "stable market"
     else:
         market_phase = "saturated or slowing market"
 
-    def _signal_bucket(score: float) -> str:
-        if score >= 60:
-            return "Accelerator"
-        if score >= 40:
-            return "Stable Signal"
-        return "Decelerator"
-
-    signal_details = [
-        {
-            "signal": name,
-            "score": round(float(score), 4),
-            "bucket": _signal_bucket(float(score)),
-        }
-        for name, score in signal_values.items()
-    ]
-    accelerators = [s for s in signal_details if s["bucket"] == "Accelerator"]
-    stable_signals = [s for s in signal_details if s["bucket"] == "Stable Signal"]
-    decelerators = [s for s in signal_details if s["bucket"] == "Decelerator"]
+    strongest_growth = (
+        metric_mean_series.sort_values(ascending=False)
+        .head(min(top_n, len(metric_mean_series)))
+        .round(4)
+        .reset_index()
+        .rename(columns={"index": "signal", 0: "score"})
+        .to_dict(orient="records")
+    )
+    weakest_growth = (
+        metric_mean_series.sort_values(ascending=True)
+        .head(min(top_n, len(metric_mean_series)))
+        .round(4)
+        .reset_index()
+        .rename(columns={"index": "signal", 0: "score"})
+        .to_dict(orient="records")
+    )
 
     rows_after_cleaning = int(sum(s.notna().sum() for s in metric_series))
     rows_skipped = max(rows_before_cleaning - rows_after_cleaning, 0)
@@ -141,24 +138,14 @@ def run(magnet_df: Optional[pd.DataFrame], blackbox_df: Optional[pd.DataFrame], 
         "datasets_used": list(dict.fromkeys(datasets_used)),
         "columns_used": list(dict.fromkeys(columns_used)),
         "formula_used": (
-            "Demand Velocity = average of available normalized trend signals: "
-            "Search Trend, Sales Trend, YoY Growth, and Revenue Trend where available. "
-            "Each signal is cleaned, smoothed, log-scaled, and normalized. "
-            "If a metric is missing, it is excluded from the average. "
-            "This is a market-level score, not a row-wise joined score."
+            "Demand Velocity = (Normalized Sales Trend + Normalized Search Trend + "
+            "Normalized YoY Growth + Normalized Revenue Trend) / 4, using min-max normalization."
         ),
         "results": {
             "velocity_score": round(velocity_score, 2),
             "market_phase": market_phase,
-            "mapping_logic": (
-                "Magnet keyword trends and Blackbox product trends are not joined row-wise. "
-                "Each dataset is processed separately, then the normalized metric averages are combined "
-                "to produce one market-level demand velocity score."
-            ),
-            "accelerators": accelerators,
-            "stable_signals": stable_signals,
-            "decelerators": decelerators,
-            "signal_details": signal_details,
+            "strongest_growth_signals": strongest_growth,
+            "weakest_growth_signals": weakest_growth,
             "metrics_used": metric_names,
             "metric_scores": {k: _safe_value(v) for k, v in signal_values.items()},
         },
@@ -166,11 +153,6 @@ def run(magnet_df: Optional[pd.DataFrame], blackbox_df: Optional[pd.DataFrame], 
             "rows_before_cleaning": rows_before_cleaning,
             "rows_after_cleaning": rows_after_cleaning,
             "rows_skipped": rows_skipped,
-            "columns_used": list(dict.fromkeys(columns_used)),
-            "valid_rows_by_metric": {
-                name: int(s.notna().sum()) for name, s in zip(metric_names, metric_series)
-            },
-            "skipped_rows_by_metric": {},
             "numeric_columns_cleaned": list(dict.fromkeys(numeric_columns_cleaned)),
             "warnings": warning_messages,
         },

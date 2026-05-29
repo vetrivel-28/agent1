@@ -22,21 +22,8 @@ from app.utils.column_mapper import find_column
 from app.utils.logger import get_logger
 from app.utils.normalization import min_max_normalize
 from app.utils.numeric_cleaner import clean_numeric_series
-from app.utils.text_matching import keyword_overlap_score
 
 logger = get_logger("direct_competitor_engine")
-
-# Configurable weights for competitor similarity scoring
-_COMPETITOR_SIMILARITY_WEIGHTS = {
-    "title_similarity": 0.45,
-    "subcategory_match": 0.25,
-    "price_similarity": 0.20,
-    "brand_proxy": 0.10,
-}
-
-# Configurable thresholds for competitor classification
-_SUBCATEGORY_TITLE_SIMILARITY_THRESHOLD = 30.0
-_SUBCATEGORY_LOW_TITLE_SIMILARITY_CAP = 60.0
 
 # ---------------------------------------------------------------------------
 # Column candidate lists
@@ -92,34 +79,40 @@ def _is_price_similar(
 
 
 def _calculate_similarity_score(
-    title_similarity: float,
+    category_match: bool,
     subcategory_match: bool,
     price_similarity: bool,
     price_diff_pct: float = 0.0,
 ) -> float:
     """
-    Competitor Similarity =
-    Title Token Similarity × 0.45 + Subcategory Match × 0.25 +
-    Price Similarity × 0.20 + Brand/Material proxy × 0.10 (from title overlap remainder).
-    Category match alone cannot exceed 60 without title similarity.
+    Calculate 0-100 similarity score.
+    
+    Args:
+        category_match: True if categories match
+        subcategory_match: True if subcategories match
+        price_similarity: True if prices similar
+        price_diff_pct: Price difference percentage (for fine-tuning)
+    
+    Returns:
+        Similarity score 0-100
     """
-    sub_score = 100.0 if subcategory_match else 0.0
+    score = 0.0
+    
+    # Category match: 40 points
+    if category_match:
+        score += 40.0
+    
+    # Subcategory match: 35 points
+    if subcategory_match:
+        score += 35.0
+    
+    # Price similarity: 25 points
     if price_similarity:
-        price_penalty = min(20.0, abs(price_diff_pct) / 3.0)
-        price_score = max(0.0, 100.0 - price_penalty)
-    else:
-        price_score = max(0.0, 100.0 - min(100.0, abs(price_diff_pct)))
-
-    brand_proxy = min(100.0, title_similarity * 0.5) if title_similarity > 0 else 0.0
-    score = (
-        title_similarity * _COMPETITOR_SIMILARITY_WEIGHTS["title_similarity"]
-        + sub_score * _COMPETITOR_SIMILARITY_WEIGHTS["subcategory_match"]
-        + price_score * _COMPETITOR_SIMILARITY_WEIGHTS["price_similarity"]
-        + brand_proxy * _COMPETITOR_SIMILARITY_WEIGHTS["brand_proxy"]
-    )
-    if subcategory_match and title_similarity < _SUBCATEGORY_TITLE_SIMILARITY_THRESHOLD:
-        score = min(score, _SUBCATEGORY_LOW_TITLE_SIMILARITY_CAP)
-    return round(min(100.0, max(0.0, score)), 2)
+        # Reduce slightly by price difference percentage (max -10 points)
+        price_penalty = min(10.0, abs(price_diff_pct) / 5.0)
+        score += max(15.0, 25.0 - price_penalty)
+    
+    return min(100.0, score)
 
 
 # ---------------------------------------------------------------------------
@@ -363,12 +356,10 @@ def run(
             if not price_sim:
                 continue  # Price too different
 
-            ref_title = str(ref_product[title_col]) if title_col else ""
-            comp_title = str(comp_product[title_col]) if title_col else ""
-            title_sim = keyword_overlap_score(ref_title, comp_title)
-            price_diff_pct = abs((comp_price - ref_price) / ref_price * 100.0) if ref_price else 100.0
+            # Calculate similarity score
+            price_diff_pct = abs((comp_price - ref_price) / ref_price * 100.0)
             sim_score = _calculate_similarity_score(
-                title_sim, subcat_match, price_sim, price_diff_pct
+                cat_match, subcat_match, price_sim, price_diff_pct
             )
 
             competitors_list.append((sim_score, comp_product))
@@ -446,8 +437,8 @@ def run(
         "datasets_used": ["blackbox"],
         "columns_used": [asin_col, category_col, subcategory_col, price_col, title_col, brand_col],
         "formula_used": (
-            "Competitor similarity combines title similarity, subcategory match, and price proximity. "
-            "Category match alone is not enough for high similarity. "
+            "Similarity Score = "
+            "40×(category_match) + 35×(subcategory_match) + 25×(price_similarity). "
             f"Price tolerance: ±{price_tolerance_pct}%."
         ),
         "results": {

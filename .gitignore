@@ -17,22 +17,3 @@ __pycache__/
 .DS_Store
 Thumbs.db
 datasets/
-
-# Node / frontend
-node_modules/
-market_intelligence_dashboard/node_modules/
-market_intelligence_dashboard/dist/
-market_intelligence_dashboard/.vite/
-market_intelligence_dashboard/.npm/
-
-# Build / test artifacts
-.coverage
-htmlcov/
-*.log
-.pytest_cache/
-coverage.xml
-
-# IDEs
-.idea/
-*.swp
-*.swo
