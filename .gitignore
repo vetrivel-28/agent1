@@ -1,22 +1,19 @@
+# Virtual environments
+env/
+venv/
+.venv/
+
 # Python
 __pycache__/
 *.pyc
-.venv/
-env/
 
-# Node
-node_modules/
-dist/
-
-# IDE
-.vscode/
-.idea/
-
-# Dataset files
-*.csv
-
-# Environment
+# Environment variables
 .env
 
-# Logs
-*.log
+# VS Code
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+datasets/
