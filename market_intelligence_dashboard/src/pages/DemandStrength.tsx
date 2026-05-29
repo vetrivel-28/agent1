@@ -50,6 +50,8 @@ export default function DemandStrength() {
     { header: "Sales", accessorKey: "ASIN Sales", cell: (r) => r["ASIN Sales"] != null ? formatNumber(r["ASIN Sales"]) : '—' },
   ];
 
+
+
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
       <div>
@@ -87,6 +89,7 @@ export default function DemandStrength() {
           <DataTable columns={productColumns} data={products} pageSize={10} />
         </CardContent>
       </Card>
+
     </motion.div>
   );
 }

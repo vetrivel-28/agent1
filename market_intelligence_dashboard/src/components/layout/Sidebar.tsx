@@ -11,7 +11,13 @@ import {
   Search, 
   MousePointerClick, 
   PieChart, 
-  FileText
+  FileText,
+  Target,
+  Users,
+  TrendingDown,
+  ShieldAlert,
+  LinkIcon,
+  PackagePlus
 } from 'lucide-react';
 
 const navigation = [
@@ -25,6 +31,12 @@ const navigation = [
   { name: 'Search Intelligence', href: '/search-momentum', icon: Search },
   { name: 'Intent Efficiency', href: '/search-intent-efficiency', icon: MousePointerClick },
   { name: 'Market Structure', href: '/market-concentration', icon: PieChart },
+  { name: 'Whitespace Opportunities', href: '/whitespace-opportunities', icon: Target },
+  { name: 'Direct Competitors', href: '/direct-competitors', icon: Users },
+  { name: 'Price Elasticity', href: '/price-elasticity', icon: TrendingDown },
+  { name: 'Substitute Intelligence', href: '/substitute-intelligence', icon: ShieldAlert },
+  { name: 'Complement Intelligence', href: '/complement-intelligence', icon: LinkIcon },
+  { name: 'Bundle Opportunities', href: '/bundle-opportunities', icon: PackagePlus },
   { name: 'Market Report', href: '/market-report', icon: FileText },
 ];
 

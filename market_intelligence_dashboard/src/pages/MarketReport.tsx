@@ -4,6 +4,7 @@ import { Card, CardContent } from '../components/ui/Card';
 import { AlertCircle, Loader2, FileText, Zap, ShieldAlert, Target, CheckCircle2 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
+
 export default function MarketReport() {
   const { data, isLoading, isError } = useQuery({
     queryKey: ['market-report'],

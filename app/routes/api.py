@@ -627,21 +627,46 @@ def market_report(top_n: int = 10):
 
     blackbox_df = registry.get_blackbox()
     magnet_df = registry.get_magnet()
+    kc_df = registry.get_keyword_classification()
 
     if is_empty_dataframe(blackbox_df):
         return _datasets_not_loaded("Market Report", "blackbox")
 
-    # Run all engines
-    demand_result  = demand_engine.run(magnet_df, blackbox_df, top_n=top_n)
-    sales_result   = sales_momentum_engine.run(blackbox_df, top_n=top_n)
+    # Run all engines safely
+    demand_result = demand_engine.run(magnet_df, blackbox_df, top_n=top_n)
+    sales_result = sales_momentum_engine.run(blackbox_df, top_n=top_n)
     revenue_result = revenue_momentum_engine.run(blackbox_df, top_n=top_n)
-    bsr_result     = bsr_efficiency_engine.run(blackbox_df, top_n=top_n)
+    bsr_result = bsr_efficiency_engine.run(blackbox_df, top_n=top_n)
+
+    siei_result = siei_engine.run(magnet_df, top_n=top_n) if not is_empty_dataframe(magnet_df) else None
+    whitespace_result = whitespace_engine.run(magnet_df, None, top_n=top_n) if not is_empty_dataframe(magnet_df) else None
+    
+    direct_comp_result = direct_competitor_engine.run(None, blackbox_df, top_n=top_n) if not is_empty_dataframe(blackbox_df) else None
+    price_elasticity_result = price_elasticity_engine.run(None, blackbox_df) if not is_empty_dataframe(blackbox_df) else None
+    hhi_result = hhi_engine.run(blackbox_df, top_n=top_n) if not is_empty_dataframe(blackbox_df) else None
+    
+    search_mom_result = search_momentum_engine.run(magnet_df, blackbox_df, top_n=top_n) if not (is_empty_dataframe(magnet_df) or is_empty_dataframe(blackbox_df)) else None
+    demand_vel_result = demand_velocity_engine.run(magnet_df, blackbox_df, top_n=top_n) if not (is_empty_dataframe(magnet_df) and is_empty_dataframe(blackbox_df)) else None
+
+    substitute_result = substitute_engine.run(kc_df, blackbox_df, top_n=top_n) if not (is_empty_dataframe(kc_df) or is_empty_dataframe(blackbox_df)) else None
+    complement_result = complement_engine.run(kc_df, blackbox_df, top_n=top_n) if not (is_empty_dataframe(kc_df) or is_empty_dataframe(blackbox_df)) else None
+    bundle_result = bundle_opportunity_engine.run(kc_df, blackbox_df, top_n=top_n) if not (is_empty_dataframe(kc_df) or is_empty_dataframe(blackbox_df)) else None
 
     report = build_report(
         demand_result=demand_result,
         sales_result=sales_result,
         revenue_result=revenue_result,
         bsr_result=bsr_result,
+        siei_result=siei_result,
+        whitespace_result=whitespace_result,
+        direct_comp_result=direct_comp_result,
+        price_elasticity_result=price_elasticity_result,
+        hhi_result=hhi_result,
+        search_mom_result=search_mom_result,
+        demand_vel_result=demand_vel_result,
+        substitute_result=substitute_result,
+        complement_result=complement_result,
+        bundle_result=bundle_result,
         top_n=top_n,
     )
 
@@ -658,6 +683,7 @@ def market_report_pdf(top_n: int = 10):
     logger.info(f"Market Report PDF requested (top_n={top_n})")
     blackbox_df = registry.get_blackbox()
     magnet_df = registry.get_magnet()
+    kc_df = registry.get_keyword_classification()
     if is_empty_dataframe(blackbox_df):
         return _datasets_not_loaded("Market Report PDF", "blackbox")
 
@@ -665,11 +691,36 @@ def market_report_pdf(top_n: int = 10):
     sales_result = sales_momentum_engine.run(blackbox_df, top_n=top_n)
     revenue_result = revenue_momentum_engine.run(blackbox_df, top_n=top_n)
     bsr_result = bsr_efficiency_engine.run(blackbox_df, top_n=top_n)
+    
+    siei_result = siei_engine.run(magnet_df, top_n=top_n) if not is_empty_dataframe(magnet_df) else None
+    whitespace_result = whitespace_engine.run(magnet_df, None, top_n=top_n) if not is_empty_dataframe(magnet_df) else None
+    
+    direct_comp_result = direct_competitor_engine.run(None, blackbox_df, top_n=top_n) if not is_empty_dataframe(blackbox_df) else None
+    price_elasticity_result = price_elasticity_engine.run(None, blackbox_df) if not is_empty_dataframe(blackbox_df) else None
+    hhi_result = hhi_engine.run(blackbox_df, top_n=top_n) if not is_empty_dataframe(blackbox_df) else None
+    
+    search_mom_result = search_momentum_engine.run(magnet_df, blackbox_df, top_n=top_n) if not (is_empty_dataframe(magnet_df) or is_empty_dataframe(blackbox_df)) else None
+    demand_vel_result = demand_velocity_engine.run(magnet_df, blackbox_df, top_n=top_n) if not (is_empty_dataframe(magnet_df) and is_empty_dataframe(blackbox_df)) else None
+
+    substitute_result = substitute_engine.run(kc_df, blackbox_df, top_n=top_n) if not (is_empty_dataframe(kc_df) or is_empty_dataframe(blackbox_df)) else None
+    complement_result = complement_engine.run(kc_df, blackbox_df, top_n=top_n) if not (is_empty_dataframe(kc_df) or is_empty_dataframe(blackbox_df)) else None
+    bundle_result = bundle_opportunity_engine.run(kc_df, blackbox_df, top_n=top_n) if not (is_empty_dataframe(kc_df) or is_empty_dataframe(blackbox_df)) else None
+
     report = build_report(
         demand_result=demand_result,
         sales_result=sales_result,
         revenue_result=revenue_result,
         bsr_result=bsr_result,
+        siei_result=siei_result,
+        whitespace_result=whitespace_result,
+        direct_comp_result=direct_comp_result,
+        price_elasticity_result=price_elasticity_result,
+        hhi_result=hhi_result,
+        search_mom_result=search_mom_result,
+        demand_vel_result=demand_vel_result,
+        substitute_result=substitute_result,
+        complement_result=complement_result,
+        bundle_result=bundle_result,
         top_n=top_n,
     )
     pdf_path = export_market_report_pdf(report)

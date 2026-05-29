@@ -72,6 +72,36 @@ export const api = {
     return response.data;
   },
 
+  getWhitespaceOpportunities: async (topN = 15) => {
+    const response = await apiClient.post(`/whitespace-opportunities?top_n=${topN}`);
+    return response.data;
+  },
+
+  getDirectCompetitors: async (topN = 15, priceTolerancePct = 17.5) => {
+    const response = await apiClient.post(`/direct-competitors?top_n=${topN}&price_tolerance_pct=${priceTolerancePct}`);
+    return response.data;
+  },
+
+  getPriceElasticity: async (nBuckets = 5) => {
+    const response = await apiClient.post(`/price-elasticity?n_buckets=${nBuckets}`);
+    return response.data;
+  },
+
+  getSubstituteIntelligence: async (topN = 10) => {
+    const response = await apiClient.post(`/substitute-intelligence?top_n=${topN}`);
+    return response.data;
+  },
+
+  getComplementIntelligence: async (topN = 10) => {
+    const response = await apiClient.post(`/complement-intelligence?top_n=${topN}`);
+    return response.data;
+  },
+
+  getBundleOpportunities: async (topN = 10) => {
+    const response = await apiClient.post(`/bundle-opportunities?top_n=${topN}`);
+    return response.data;
+  },
+
   downloadMarketReportPdf: async (topN = 10) => {
     const response = await apiClient.get(`/market-report/pdf?top_n=${topN}`, {
       responseType: 'blob',

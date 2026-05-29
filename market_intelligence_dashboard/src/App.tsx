@@ -14,6 +14,12 @@ import SearchMomentum from './pages/SearchMomentum';
 import IntentEfficiency from './pages/IntentEfficiency';
 import MarketConcentration from './pages/MarketConcentration';
 import MarketReport from './pages/MarketReport';
+import WhitespaceOpportunities from './pages/WhitespaceOpportunities';
+import DirectCompetitors from './pages/DirectCompetitors';
+import PriceElasticity from './pages/PriceElasticity';
+import SubstituteIntelligence from './pages/SubstituteIntelligence';
+import ComplementIntelligence from './pages/ComplementIntelligence';
+import BundleOpportunities from './pages/BundleOpportunities';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -42,6 +48,12 @@ function App() {
             <Route path="search-intent-efficiency" element={<IntentEfficiency />} />
             <Route path="market-concentration" element={<MarketConcentration />} />
             <Route path="market-report" element={<MarketReport />} />
+            <Route path="whitespace-opportunities" element={<WhitespaceOpportunities />} />
+            <Route path="direct-competitors" element={<DirectCompetitors />} />
+            <Route path="price-elasticity" element={<PriceElasticity />} />
+            <Route path="substitute-intelligence" element={<SubstituteIntelligence />} />
+            <Route path="complement-intelligence" element={<ComplementIntelligence />} />
+            <Route path="bundle-opportunities" element={<BundleOpportunities />} />
           </Route>
         </Routes>
       </BrowserRouter>
