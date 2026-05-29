@@ -69,7 +69,7 @@ export default function MarketConcentration() {
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <Card className="flex flex-col items-center justify-center p-8">
-          <ScoreGauge score={Math.min(100, 100 - (results.hhi_score / 100))} label="HHI Score" size={180} />
+          <ScoreGauge score={results.hhi_normalized_score || 0} label="HHI Score (0-100)" size={180} />
           <p className="font-bold text-2xl mt-4">{results.hhi_score?.toLocaleString()}</p>
           <p className="text-muted-foreground text-sm uppercase tracking-wide">RAW INDEX</p>
         </Card>

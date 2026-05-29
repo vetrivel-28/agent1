@@ -69,8 +69,8 @@ def build_report(
     # Composite market health score (mean of available engine scores)
     # -----------------------------------------------------------------------
     available_scores = [
-        s for s in [demand_score, sales_score, revenue_score, bsr_score]
-        if s and s > 0
+        float(s) for s in [demand_score, sales_score, revenue_score, bsr_score]
+        if s is not None and not isinstance(s, str)
     ]
     composite_score = round(
         sum(available_scores) / len(available_scores), 2
@@ -135,6 +135,44 @@ def build_report(
 
     sales_direction   = _get(sales_result,   "results", "market_momentum_direction") or ""
     revenue_direction = _get(revenue_result, "results", "market_revenue_direction")  or ""
+    demand_phase = _get(demand_result, "results", "interpretation") or _get(demand_result, "summary") or ""
+
+    direction_score = (sales_score * 0.4) + (revenue_score * 0.4) + (demand_score * 0.2)
+    if direction_score >= 60:
+        market_direction = "growing"
+    elif direction_score >= 40:
+        market_direction = "stable"
+    else:
+        market_direction = "declining"
+
+    validation_blocks = [
+        demand_result.get("validation", {}),
+        sales_result.get("validation", {}),
+        revenue_result.get("validation", {}),
+        bsr_result.get("validation", {}),
+    ]
+    rows_before = sum(int(v.get("rows_before_cleaning", 0) or 0) for v in validation_blocks)
+    rows_after = sum(int(v.get("rows_after_cleaning", 0) or 0) for v in validation_blocks)
+    metric_availability = (
+        len([s for s in [demand_score, sales_score, revenue_score, bsr_score] if s is not None]) / 4.0
+    )
+    nan_percentage = (1.0 - (rows_after / rows_before)) if rows_before > 0 else 1.0
+    signal_consistency = 1.0 - (abs(sales_score - revenue_score) / 100.0)
+    reliability_score = round(
+        max(
+            0.0,
+            min(
+                100.0,
+                (
+                    (1.0 - nan_percentage) * 0.4
+                    + signal_consistency * 0.3
+                    + metric_availability * 0.3
+                )
+                * 100.0,
+            ),
+        ),
+        2,
+    )
 
     if sales_direction == "Decelerating":
         risks.append(
@@ -180,8 +218,11 @@ def build_report(
         },
         "market_health": {
             "overall_score": composite_score,
+            "data_reliability_score": reliability_score,
+            "market_direction": market_direction,
             "sales_direction": sales_direction,
             "revenue_direction": revenue_direction,
+            "demand_direction_signal": demand_phase,
             "market_health_band": (
                 "high" if composite_score >= 70 else "medium" if composite_score >= 45 else "low"
             ),
@@ -232,7 +273,7 @@ def build_report(
         },
         "final_market_verdict": {
             "verdict": verdict,
-            "confidence_basis": "Deterministic score rules from engine outputs",
+            "verdict_basis": "Deterministic score rules from engine outputs",
         },
     }
 
@@ -291,6 +332,8 @@ def build_report(
                 "total_market_revenue":    round(total_market_revenue, 2),
                 "sales_direction":         sales_direction,
                 "revenue_direction":       revenue_direction,
+                "market_direction":        market_direction,
+                "data_reliability_score":  reliability_score,
             },
             "rankings": {
                 "top_demand_keywords":      top_demand_keywords[:top_n],

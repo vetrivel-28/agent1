@@ -12,9 +12,10 @@ interface KPICardProps {
   icon: React.ReactNode;
   status?: 'success' | 'warning' | 'danger' | 'neutral';
   loading?: boolean;
+  trendIsPercent?: boolean;
 }
 
-export function KPICard({ title, value, trend, trendLabel, icon, status = 'neutral', loading }: KPICardProps) {
+export function KPICard({ title, value, trend, trendLabel, icon, status = 'neutral', loading, trendIsPercent = true }: KPICardProps) {
   const statusColors = {
     success: 'text-success bg-success/10 border-success/20',
     warning: 'text-warning bg-warning/10 border-warning/20',
@@ -53,7 +54,7 @@ export function KPICard({ title, value, trend, trendLabel, icon, status = 'neutr
               >
                 <div className={cn("flex items-center text-xs font-medium", trendColor)}>
                   <TrendIcon className="w-3 h-3 mr-1" />
-                  {Math.abs(trend).toFixed(1)}%
+                  {Math.abs(trend).toFixed(1)}{trendIsPercent ? '%' : ''}
                 </div>
                 {trendLabel && <span className="text-xs text-muted-foreground">{trendLabel}</span>}
               </motion.div>

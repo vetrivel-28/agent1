@@ -40,7 +40,10 @@ export function DataTable<T>({ columns, data, pageSize = 10, searchable = true }
         if (aValue > bValue) {
           return sortConfig.direction === 'asc' ? 1 : -1;
         }
-        return 0;
+        // Stable deterministic tie-breaker using serialized row snapshot.
+        const aTie = JSON.stringify(a);
+        const bTie = JSON.stringify(b);
+        return aTie.localeCompare(bTie);
       });
     }
     return sortableItems;

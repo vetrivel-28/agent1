@@ -1,6 +1,8 @@
 from app.models.response_models import (
     BSREfficiencyResult,
     BSREfficiencyResponse,
+    BundleOpportunityResult,
+    ComplementIntelligenceResult,
     DatasetsLoaded,
     DemandStrengthResult,
     DemandStrengthResponse,
@@ -17,6 +19,7 @@ from app.models.response_models import (
     SalesMomentumResult,
     SalesMomentumResponse,
     SearchMomentumPhase2Result,
+    SubstituteIntelligenceResult,
     UploadResponse,
     ValidationResponse,
 )
@@ -24,6 +27,8 @@ from app.models.response_models import (
 __all__ = [
     "BSREfficiencyResult",
     "BSREfficiencyResponse",
+    "BundleOpportunityResult",
+    "ComplementIntelligenceResult",
     "DatasetsLoaded",
     "DemandStrengthResult",
     "DemandStrengthResponse",
@@ -40,6 +45,7 @@ __all__ = [
     "SalesMomentumResult",
     "SalesMomentumResponse",
     "SearchMomentumPhase2Result",
+    "SubstituteIntelligenceResult",
     "UploadResponse",
     "ValidationResponse",
 ]

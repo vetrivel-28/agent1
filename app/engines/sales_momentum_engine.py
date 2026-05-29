@@ -19,8 +19,9 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from app.utils.column_mapper import find_column, minmax_normalize
+from app.utils.column_mapper import find_column
 from app.utils.logger import get_logger
+from app.utils.normalization import min_max_normalize, rolling_trend_smoothing, safe_log_normalize
 from app.utils.numeric_cleaner import clean_numeric_series
 
 logger = get_logger("sales_momentum_engine")
@@ -180,14 +181,31 @@ def run(
     norm_cols: List[str] = []
 
     if "sales_trend" in brand_agg.columns:
-        brand_agg["norm_sales_trend"] = minmax_normalize(brand_agg["sales_trend"])
+        brand_agg["smooth_sales_trend"] = rolling_trend_smoothing(brand_agg["sales_trend"], window=5)
+        brand_agg["norm_sales_trend"] = safe_log_normalize(brand_agg["smooth_sales_trend"])
         norm_cols.append("norm_sales_trend")
 
     if "asin_sales" in brand_agg.columns:
-        brand_agg["norm_asin_sales"] = minmax_normalize(brand_agg["asin_sales"])
+        brand_agg["norm_asin_sales"] = safe_log_normalize(brand_agg["asin_sales"])
         norm_cols.append("norm_asin_sales")
 
-    brand_agg["momentum_score"] = brand_agg[norm_cols].mean(axis=1, skipna=True)
+    # Volatility-adjusted trend strength based on smoothed trend variability.
+    if "smooth_sales_trend" in brand_agg.columns:
+        trend_std = float(brand_agg["smooth_sales_trend"].std(skipna=True)) or 1.0
+        brand_agg["sales_consistency"] = (1.0 - (brand_agg["smooth_sales_trend"].abs() / (trend_std * 3.0))).clip(0.0, 1.0) * 100.0
+        brand_agg["trend_acceleration"] = min_max_normalize(
+            brand_agg["smooth_sales_trend"].diff().fillna(0.0).abs()
+        )
+    else:
+        brand_agg["sales_consistency"] = 50.0
+        brand_agg["trend_acceleration"] = 50.0
+
+    brand_agg["momentum_score"] = (
+        brand_agg.get("norm_sales_trend", 50.0) * 0.4
+        + brand_agg.get("norm_asin_sales", 50.0) * 0.3
+        + brand_agg["sales_consistency"] * 0.2
+        + (100.0 - brand_agg["trend_acceleration"]) * 0.1
+    ).clip(0.0, 100.0)
 
     # -----------------------------------------------------------------------
     # Percentile-based classification
@@ -273,6 +291,9 @@ def _brand_records(df: pd.DataFrame, n: int) -> List[Dict]:
         rec: Dict[str, Any] = {
             "brand": str(row["brand"]),
             "momentum_score": _sv(row.get("momentum_score")),
+            "trend_strength_score": _sv(row.get("norm_sales_trend")),
+            "consistency_score": _sv(row.get("sales_consistency")),
+            "acceleration_score": _sv(100.0 - row.get("trend_acceleration", 0.0)),
         }
         if "sales_trend" in row.index:
             rec["avg_sales_trend_pct"] = _sv(row.get("sales_trend"))

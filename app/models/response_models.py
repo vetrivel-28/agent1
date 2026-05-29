@@ -98,6 +98,63 @@ class HHIResult(EngineResponse):
     metric_name: str = "Market Concentration Index (HHI)"
 
 
+class WhitespaceOpportunityResult(EngineResponse):
+    metric_name: str = "Whitespace Opportunity"
+
+
+class DirectCompetitorsResult(EngineResponse):
+    metric_name: str = "Direct Competitors"
+
+
+class PriceElasticityResult(EngineResponse):
+    metric_name: str = "Price Elasticity"
+
+
+class SubstituteIntelligenceResult(EngineResponse):
+    """
+    Substitute Intelligence analysis result.
+
+    Key fields in `results`:
+    - substitute_keywords (list)
+    - substitute_products (list)
+    - substitute_clusters (list)
+    - market_overlap_score (float 0-100)
+    - total_substitute_keywords (int)
+    - total_substitute_products (int)
+    """
+    metric_name: str = "Substitute Intelligence"
+
+
+class ComplementIntelligenceResult(EngineResponse):
+    """
+    Complement Intelligence analysis result.
+
+    Key fields in `results`:
+    - complement_keywords (list)
+    - complement_products (list)
+    - ecosystem_clusters (list)
+    - cross_sell_opportunities (list)
+    - ecosystem_strength (float 0-100)
+    - total_complement_keywords (int)
+    - total_complement_products (int)
+    """
+    metric_name: str = "Complement Intelligence"
+
+
+class BundleOpportunityResult(EngineResponse):
+    """
+    Bundle Opportunity analysis result.
+
+    Key fields in `results`:
+    - bundle_opportunities (list)
+    - high_potential_bundles (list)
+    - bundle_clusters (list)
+    - ecosystem_strength (float 0-100)
+    - total_bundle_opportunities (int)
+    """
+    metric_name: str = "Bundle Opportunity"
+
+
 class DatasetsLoaded(BaseModel):
     blackbox: bool = False
     magnet: bool = False

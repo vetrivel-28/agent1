@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '../services/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/Card';
 import { DataTable, type Column } from '../components/tables/DataTable';
-import { formatNumber } from '../utils/cn';
+import { adaptiveDomain, formatNumber, growthLabelFromScore } from '../utils/cn';
 import { AlertCircle, Loader2 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { motion } from 'framer-motion';
@@ -39,26 +39,15 @@ export default function SalesMomentum() {
 
   // Prepare chart data (top 5 growing vs declining)
   const chartData = [
-    ...growing.slice(0, 5).map((b: any) => ({ name: b.brand, trend: b.avg_sales_trend_pct || 0, type: 'grow' })),
-    ...declining.slice(0, 5).map((b: any) => ({ name: b.brand, trend: b.avg_sales_trend_pct || 0, type: 'decline' })),
+    ...growing.slice(0, 5).map((b: any) => ({ name: b.brand, trend_strength: b.momentum_score || 0, type: 'grow' })),
+    ...declining.slice(0, 5).map((b: any) => ({ name: b.brand, trend_strength: b.momentum_score || 0, type: 'decline' })),
   ];
+  const yDomain = adaptiveDomain(chartData.map((d) => d.trend_strength), 0.02, 0.98);
 
   const columns: Column<any>[] = [
     { header: "Brand", accessorKey: "brand", cell: (r) => <div className="font-semibold">{r.brand}</div> },
     { header: "Total Sales", accessorKey: "total_asin_sales", cell: (r) => r.total_asin_sales != null ? formatNumber(r.total_asin_sales) : '—' },
-    { 
-      header: "Sales Trend", 
-      accessorKey: "avg_sales_trend_pct", 
-      cell: (r) => {
-        const val = r.avg_sales_trend_pct;
-        if (val == null) return '—';
-        return (
-          <span className={val > 0 ? "text-success font-medium" : "text-danger font-medium"}>
-            {val > 0 ? '+' : ''}{typeof val === 'number' ? val.toFixed(1) : val}%
-          </span>
-        );
-      }
-    },
+    { header: "Trend Category", accessorKey: "momentum_score", cell: (r) => growthLabelFromScore(r.momentum_score ?? 0) },
     { header: "Momentum Score", accessorKey: "momentum_score", cell: (r) => r.momentum_score != null ? r.momentum_score.toFixed(1) : '—' },
   ];
 
@@ -93,13 +82,14 @@ export default function SalesMomentum() {
                     axisLine={false} 
                     tickLine={false} 
                     tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }} 
-                    tickFormatter={(val) => `${val}%`}
+                    domain={yDomain}
+                    tickFormatter={(val) => `${Number(val).toFixed(0)}`}
                   />
                   <Tooltip 
                     cursor={{ fill: 'hsl(var(--muted))', opacity: 0.2 }}
                     contentStyle={{ backgroundColor: 'hsl(var(--card))', borderColor: 'hsl(var(--border))', borderRadius: '8px' }}
                   />
-                  <Bar dataKey="trend" radius={[4, 4, 4, 4]}>
+                  <Bar dataKey="trend_strength" radius={[4, 4, 4, 4]}>
                     {chartData.map((entry, index) => (
                       <Cell key={`cell-${index}`} fill={entry.type === 'grow' ? '#10b981' : '#ef4444'} />
                     ))}

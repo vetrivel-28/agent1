@@ -8,26 +8,17 @@ import pandas as pd
 
 from app.utils.column_mapper import find_column
 from app.utils.logger import get_logger
+from app.utils.normalization import rolling_trend_smoothing, safe_log_normalize
 from app.utils.numeric_cleaner import clean_numeric_series
 
 logger = get_logger("search_momentum_engine")
 
 _SEARCH_TREND_CANDIDATES = ["Search Volume Trend", "Search Trend"]
 _SALES_TREND_CANDIDATES = ["Sales Trend", "Sales Trend (90 days) (%)", "Sales Trend (%)"]
+_SALES_VOLUME_CANDIDATES = ["ASIN Sales", "Parent Level Sales", "Keyword Sales"]
 _KEYWORD_CANDIDATES = ["Keyword Phrase", "Keyword"]
 _TITLE_CANDIDATES = ["Title", "Product Title"]
 _ASIN_CANDIDATES = ["ASIN"]
-
-
-def _minmax_or_nan(series: pd.Series) -> pd.Series:
-    valid = series.dropna()
-    if valid.empty:
-        return pd.Series(np.nan, index=series.index, dtype=float)
-    min_val = float(valid.min())
-    max_val = float(valid.max())
-    if max_val == min_val:
-        return pd.Series(np.nan, index=series.index, dtype=float)
-    return (series - min_val) / (max_val - min_val) * 100.0
 
 
 def run(magnet_df: Optional[pd.DataFrame], blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
@@ -58,14 +49,15 @@ def run(magnet_df: Optional[pd.DataFrame], blackbox_df: Optional[pd.DataFrame], 
 
     search_col = find_column(magnet_df, _SEARCH_TREND_CANDIDATES)
     sales_col = find_column(blackbox_df, _SALES_TREND_CANDIDATES)
-    if search_col is None or sales_col is None:
+    sales_volume_col = find_column(blackbox_df, _SALES_VOLUME_CANDIDATES)
+    if search_col is None or sales_col is None or sales_volume_col is None:
         return {
             "status": "warning",
             "message": "No valid numeric rows after cleaning",
             "metric_name": "Search Momentum",
             "summary": "Required trend columns not found.",
             "datasets_used": ["magnet", "blackbox"],
-            "columns_used": [c for c in [search_col, sales_col] if c],
+            "columns_used": [c for c in [search_col, sales_col, sales_volume_col] if c],
             "formula_used": "",
             "results": {},
             "validation": {
@@ -82,35 +74,59 @@ def run(magnet_df: Optional[pd.DataFrame], blackbox_df: Optional[pd.DataFrame], 
 
     magnet_work["search_trend"], _ = clean_numeric_series(magnet_df[search_col], search_col)
     blackbox_work["sales_trend"], _ = clean_numeric_series(blackbox_df[sales_col], sales_col)
+    blackbox_work["sales_volume"], _ = clean_numeric_series(blackbox_df[sales_volume_col], sales_volume_col)
 
-    magnet_work["norm_search_trend"] = _minmax_or_nan(magnet_work["search_trend"])
-    blackbox_work["norm_sales_trend"] = _minmax_or_nan(blackbox_work["sales_trend"])
+    magnet_work["norm_search_trend"] = safe_log_normalize(
+        rolling_trend_smoothing(magnet_work["search_trend"], window=5)
+    )
+    blackbox_work["norm_sales_trend"] = safe_log_normalize(
+        rolling_trend_smoothing(blackbox_work["sales_trend"], window=5)
+    )
+    blackbox_work["norm_sales_volume_trend"] = safe_log_normalize(
+        rolling_trend_smoothing(blackbox_work["sales_volume"], window=5)
+    )
 
-    if magnet_work["norm_search_trend"].dropna().empty or blackbox_work["norm_sales_trend"].dropna().empty:
+    if (
+        magnet_work["norm_search_trend"].dropna().empty
+        or blackbox_work["norm_sales_trend"].dropna().empty
+        or blackbox_work["norm_sales_volume_trend"].dropna().empty
+    ):
         return {
             "status": "warning",
             "message": "No valid numeric rows after cleaning",
             "metric_name": "Search Momentum",
             "summary": "Trend columns did not contain sufficient numeric variance.",
             "datasets_used": ["magnet", "blackbox"],
-            "columns_used": [search_col, sales_col],
+            "columns_used": [search_col, sales_col, sales_volume_col],
             "formula_used": "",
             "results": {},
             "validation": {
                 "rows_before_cleaning": rows_before_cleaning,
                 "rows_after_cleaning": 0,
                 "rows_skipped": rows_before_cleaning,
-                "numeric_columns_cleaned": [search_col, sales_col],
+                "numeric_columns_cleaned": [search_col, sales_col, sales_volume_col],
             },
             "processing_time_seconds": round(time.time() - t0, 3),
         }
 
     mean_search_trend = float(magnet_work["norm_search_trend"].mean(skipna=True))
     mean_sales_trend = float(blackbox_work["norm_sales_trend"].mean(skipna=True))
-    momentum_alignment = round(mean_search_trend * mean_sales_trend, 2)
+    mean_sales_volume = float(blackbox_work["norm_sales_volume_trend"].mean(skipna=True))
+    momentum_alignment = round(
+        (mean_search_trend * 0.4) + (mean_sales_trend * 0.4) + (mean_sales_volume * 0.2),
+        2,
+    )
 
-    magnet_work["momentum_score"] = magnet_work["norm_search_trend"] * mean_sales_trend
-    blackbox_work["momentum_score"] = blackbox_work["norm_sales_trend"] * mean_search_trend
+    magnet_work["momentum_score"] = (
+        (magnet_work["norm_search_trend"] * 0.4)
+        + (mean_sales_trend * 0.4)
+        + (mean_sales_volume * 0.2)
+    ).clip(0.0, 100.0)
+    blackbox_work["momentum_score"] = (
+        (mean_search_trend * 0.4)
+        + (blackbox_work["norm_sales_trend"] * 0.4)
+        + (blackbox_work["norm_sales_volume_trend"] * 0.2)
+    ).clip(0.0, 100.0)
 
     keyword_col = find_column(magnet_df, _KEYWORD_CANDIDATES)
     if keyword_col:
@@ -123,32 +139,32 @@ def run(magnet_df: Optional[pd.DataFrame], blackbox_df: Optional[pd.DataFrame], 
     if asin_col:
         blackbox_work["asin"] = blackbox_df[asin_col].astype(str)
 
-    search_median = float(magnet_work["norm_search_trend"].median(skipna=True))
-    sales_median = float(blackbox_work["norm_sales_trend"].median(skipna=True))
+    search_median = float(magnet_work["momentum_score"].median(skipna=True))
+    sales_median = float(blackbox_work["momentum_score"].median(skipna=True))
 
     healthy_keywords = (
-        magnet_work[magnet_work["norm_search_trend"] >= search_median]
+        magnet_work[magnet_work["momentum_score"] >= search_median]
         .sort_values("momentum_score", ascending=False)
         .head(top_n)
         .replace({np.nan: None})
         .to_dict(orient="records")
     )
     weak_conversion_keywords = (
-        magnet_work[magnet_work["norm_search_trend"] < search_median]
+        magnet_work[magnet_work["momentum_score"] < search_median]
         .sort_values("momentum_score", ascending=True)
         .head(top_n)
         .replace({np.nan: None})
         .to_dict(orient="records")
     )
     strongest_products = (
-        blackbox_work[blackbox_work["norm_sales_trend"] >= sales_median]
+        blackbox_work[blackbox_work["momentum_score"] >= sales_median]
         .sort_values("momentum_score", ascending=False)
         .head(top_n)
         .replace({np.nan: None})
         .to_dict(orient="records")
     )
     weakest_products = (
-        blackbox_work[blackbox_work["norm_sales_trend"] < sales_median]
+        blackbox_work[blackbox_work["momentum_score"] < sales_median]
         .sort_values("momentum_score", ascending=True)
         .head(top_n)
         .replace({np.nan: None})
@@ -163,14 +179,24 @@ def run(magnet_df: Optional[pd.DataFrame], blackbox_df: Optional[pd.DataFrame], 
         "metric_name": "Search Momentum",
         "summary": "Search momentum computed from normalized search and sales trend signals.",
         "datasets_used": ["magnet", "blackbox"],
-        "columns_used": [search_col, sales_col],
-        "formula_used": "Search Momentum = Normalized Search Trend * Normalized Sales Trend.",
+        "columns_used": [search_col, sales_col, sales_volume_col],
+        "formula_used": (
+            "Search Momentum = weighted_average("
+            "Search Volume Trend x 0.4, Sales Trend x 0.4, Sales Volume Trend x 0.2"
+            "), with log scaling, clipping, smoothing, and 0-100 normalization."
+        ),
         "results": {
             "momentum_alignment": momentum_alignment,
             "healthy_keywords": healthy_keywords,
             "weak_conversion_keywords": weak_conversion_keywords,
             "strongest_momentum_products": strongest_products,
             "weakest_momentum_products": weakest_products,
+            "trend_category": (
+                "Strong Growth" if momentum_alignment >= 70 else
+                "Moderate Growth" if momentum_alignment >= 45 else
+                "Stable/Weak"
+            ),
+            "trend_strength": round(momentum_alignment, 2),
             "interpretation_rules": {
                 "search_up_sales_up": "healthy market growth",
                 "search_up_sales_down": "curiosity without conversion",
@@ -182,7 +208,7 @@ def run(magnet_df: Optional[pd.DataFrame], blackbox_df: Optional[pd.DataFrame], 
             "rows_before_cleaning": rows_before_cleaning,
             "rows_after_cleaning": rows_after_cleaning,
             "rows_skipped": rows_skipped,
-            "numeric_columns_cleaned": [search_col, sales_col],
+            "numeric_columns_cleaned": [search_col, sales_col, sales_volume_col],
         },
         "processing_time_seconds": round(time.time() - t0, 3),
     }

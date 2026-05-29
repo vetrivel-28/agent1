@@ -71,4 +71,11 @@ export const api = {
     const response = await apiClient.post(`/market-report?top_n=${topN}`);
     return response.data;
   },
+
+  downloadMarketReportPdf: async (topN = 10) => {
+    const response = await apiClient.get(`/market-report/pdf?top_n=${topN}`, {
+      responseType: 'blob',
+    });
+    return response.data;
+  },
 };

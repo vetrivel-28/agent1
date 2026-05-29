@@ -13,31 +13,45 @@ from __future__ import annotations
 from typing import Optional
 
 from fastapi import APIRouter, File, UploadFile
+from fastapi.responses import FileResponse
 
 from app.engines import (
     bsr_efficiency_engine,
+    bundle_opportunity_engine,
+    complement_engine,
     demand_engine,
     demand_velocity_engine,
+    direct_competitor_engine,
     hhi_engine,
+    price_elasticity_engine,
     revenue_momentum_engine,
     sales_momentum_engine,
     search_momentum_engine,
     siei_engine,
+    substitute_engine,
+    whitespace_engine,
 )
 from app.models.response_models import (
     BSREfficiencyResult,
+    BundleOpportunityResult,
+    ComplementIntelligenceResult,
     DemandStrengthResult,
     DemandVelocityResult,
+    DirectCompetitorsResult,
     HHIResult,
     HealthCheck,
     MarketReportResult,
+    PriceElasticityResult,
     RevenueMomentumResult,
     SalesMomentumResult,
     SIEIResult,
     SearchMomentumPhase2Result,
+    SubstituteIntelligenceResult,
     UploadResponse,
+    WhitespaceOpportunityResult,
 )
 from app.services.dataset_registry import registry
+from app.services.pdf_exporter import export_market_report_pdf
 from app.services.report_builder import build_report
 from app.utils.dataframe_checks import is_empty_dataframe
 from app.utils.logger import get_logger
@@ -401,6 +415,198 @@ def market_concentration(top_n: int = 10):
 
 
 # =========================================================================
+# Phase 2: New Intelligence Engines
+# =========================================================================
+
+@router.post(
+    "/whitespace-opportunities",
+    response_model=WhitespaceOpportunityResult,
+    summary="Whitespace Opportunity Analysis",
+    description=(
+        "Find high-demand keywords with weak competitor optimization.\n\n"
+        "**Dataset**: Magnet Keyword\n\n"
+        "**Formula**: `Whitespace Score = Norm(Search Volume) × (1 - Norm(Title Density))` "
+        "with log scaling and percentile clipping, then normalized to 0-100.\n\n"
+        "**Returns**: overall whitespace score, top SEO opportunities by keyword, "
+        "opportunity distribution, market insights."
+    ),
+)
+def whitespace_opportunities(top_n: int = 15):
+    logger.info(f"Whitespace Opportunity requested (top_n={top_n})")
+    magnet_df = registry.get_magnet()
+    if is_empty_dataframe(magnet_df):
+        return _datasets_not_loaded("Whitespace Opportunity", "magnet")
+    result = whitespace_engine.run(magnet_df, None, top_n=top_n)
+    logger.info(
+        f"Whitespace Opportunity complete — status={result['status']}, "
+        f"score={result.get('results', {}).get('overall_whitespace_score', 'n/a')}"
+    )
+    return result
+
+
+@router.post(
+    "/direct-competitors",
+    response_model=DirectCompetitorsResult,
+    summary="Direct Competitor Analysis",
+    description=(
+        "Identify direct market competitors by category, subcategory, and price.\n\n"
+        "**Dataset**: BlackBox Products\n\n"
+        "**Logic**: Direct competitors share same category, subcategory, and similar pricing "
+        "(±15–20% dynamic range).\n\n"
+        "**Formula**: `Similarity Score = 40×(category_match) + 35×(subcategory_match) + 25×(price_similarity)` "
+        "normalized to 0-100.\n\n"
+        "**Returns**: competitor clusters, price positioning, competition density, similarity rankings."
+    ),
+)
+def direct_competitors(top_n: int = 15, price_tolerance_pct: float = 17.5):
+    logger.info(f"Direct Competitors requested (top_n={top_n})")
+    blackbox_df = registry.get_blackbox()
+    if is_empty_dataframe(blackbox_df):
+        return _datasets_not_loaded("Direct Competitors", "blackbox")
+    result = direct_competitor_engine.run(
+        None, blackbox_df, top_n=top_n, price_tolerance_pct=price_tolerance_pct
+    )
+    logger.info(
+        f"Direct Competitors complete — status={result['status']}, "
+        f"clusters={result.get('results', {}).get('total_clusters', 'n/a')}"
+    )
+    return result
+
+
+@router.post(
+    "/price-elasticity",
+    response_model=PriceElasticityResult,
+    summary="Price Elasticity Analysis",
+    description=(
+        "Find strongest-performing price ranges and identify demand dead zones.\n\n"
+        "**Dataset**: BlackBox Products\n\n"
+        "**Logic**: Creates adaptive price buckets using quantile-based sizing. "
+        "Analyzes sales, revenue, and BSR per bucket. Detects dead zones (>50% sales drop).\n\n"
+        "**Formula**: `Demand Score = avg(Norm(ASIN Sales), Norm(Revenue), Norm(1/BSR))` "
+        "per price bucket.\n\n"
+        "**Returns**: price buckets with demand scores, strongest ranges, dead zones, "
+        "sales distribution, pricing insights."
+    ),
+)
+def price_elasticity(n_buckets: int = 5):
+    logger.info(f"Price Elasticity requested (n_buckets={n_buckets})")
+    blackbox_df = registry.get_blackbox()
+    if is_empty_dataframe(blackbox_df):
+        return _datasets_not_loaded("Price Elasticity", "blackbox")
+    result = price_elasticity_engine.run(None, blackbox_df, n_buckets=n_buckets)
+    logger.info(
+        f"Price Elasticity complete — status={result['status']}, "
+        f"buckets={result.get('results', {}).get('bucket_count', 'n/a')}"
+    )
+    return result
+
+# =========================================================================
+# Ecosystem Intelligence Engines
+# =========================================================================
+
+@router.post(
+    "/substitute-intelligence",
+    response_model=SubstituteIntelligenceResult,
+    summary="Substitute Intelligence",
+    description=(
+        "Identifies substitute products stealing demand from the target market.\n\n"
+        "**Datasets**: Keyword Classification + BlackBox Products\n\n"
+        "**Logic**:\n"
+        "1. Extract keywords classified as 'Substitute'\n"
+        "2. Score every BlackBox product using fuzzy + token-overlap similarity\n"
+        "3. Cluster substitute products by subcategory\n\n"
+        "**Formula**: `Similarity = 0.4 × bigram_overlap + 0.6 × token_jaccard`. "
+        "`Market Overlap Score = min(density × mean_similarity × 3, 100)`.\n\n"
+        "**Returns**: substitute keywords, matched products, subcategory clusters, "
+        "market overlap score 0-100."
+    ),
+)
+def substitute_intelligence(top_n: int = 10):
+    logger.info(f"Substitute Intelligence requested (top_n={top_n})")
+    kc_df       = registry.get_keyword_classification()
+    blackbox_df = registry.get_blackbox()
+    if is_empty_dataframe(kc_df):
+        return _datasets_not_loaded("Substitute Intelligence", "keyword_classification")
+    if is_empty_dataframe(blackbox_df):
+        return _datasets_not_loaded("Substitute Intelligence", "blackbox")
+    result = substitute_engine.run(kc_df, blackbox_df, top_n=top_n)
+    logger.info(
+        f"Substitute Intelligence complete — status={result['status']}, "
+        f"substitutes={result.get('results', {}).get('total_substitute_products', 'n/a')}"
+    )
+    return result
+
+
+@router.post(
+    "/complement-intelligence",
+    response_model=ComplementIntelligenceResult,
+    summary="Complement Intelligence",
+    description=(
+        "Identifies complementary ecosystem products and cross-sell opportunities.\n\n"
+        "**Datasets**: Keyword Classification + BlackBox Products\n\n"
+        "**Logic**:\n"
+        "1. Extract keywords classified as 'Complement'\n"
+        "2. Score every BlackBox product using fuzzy + token-overlap similarity\n"
+        "3. Compute complement_strength per product\n"
+        "4. Identify cross-sell opportunities via keyword bridging\n\n"
+        "**Formula**: `Complement Strength = 0.7 × similarity + 0.3 × keyword_breadth`. "
+        "`Ecosystem Strength = min(density × mean_strength × 3, 100)`.\n\n"
+        "**Returns**: complement keywords, matched products, ecosystem clusters, "
+        "cross-sell opportunities, ecosystem strength 0-100."
+    ),
+)
+def complement_intelligence(top_n: int = 10):
+    logger.info(f"Complement Intelligence requested (top_n={top_n})")
+    kc_df       = registry.get_keyword_classification()
+    blackbox_df = registry.get_blackbox()
+    if is_empty_dataframe(kc_df):
+        return _datasets_not_loaded("Complement Intelligence", "keyword_classification")
+    if is_empty_dataframe(blackbox_df):
+        return _datasets_not_loaded("Complement Intelligence", "blackbox")
+    result = complement_engine.run(kc_df, blackbox_df, top_n=top_n)
+    logger.info(
+        f"Complement Intelligence complete — status={result['status']}, "
+        f"complements={result.get('results', {}).get('total_complement_products', 'n/a')}"
+    )
+    return result
+
+
+@router.post(
+    "/bundle-opportunities",
+    response_model=BundleOpportunityResult,
+    summary="Bundle Opportunity Analysis",
+    description=(
+        "Identifies high-potential bundle combinations using complement relationships.\n\n"
+        "**Datasets**: Keyword Classification + BlackBox Products\n\n"
+        "**Logic**:\n"
+        "1. Runs complement engine to find complement products\n"
+        "2. Scores (primary, complement) product pairs by demand overlap\n"
+        "3. Applies category adjacency bonus\n"
+        "4. Normalises bundle scores to 0-100\n\n"
+        "**Formula**: `Bundle Score = (complement_strength × 0.4) + "
+        "(demand_overlap × 0.4) + (category_adjacency × 0.2)`. "
+        "`Ecosystem Strength = min(density × mean_score × 5, 100)`.\n\n"
+        "**Returns**: ranked bundle pairs, high-potential bundles (score ≥70), "
+        "bundle clusters by subcategory, ecosystem strength 0-100."
+    ),
+)
+def bundle_opportunities(top_n: int = 10):
+    logger.info(f"Bundle Opportunities requested (top_n={top_n})")
+    kc_df       = registry.get_keyword_classification()
+    blackbox_df = registry.get_blackbox()
+    if is_empty_dataframe(kc_df):
+        return _datasets_not_loaded("Bundle Opportunity", "keyword_classification")
+    if is_empty_dataframe(blackbox_df):
+        return _datasets_not_loaded("Bundle Opportunity", "blackbox")
+    result = bundle_opportunity_engine.run(kc_df, blackbox_df, top_n=top_n)
+    logger.info(
+        f"Bundle Opportunities complete — status={result['status']}, "
+        f"bundles={result.get('results', {}).get('total_bundle_opportunities', 'n/a')}"
+    )
+    return result
+
+
+# =========================================================================
 # Market Report
 # =========================================================================
 
@@ -441,6 +647,37 @@ def market_report(top_n: int = 10):
 
     logger.info("Market Report complete")
     return report
+
+
+@router.get(
+    "/market-report/pdf",
+    summary="Download Market Report PDF",
+    description="Generates a deterministic PDF report from current engine outputs.",
+)
+def market_report_pdf(top_n: int = 10):
+    logger.info(f"Market Report PDF requested (top_n={top_n})")
+    blackbox_df = registry.get_blackbox()
+    magnet_df = registry.get_magnet()
+    if is_empty_dataframe(blackbox_df):
+        return _datasets_not_loaded("Market Report PDF", "blackbox")
+
+    demand_result = demand_engine.run(magnet_df, blackbox_df, top_n=top_n)
+    sales_result = sales_momentum_engine.run(blackbox_df, top_n=top_n)
+    revenue_result = revenue_momentum_engine.run(blackbox_df, top_n=top_n)
+    bsr_result = bsr_efficiency_engine.run(blackbox_df, top_n=top_n)
+    report = build_report(
+        demand_result=demand_result,
+        sales_result=sales_result,
+        revenue_result=revenue_result,
+        bsr_result=bsr_result,
+        top_n=top_n,
+    )
+    pdf_path = export_market_report_pdf(report)
+    return FileResponse(
+        path=pdf_path,
+        media_type="application/pdf",
+        filename="market_intelligence_report.pdf",
+    )
 
 
 # =========================================================================

@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '../services/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/Card';
 import { DataTable, type Column } from '../components/tables/DataTable';
-import { formatCurrency, formatNumber } from '../utils/cn';
+import { adaptiveDomain, formatCurrency, formatNumber, growthLabelFromScore } from '../utils/cn';
 import { AlertCircle, Loader2 } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { motion } from 'framer-motion';
@@ -40,15 +40,7 @@ export default function RevenueMomentum() {
   const columns: Column<any>[] = [
     { header: "Brand", accessorKey: "brand", cell: (r) => <div className="font-semibold">{r.brand}</div> },
     { header: "Total Revenue", accessorKey: "total_revenue", cell: (r) => r.total_revenue != null ? formatCurrency(r.total_revenue) : '—' },
-    { header: "Revenue Trend", accessorKey: "avg_revenue_trend_pct", cell: (r) => {
-      const val = r.avg_revenue_trend_pct;
-      if (val == null) return '—';
-      return (
-        <span className={val > 0 ? "text-success font-medium" : "text-danger font-medium"}>
-          {val > 0 ? '+' : ''}{typeof val === 'number' ? val.toFixed(1) : val}%
-        </span>
-      );
-    }},
+    { header: "Trend Category", accessorKey: "revenue_momentum_score", cell: (r) => growthLabelFromScore(r.revenue_momentum_score ?? 0) },
     { header: "Momentum Score", accessorKey: "revenue_momentum_score", cell: (r) => r.revenue_momentum_score != null ? r.revenue_momentum_score.toFixed(1) : '—' },
   ];
 
@@ -57,6 +49,7 @@ export default function RevenueMomentum() {
     name: b.brand,
     Revenue: b.total_revenue || 0
   }));
+  const yDomain = adaptiveDomain(chartData.map((d: { Revenue: number }) => d.Revenue), 0.02, 0.98);
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
@@ -95,6 +88,7 @@ export default function RevenueMomentum() {
                     axisLine={false} 
                     tickLine={false} 
                     tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }}
+                    domain={yDomain}
                     tickFormatter={(val) => `$${formatNumber(val)}`}
                   />
                   <Tooltip 

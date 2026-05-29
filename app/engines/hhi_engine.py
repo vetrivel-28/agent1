@@ -155,6 +155,7 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
         ),
         "results": {
             "hhi_score": round(hhi_score, 2),
+            "hhi_normalized_score": round(min(hhi_score / 100.0, 100.0), 2),
             "market_structure_type": structure,
             "top_brands_by_market_share": top_brands,
             "concentration_distribution": concentration_distribution,

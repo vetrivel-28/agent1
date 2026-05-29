@@ -8,6 +8,7 @@ import pandas as pd
 
 from app.utils.column_mapper import find_column
 from app.utils.logger import get_logger
+from app.utils.normalization import safe_log_normalize
 from app.utils.numeric_cleaner import clean_numeric_series
 
 logger = get_logger("siei_engine")
@@ -15,17 +16,6 @@ logger = get_logger("siei_engine")
 _CLICK_SHARE_CANDIDATES = ["ABA Total Click Share"]
 _CONV_SHARE_CANDIDATES = ["ABA Total Conv. Share", "ABA Total Conversion Share"]
 _KEYWORD_CANDIDATES = ["Keyword Phrase", "Keyword"]
-
-
-def _minmax_or_nan(series: pd.Series) -> pd.Series:
-    valid = series.dropna()
-    if valid.empty:
-        return pd.Series(np.nan, index=series.index, dtype=float)
-    min_val = float(valid.min())
-    max_val = float(valid.max())
-    if max_val == min_val:
-        return pd.Series(np.nan, index=series.index, dtype=float)
-    return (series - min_val) / (max_val - min_val) * 100.0
 
 
 def run(magnet_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
@@ -83,7 +73,7 @@ def run(magnet_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
     click_nonzero = work["click_share"].replace(0, np.nan)
     work["siei"] = work["conv_share"] / click_nonzero
     work["siei"] = work["siei"].replace([np.inf, -np.inf], np.nan)
-    work["siei_rank_score"] = _minmax_or_nan(work["siei"])
+    work["siei_rank_score"] = safe_log_normalize(work["siei"])
 
     valid = work.dropna(subset=["siei"])
     if valid.empty:
@@ -149,6 +139,7 @@ def run(magnet_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
         "results": {
             "siei_percentile_20": round(p20, 6),
             "siei_percentile_80": round(p80, 6),
+            "market_siei_score": round(float(valid["siei_rank_score"].mean(skipna=True)), 2),
             "highest_efficiency_keywords": highest_efficiency,
             "lowest_efficiency_keywords": lowest_efficiency,
             "market_friction_keywords": market_friction,

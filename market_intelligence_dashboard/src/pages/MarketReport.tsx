@@ -30,7 +30,19 @@ export default function MarketReport() {
     );
   }
 
-  const execSummary = data.results?.executive_summary;
+  const opportunities = data.results?.opportunity_signals?.signals || [];
+  const risks = data.results?.risk_signals?.signals || [];
+  const verdict = data.results?.final_market_verdict?.verdict || 'Analysis Pending';
+
+  const downloadPdf = async () => {
+    const blob = await api.downloadMarketReportPdf(10);
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'market_intelligence_report.pdf';
+    a.click();
+    window.URL.revokeObjectURL(url);
+  };
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-8 max-w-4xl mx-auto pb-20">
@@ -44,7 +56,7 @@ export default function MarketReport() {
         </div>
         <div className="text-right text-sm text-muted-foreground hidden md:block">
           <p>Generated: {new Date().toLocaleDateString()}</p>
-          <p className="font-mono mt-1">ID: MRKT-{Math.random().toString(36).substring(2, 8).toUpperCase()}</p>
+          <p className="font-mono mt-1">ID: MRKT-DETERMINISTIC</p>
         </div>
       </div>
 
@@ -54,7 +66,7 @@ export default function MarketReport() {
             <Target className="w-4 h-4" /> Final Verdict
           </h2>
           <p className="text-3xl md:text-4xl font-bold leading-tight">
-            {execSummary?.final_verdict}
+            {verdict}
           </p>
         </div>
         <div className="absolute right-0 bottom-0 opacity-10 pointer-events-none transform translate-x-1/4 translate-y-1/4">
@@ -92,7 +104,7 @@ export default function MarketReport() {
             <h3 className="text-xl font-bold">Opportunity Signals</h3>
           </div>
           <ul className="space-y-3">
-            {execSummary?.opportunity_signals?.map((sig: string, i: number) => (
+            {opportunities.map((sig: string, i: number) => (
               <li key={i} className="flex gap-3 p-4 rounded-xl bg-warning/10 border border-warning/20">
                 <Zap className="w-5 h-5 text-warning shrink-0" />
                 <span className="text-sm">{sig}</span>
@@ -108,7 +120,7 @@ export default function MarketReport() {
           <h3 className="text-xl font-bold">Risk Factors & Exposure</h3>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {execSummary?.risk_signals?.map((risk: string, i: number) => (
+          {risks.map((risk: string, i: number) => (
             <div key={i} className="flex gap-3 p-4 rounded-xl bg-danger/5 border border-danger/20">
               <AlertCircle className="w-5 h-5 text-danger shrink-0 mt-0.5" />
               <p className="text-sm font-medium">{risk}</p>
@@ -118,8 +130,8 @@ export default function MarketReport() {
       </div>
 
       <div className="flex justify-center pt-10">
-        <button onClick={() => window.print()} className="px-6 py-2 bg-foreground text-background font-semibold rounded-lg shadow hover:bg-foreground/90 transition-colors">
-          Print Report (PDF)
+        <button onClick={downloadPdf} className="px-6 py-2 bg-foreground text-background font-semibold rounded-lg shadow hover:bg-foreground/90 transition-colors">
+          Download Report PDF
         </button>
       </div>
     </motion.div>

@@ -25,8 +25,9 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
-from app.utils.column_mapper import find_column, minmax_normalize
+from app.utils.column_mapper import find_column
 from app.utils.logger import get_logger
+from app.utils.normalization import adaptive_scaling, safe_log_normalize
 from app.utils.numeric_cleaner import clean_numeric_series
 
 logger = get_logger("bsr_efficiency_engine")
@@ -179,20 +180,15 @@ def run(
     # -----------------------------------------------------------------------
     # Step 1 — Normalise BSR  (invert: lower BSR = better = higher score)
     # -----------------------------------------------------------------------
-    bsr_valid = work["bsr"].dropna()
-    max_bsr = float(bsr_valid.max()) if not bsr_valid.empty else 0.0
-
-    if max_bsr == 0:
-        work["norm_bsr"] = 50.0
-        logger.info("BSR max=0 — using neutral score 50 for all rows")
-    else:
-        work["norm_bsr"] = (1.0 - work["bsr"] / max_bsr) * 100.0
-        logger.info(f"BSR normalised: max_bsr={max_bsr:.0f}")
+    work["norm_bsr"] = safe_log_normalize(work["bsr"])
+    work["inverse_norm_bsr"] = 100.0 - work["norm_bsr"]
+    max_bsr = float(work["bsr"].dropna().max()) if not work["bsr"].dropna().empty else 0.0
+    logger.info(f"BSR normalised with log+clip: max_bsr={max_bsr:.0f}")
 
     # -----------------------------------------------------------------------
     # Step 2 — Normalise Revenue (min-max 0-100)
     # -----------------------------------------------------------------------
-    work["norm_revenue"] = minmax_normalize(work["revenue"])
+    work["norm_revenue"] = safe_log_normalize(work["revenue"])
     rev_nan_count = work["norm_revenue"].isna().sum()
     logger.info(
         f"Revenue normalised: {len(work) - rev_nan_count} valid, "
@@ -206,11 +202,11 @@ def run(
     # -----------------------------------------------------------------------
     work["efficiency_score"] = (
         work["norm_revenue"].fillna(0.0) * _WEIGHT_REVENUE
-        + work["norm_bsr"].fillna(0.0) * _WEIGHT_BSR
+        + work["inverse_norm_bsr"].fillna(0.0) * _WEIGHT_BSR
     )
 
     # Rows where BOTH norm values are NaN get NaN score (truly no data)
-    both_nan_mask = work["norm_revenue"].isna() & work["norm_bsr"].isna()
+    both_nan_mask = work["norm_revenue"].isna() & work["inverse_norm_bsr"].isna()
     work.loc[both_nan_mask, "efficiency_score"] = np.nan
     work = work.dropna(subset=["efficiency_score"])
 
@@ -315,6 +311,10 @@ def run(
             "inefficient_products": inefficient_products,
             "bsr_distribution": bsr_stats_out,
             "revenue_distribution": rev_stats_out,
+            "graph_scaling": {
+                "bsr_axis": adaptive_scaling(work["bsr"]),
+                "revenue_axis": adaptive_scaling(work["revenue"]),
+            },
         },
         "validation": {
             "status": "passed",

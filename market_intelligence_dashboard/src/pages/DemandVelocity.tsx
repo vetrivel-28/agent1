@@ -78,7 +78,7 @@ export default function DemandVelocity() {
                   <span className="font-medium text-sm max-w-[200px] truncate">{sig.signal}</span>
                   <div className="flex gap-2">
                     <Badge variant="success" className="text-xs">signal</Badge>
-                    <Badge variant="outline" className="text-xs bg-background">{(sig.score * 100).toFixed(1)}%</Badge>
+                    <Badge variant="outline" className="text-xs bg-background">{Number(sig.score || 0).toFixed(1)}/100</Badge>
                   </div>
                 </li>
               ))}
@@ -100,7 +100,7 @@ export default function DemandVelocity() {
                   <span className="font-medium text-sm max-w-[200px] truncate">{sig.signal}</span>
                   <div className="flex gap-2">
                     <Badge variant="danger" className="text-xs">signal</Badge>
-                    <Badge variant="outline" className="text-xs bg-background">{(sig.score * 100).toFixed(1)}%</Badge>
+                    <Badge variant="outline" className="text-xs bg-background">{Number(sig.score || 0).toFixed(1)}/100</Badge>
                   </div>
                 </li>
               ))}

@@ -79,6 +79,7 @@ export default function DashboardOverview() {
   const results = data?.results || {};
   const engineScores = results.engine_scores || {};
   const marketOverview = results.market_overview || {};
+  const marketHealth = results.market_health || {};
   const finalVerdict = results.final_market_verdict || {};
   const opportunitySignals = results.opportunity_signals || {};
   const riskSignals = results.risk_signals || {};
@@ -112,10 +113,16 @@ export default function DashboardOverview() {
           status={engineScores.demand_strength > 60 ? 'success' : 'warning'}
         />
         <KPICard 
-          title="Sales Direction"
-          value={marketOverview.sales_direction || 'Unknown'}
+          title="Market Direction"
+          value={marketHealth.market_direction || marketOverview.market_direction || 'Unknown'}
           icon={<TrendingUp className="w-5 h-5" />}
-          status={marketOverview.sales_direction === 'Accelerating' ? 'success' : 'danger'}
+          status={
+            (marketHealth.market_direction || marketOverview.market_direction) === 'growing'
+              ? 'success'
+              : (marketHealth.market_direction || marketOverview.market_direction) === 'stable'
+              ? 'warning'
+              : 'danger'
+          }
         />
         <KPICard 
           title="Market Revenue"
@@ -124,10 +131,10 @@ export default function DashboardOverview() {
           status="neutral"
         />
         <KPICard 
-          title="Composite Score"
-          value={`${results.composite_market_health_score || 0}/100`}
+          title="Data Reliability"
+          value={`${(marketHealth.data_reliability_score ?? marketOverview.data_reliability_score ?? 0).toFixed(1)}/100`}
           icon={<Crosshair className="w-5 h-5" />}
-          status={results.composite_market_health_score > 50 ? 'success' : 'danger'}
+          status={(marketHealth.data_reliability_score ?? marketOverview.data_reliability_score ?? 0) > 60 ? 'success' : 'warning'}
         />
       </div>
 

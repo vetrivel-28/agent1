@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '../services/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/Card';
 import { DataTable, type Column } from '../components/tables/DataTable';
+import { adaptiveDomain } from '../utils/cn';
 import { AlertCircle, Loader2 } from 'lucide-react';
 import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { motion } from 'framer-motion';
@@ -35,20 +36,23 @@ export default function IntentEfficiency() {
   const results = data.results;
   const efficient = results.highest_efficiency_keywords || [];
   const inefficient = results.lowest_efficiency_keywords || [];
+  const formatShare = (v: number) => (v <= 1 ? `${(v * 100).toFixed(2)}%` : `${v.toFixed(2)}`);
 
   const columns: Column<any>[] = [
     { header: "Keyword", accessorKey: "keyword", cell: (r) => (
       <div className="font-semibold">{r.keyword || '—'}</div>
     )},
-    { header: "Click Share", accessorKey: "click_share", cell: (r) => r.click_share != null ? `${(r.click_share * 100).toFixed(2)}%` : '—' },
-    { header: "Conv Share", accessorKey: "conv_share", cell: (r) => r.conv_share != null ? `${(r.conv_share * 100).toFixed(2)}%` : '—' },
-    { header: "SIEI", accessorKey: "siei", cell: (r) => r.siei != null ? r.siei.toFixed(2) : '—' },
+    { header: "Click Share", accessorKey: "click_share", cell: (r) => r.click_share != null ? formatShare(Number(r.click_share)) : '—' },
+    { header: "Conv Share", accessorKey: "conv_share", cell: (r) => r.conv_share != null ? formatShare(Number(r.conv_share)) : '—' },
+    { header: "SIEI Score", accessorKey: "siei_rank_score", cell: (r) => r.siei_rank_score != null ? `${Number(r.siei_rank_score).toFixed(1)}/100` : '—' },
   ];
 
   const chartData = [
     ...efficient.map((k: any) => ({ ...k, type: 'efficient' })),
     ...inefficient.map((k: any) => ({ ...k, type: 'inefficient' }))
   ];
+  const xDomain = adaptiveDomain(chartData.map((d: any) => Number(d.click_share || 0)), 0.02, 0.98);
+  const yDomain = adaptiveDomain(chartData.map((d: any) => Number(d.conv_share || 0)), 0.02, 0.98);
 
   const CustomTooltip = ({ active, payload }: any) => {
     if (active && payload && payload.length) {
@@ -56,9 +60,9 @@ export default function IntentEfficiency() {
       return (
         <div className="bg-card border border-border p-3 rounded-lg shadow-sm">
           <p className="font-semibold text-sm max-w-xs truncate mb-2">{data.keyword}</p>
-          <p className="text-sm">Clicks: {data.click_share != null ? (data.click_share * 100).toFixed(2) : '—'}%</p>
-          <p className="text-sm">Conv: {data.conv_share != null ? (data.conv_share * 100).toFixed(2) : '—'}%</p>
-          <p className="text-sm">SIEI: <span className={data.siei > 1 ? 'text-success' : 'text-danger'}>{data.siei?.toFixed(2)}</span></p>
+          <p className="text-sm">Clicks: {data.click_share != null ? formatShare(Number(data.click_share)) : '—'}</p>
+          <p className="text-sm">Conv: {data.conv_share != null ? formatShare(Number(data.conv_share)) : '—'}</p>
+          <p className="text-sm">SIEI Score: <span className={Number(data.siei_rank_score || 0) > 50 ? 'text-success' : 'text-danger'}>{Number(data.siei_rank_score || 0).toFixed(1)}/100</span></p>
         </div>
       );
     }
@@ -88,15 +92,17 @@ export default function IntentEfficiency() {
                   type="number" 
                   dataKey="click_share" 
                   name="Click Share"
+                  domain={xDomain}
                   tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }} 
-                  tickFormatter={(val) => `${(val * 100).toFixed(1)}%`}
+                  tickFormatter={(val) => formatShare(Number(val))}
                 />
                 <YAxis 
                   type="number" 
                   dataKey="conv_share" 
                   name="Conversion Share"
+                  domain={yDomain}
                   tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }}
-                  tickFormatter={(val) => `${(val * 100).toFixed(1)}%`}
+                  tickFormatter={(val) => formatShare(Number(val))}
                 />
                 <Tooltip content={<CustomTooltip />} cursor={{strokeDasharray: '3 3'}} />
                 <Scatter data={chartData}>

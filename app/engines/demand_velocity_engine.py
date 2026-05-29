@@ -8,6 +8,7 @@ import pandas as pd
 
 from app.utils.column_mapper import find_column
 from app.utils.logger import get_logger
+from app.utils.normalization import rolling_trend_smoothing, safe_log_normalize
 from app.utils.numeric_cleaner import clean_numeric_series
 
 logger = get_logger("demand_velocity_engine")
@@ -19,17 +20,6 @@ _REVENUE_TREND_CANDIDATES = ["Revenue Trend", "Price Trend (90 days) (%)", "Pric
 _KEYWORD_CANDIDATES = ["Keyword Phrase", "Keyword"]
 _TITLE_CANDIDATES = ["Title", "Product Title"]
 _ASIN_CANDIDATES = ["ASIN"]
-
-
-def _minmax_or_nan(series: pd.Series) -> pd.Series:
-    valid = series.dropna()
-    if valid.empty:
-        return pd.Series(np.nan, index=series.index, dtype=float)
-    min_val = float(valid.min())
-    max_val = float(valid.max())
-    if max_val == min_val:
-        return pd.Series(np.nan, index=series.index, dtype=float)
-    return (series - min_val) / (max_val - min_val) * 100.0
 
 
 def _safe_value(value: Any) -> Any:
@@ -71,7 +61,8 @@ def run(magnet_df: Optional[pd.DataFrame], blackbox_df: Optional[pd.DataFrame], 
             return
         cleaned, _ = clean_numeric_series(df[col], col)
         numeric_columns_cleaned.append(col)
-        normalized = _minmax_or_nan(cleaned)
+        smoothed = rolling_trend_smoothing(cleaned, window=5)
+        normalized = safe_log_normalize(smoothed)
         if normalized.dropna().empty:
             warning_messages.append(f"{metric_name}: not enough variance or all values NaN")
             return

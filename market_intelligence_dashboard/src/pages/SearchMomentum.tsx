@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '../services/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/Card';
 import { DataTable, type Column } from '../components/tables/DataTable';
+import { growthLabelFromScore } from '../utils/cn';
 import { AlertCircle, Loader2 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
@@ -39,16 +40,8 @@ export default function SearchMomentum() {
     { header: "Keyword", accessorKey: "keyword", cell: (r) => (
       <div className="font-semibold">{r.keyword || '—'}</div>
     )},
-    { header: "Search Trend", accessorKey: "norm_search_trend", cell: (r) => {
-      const val = r.norm_search_trend;
-      if (val == null) return '—';
-      return (
-        <span className={val > 0.5 ? "text-success" : "text-danger"}>
-          {(val * 100).toFixed(1)}%
-        </span>
-      );
-    }},
-    { header: "Momentum Score", accessorKey: "momentum_score", cell: (r) => r.momentum_score != null ? r.momentum_score.toFixed(3) : '—' },
+    { header: "Trend Strength", accessorKey: "momentum_score", cell: (r) => r.momentum_score != null ? `${r.momentum_score.toFixed(1)}/100` : '—' },
+    { header: "Trend Category", accessorKey: "momentum_score", cell: (r) => growthLabelFromScore(r.momentum_score ?? 0) },
   ];
 
   return (

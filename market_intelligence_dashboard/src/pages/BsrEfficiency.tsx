@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '../services/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/Card';
 import { DataTable, type Column } from '../components/tables/DataTable';
-import { formatCurrency, formatNumber } from '../utils/cn';
+import { adaptiveDomain, formatCurrency, formatNumber } from '../utils/cn';
 import { AlertCircle, Loader2 } from 'lucide-react';
 import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { motion } from 'framer-motion';
@@ -41,13 +41,15 @@ export default function BsrEfficiency() {
     { header: "ASIN / Title", accessorKey: "title", cell: (r) => <div className="max-w-[200px] truncate" title={r.title}>{r.title || r.asin || '—'}</div> },
     { header: "BSR", accessorKey: "bsr", cell: (r) => r.bsr != null ? formatNumber(r.bsr) : '—' },
     { header: "Revenue", accessorKey: "revenue", cell: (r) => r.revenue != null ? formatCurrency(r.revenue) : '—' },
-    { header: "Efficiency", accessorKey: "efficiency_score", cell: (r) => r.efficiency_score != null ? r.efficiency_score.toFixed(1) : '—' },
+    { header: "Efficiency", accessorKey: "efficiency_score", cell: (r) => r.efficiency_score != null ? `${r.efficiency_score.toFixed(1)}/100` : '—' },
   ];
 
   const chartData = [
     ...efficient.map((p: any) => ({ ...p, type: 'efficient' })),
     ...inefficient.map((p: any) => ({ ...p, type: 'inefficient' }))
   ];
+  const bsrDomain = adaptiveDomain(chartData.map((d: any) => Number(d.bsr || 0)), 0.02, 0.98);
+  const revenueDomain = adaptiveDomain(chartData.map((d: any) => Number(d.revenue || 0)), 0.02, 0.98);
 
   const CustomTooltip = ({ active, payload }: any) => {
     if (active && payload && payload.length) {
@@ -88,6 +90,7 @@ export default function BsrEfficiency() {
                     type="number" 
                     dataKey="bsr" 
                     name="Best Sellers Rank"
+                    domain={bsrDomain}
                     reversed
                     tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }} 
                     tickFormatter={(val) => formatNumber(val)}
@@ -96,6 +99,7 @@ export default function BsrEfficiency() {
                     type="number" 
                     dataKey="revenue" 
                     name="Revenue"
+                    domain={revenueDomain}
                     tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }}
                     tickFormatter={(val) => `$${formatNumber(val)}`}
                   />
