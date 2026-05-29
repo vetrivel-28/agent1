@@ -1,8 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../services/api';
 import { Card, CardContent } from '../components/ui/Card';
-import { AlertCircle, Loader2, FileText, Zap, ShieldAlert, Target, CheckCircle2 } from 'lucide-react';
+import { Button } from '../components/ui/Button';
+import { AlertCircle, Loader2, FileText, Zap, ShieldAlert, Target, CheckCircle2, Download } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { useState } from 'react';
 
 
 export default function MarketReport() {
@@ -10,6 +12,7 @@ export default function MarketReport() {
     queryKey: ['market-report'],
     queryFn: () => api.getMarketReport(10),
   });
+  const [isDownloading, setIsDownloading] = useState(false);
 
   if (isLoading) {
     return (
@@ -36,13 +39,20 @@ export default function MarketReport() {
   const verdict = data.results?.final_market_verdict?.verdict || 'Analysis Pending';
 
   const downloadPdf = async () => {
-    const blob = await api.downloadMarketReportPdf(10);
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'market_intelligence_report.pdf';
-    a.click();
-    window.URL.revokeObjectURL(url);
+    setIsDownloading(true);
+    try {
+      const blob = await api.downloadMarketReportPdf(10);
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'market_intelligence_report.pdf';
+      a.click();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Failed to download PDF:', error);
+    } finally {
+      setIsDownloading(false);
+    }
   };
 
   return (
@@ -130,10 +140,20 @@ export default function MarketReport() {
         </div>
       </div>
 
-      <div className="flex justify-center pt-10">
-        <button onClick={downloadPdf} className="px-6 py-2 bg-foreground text-background font-semibold rounded-lg shadow hover:bg-foreground/90 transition-colors">
-          Download Report PDF
-        </button>
+      <div className="flex justify-center pt-10 gap-4">
+        <Button onClick={downloadPdf} disabled={isDownloading} className="min-w-[200px]">
+          {isDownloading ? (
+            <>
+              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              Downloading...
+            </>
+          ) : (
+            <>
+              <Download className="w-4 h-4 mr-2" />
+              Download Report PDF
+            </>
+          )}
+        </Button>
       </div>
     </motion.div>
   );

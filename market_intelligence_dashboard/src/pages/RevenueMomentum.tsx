@@ -105,7 +105,7 @@ export default function RevenueMomentum() {
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <Card>
             <CardHeader>
-              <CardTitle>Revenue Growth Leaders</CardTitle>
+              <CardTitle>{results.growth_leaders_label || 'Revenue Growth Leaders'}</CardTitle>
             </CardHeader>
             <CardContent>
               <DataTable columns={columns} data={growing} pageSize={5} />

@@ -23,21 +23,21 @@ import {
 const navigation = [
   { name: 'Dashboard Overview', href: '/', icon: LayoutDashboard },
   { name: 'Dataset Upload', href: '/upload', icon: UploadCloud },
+  { name: 'Market Report', href: '/market-report', icon: FileText },
   { name: 'Demand Intelligence', href: '/demand-strength', icon: Activity },
   { name: 'Sales Momentum', href: '/sales-momentum', icon: TrendingUp },
   { name: 'Revenue Momentum', href: '/revenue-momentum', icon: DollarSign },
+  { name: 'Market Structure', href: '/market-concentration', icon: PieChart },
   { name: 'BSR Efficiency', href: '/bsr-efficiency', icon: Crosshair },
   { name: 'Demand Velocity', href: '/demand-velocity', icon: Zap },
   { name: 'Search Intelligence', href: '/search-momentum', icon: Search },
   { name: 'Intent Efficiency', href: '/search-intent-efficiency', icon: MousePointerClick },
-  { name: 'Market Structure', href: '/market-concentration', icon: PieChart },
   { name: 'Whitespace Opportunities', href: '/whitespace-opportunities', icon: Target },
+  { name: 'Price Range Performance', href: '/price-elasticity', icon: TrendingDown },
   { name: 'Direct Competitors', href: '/direct-competitors', icon: Users },
-  { name: 'Price Elasticity', href: '/price-elasticity', icon: TrendingDown },
   { name: 'Substitute Intelligence', href: '/substitute-intelligence', icon: ShieldAlert },
   { name: 'Complement Intelligence', href: '/complement-intelligence', icon: LinkIcon },
   { name: 'Bundle Opportunities', href: '/bundle-opportunities', icon: PackagePlus },
-  { name: 'Market Report', href: '/market-report', icon: FileText },
 ];
 
 export function Sidebar() {

@@ -21,6 +21,21 @@ from app.utils.logger import get_logger
 
 logger = get_logger("report_builder")
 
+# Configurable weights for composite scores
+_MARKET_DIRECTION_WEIGHTS = {
+    "sales": 0.4,
+    "revenue": 0.4,
+    "demand": 0.2,
+}
+
+_DATA_RELIABILITY_WEIGHTS = {
+    "column_completeness": 0.35,
+    "non_null": 0.30,
+    "row_sufficiency": 0.20,
+    "duplicate_quality": 0.10,
+    "valid_value": 0.05,
+}
+
 
 def build_report(
     demand_result: Dict[str, Any],
@@ -65,26 +80,42 @@ def build_report(
     revenue_score    = _get(revenue_result, "results", "market_mean_score")    or 0.0
     bsr_score        = _get(bsr_result,     "results", "market_efficiency_score") or 0.0
 
-    demand_status  = demand_result.get("status",  "error")
-    sales_status   = sales_result.get("status",   "error")
-    revenue_status = revenue_result.get("status", "error")
-    bsr_status     = bsr_result.get("status",     "error")
-
-    engines_ok = [
-        s for s in [demand_status, sales_status, revenue_status, bsr_status]
-        if s == "success"
+    module_results = [
+        ("demand_strength", demand_result, demand_score, 0.20),
+        ("sales_momentum", sales_result, sales_score, 0.15),
+        ("revenue_momentum", revenue_result, revenue_score, 0.15),
+        ("bsr_efficiency", bsr_result, bsr_score, 0.15),
+        ("market_structure", hhi_result, _module_score(hhi_result, "hhi_normalized_score"), 0.10),
+        ("intent_efficiency", siei_result, _module_score(siei_result, "market_siei_score"), 0.10),
+        ("whitespace", whitespace_result, _module_score(whitespace_result, "overall_whitespace_score"), 0.10),
+        ("price_band_performance", price_elasticity_result, _module_score(price_elasticity_result, "market_demand_score"), 0.05),
     ]
 
-    # -----------------------------------------------------------------------
-    # Composite market health score (mean of available engine scores)
-    # -----------------------------------------------------------------------
-    available_scores = [
-        float(s) for s in [demand_score, sales_score, revenue_score, bsr_score]
-        if s is not None and not isinstance(s, str)
-    ]
-    composite_score = round(
-        sum(available_scores) / len(available_scores), 2
-    ) if available_scores else 0.0
+    sections_generated: List[str] = []
+    sections_skipped: List[str] = []
+    report_warnings: List[str] = []
+    weighted_sum = 0.0
+    weight_total = 0.0
+
+    for section_id, result, score, weight in module_results:
+        if result is None:
+            sections_skipped.append(section_id)
+            continue
+        status = result.get("status", "error")
+        if status in ("success", "warning") and score is not None:
+            sections_generated.append(section_id)
+            weighted_sum += float(score) * weight
+            weight_total += weight
+            if status == "warning":
+                report_warnings.append(f"{section_id}: {result.get('summary', 'partial data')}")
+        else:
+            sections_skipped.append(section_id)
+            report_warnings.append(f"{section_id}: skipped ({result.get('summary', status)})")
+
+    composite_score = round(weighted_sum / weight_total, 2) if weight_total > 0 else 0.0
+    report_status = "success" if len(sections_generated) == len([m for m in module_results if m[1] is not None]) else (
+        "partial_success" if sections_generated else "error"
+    )
 
     # -----------------------------------------------------------------------
     # Rankings
@@ -106,12 +137,6 @@ def build_report(
     # Opportunity findings (data-driven, no hallucination)
     # -----------------------------------------------------------------------
     opportunities: List[str] = []
-
-    if demand_score < 30 and bsr_score < 40:
-        opportunities.append(
-            "Low demand score combined with low BSR efficiency suggests an "
-            "underserved market with room for a well-positioned entrant."
-        )
     if fastest_brands:
         top_brand = fastest_brands[0].get("brand", "")
         top_score = fastest_brands[0].get("momentum_score", 0)
@@ -147,13 +172,24 @@ def build_report(
     revenue_direction = _get(revenue_result, "results", "market_revenue_direction")  or ""
     demand_phase = _get(demand_result, "results", "interpretation") or _get(demand_result, "summary") or ""
 
-    direction_score = (sales_score * 0.4) + (revenue_score * 0.4) + (demand_score * 0.2)
-    if direction_score >= 60:
-        market_direction = "growing"
-    elif direction_score >= 40:
-        market_direction = "stable"
+    # Calculate market trend based on actual growth rates from time-series data
+    # Use median sales trend as the primary growth rate indicator
+    median_sales_trend = _get(sales_result, "results", "median_sales_trend_pct") or 0.0
+    mean_sales_trend = _get(sales_result, "results", "mean_sales_trend_pct") or 0.0
+    
+    # Use the median as the representative growth rate (more robust to outliers)
+    growth_rate = float(median_sales_trend)
+    
+    # Label based on growth rate thresholds
+    if growth_rate > 10.0:
+        market_direction = "Growing"
+    elif growth_rate >= -10.0:
+        market_direction = "Stable"
     else:
-        market_direction = "declining"
+        market_direction = "Declining"
+    
+    # Store growth_rate for output
+    market_growth_rate = round(growth_rate, 2)
 
     validation_blocks = [
         demand_result.get("validation", {}),
@@ -161,33 +197,57 @@ def build_report(
         revenue_result.get("validation", {}),
         bsr_result.get("validation", {}),
     ]
+    columns_used = []
+    for block in validation_blocks:
+        cols = block.get("columns_used") or block.get("columns_used", [])
+        if isinstance(cols, list):
+            columns_used.extend(cols)
+    columns_used = list(dict.fromkeys(columns_used))
     rows_before = sum(int(v.get("rows_before_cleaning", 0) or 0) for v in validation_blocks)
     rows_after = sum(int(v.get("rows_after_cleaning", 0) or 0) for v in validation_blocks)
-    metric_availability = (
-        len([s for s in [demand_score, sales_score, revenue_score, bsr_score] if s is not None]) / 4.0
-    )
-    nan_percentage = (1.0 - (rows_after / rows_before)) if rows_before > 0 else 1.0
-    signal_consistency = 1.0 - (abs(sales_score - revenue_score) / 100.0)
+    
+    # Calculate 5-component data reliability score
+    # 1. Column completeness: percentage of required columns present
+    total_expected_columns = 4  # demand, sales, revenue, bsr
+    columns_present = len([s for s in [demand_score, sales_score, revenue_score, bsr_score] if s is not None])
+    column_completeness_score = (columns_present / total_expected_columns) * 100.0 if total_expected_columns > 0 else 0.0
+    
+    # 2. Non-null score: percentage of rows that are not null
+    non_null_score = (rows_after / rows_before) * 100.0 if rows_before > 0 else 0.0
+    
+    # 3. Row sufficiency: check if we have enough rows for reliable analysis (minimum 100 rows)
+    row_sufficiency_score = min(100.0, (rows_after / 100.0) * 100.0) if rows_after >= 0 else 0.0
+    
+    # 4. Duplicate quality: check for duplicate ASINs (assume no duplicates for now, score 100)
+    duplicate_quality_score = 100.0  # Placeholder - would need actual duplicate detection
+    
+    # 5. Valid value score: percentage of valid (non-NaN, non-infinite) values
+    valid_value_score = non_null_score  # Simplified - assumes cleaned data has valid values
+    
     reliability_score = round(
         max(
             0.0,
             min(
                 100.0,
                 (
-                    (1.0 - nan_percentage) * 0.4
-                    + signal_consistency * 0.3
-                    + metric_availability * 0.3
+                    column_completeness_score * _DATA_RELIABILITY_WEIGHTS["column_completeness"]
+                    + non_null_score * _DATA_RELIABILITY_WEIGHTS["non_null"]
+                    + row_sufficiency_score * _DATA_RELIABILITY_WEIGHTS["row_sufficiency"]
+                    + duplicate_quality_score * _DATA_RELIABILITY_WEIGHTS["duplicate_quality"]
+                    + valid_value_score * _DATA_RELIABILITY_WEIGHTS["valid_value"]
                 )
-                * 100.0,
             ),
         ),
         2,
     )
 
-    if sales_direction == "Decelerating":
+    if demand_score < 30 and bsr_score < 40:
         risks.append(
-            "Market sales momentum is decelerating — overall brand-level "
-            "sales growth is slowing."
+            "Low demand combined with low BSR efficiency indicates weak market monetization and should be treated as a risk, not an opportunity."
+        )
+    if sales_direction == "Declining":
+        risks.append(
+            "Market sales momentum is declining — median brand sales trend is negative."
         )
     if revenue_direction == "Declining":
         risks.append(
@@ -222,14 +282,15 @@ def build_report(
     report_sections = {
         "executive_summary": {
             "composite_market_health_score": composite_score,
-            "engines_successful": len(engines_ok),
-            "engines_total": 4,
+            "sections_generated": len(sections_generated),
+            "sections_skipped": len(sections_skipped),
             "deterministic_note": "Generated from deterministic engine outputs only.",
         },
         "market_health": {
             "overall_score": composite_score,
             "data_reliability_score": reliability_score,
             "market_direction": market_direction,
+            "market_growth_rate": market_growth_rate,
             "sales_direction": sales_direction,
             "revenue_direction": revenue_direction,
             "demand_direction_signal": demand_phase,
@@ -241,6 +302,9 @@ def build_report(
             "demand_score": round(demand_score, 2),
             "top_demand_keywords": top_demand_keywords[:top_n],
             "top_demand_products": top_demand_products[:top_n],
+            "keyword_classification_note": (
+                "Broader category keywords are grouped separately and should not be interpreted as bamboo-specific demand."
+            ),
             "deterministic_interpretation": (
                 "Market demand is strong" if demand_score >= 70 else
                 "Market demand is stable" if demand_score >= 45 else
@@ -252,7 +316,7 @@ def build_report(
             "fastest_growing_brands": fastest_brands[:top_n],
             "declining_brands": declining_brands[:top_n],
             "deterministic_interpretation": (
-                "Growth momentum strengthening" if sales_direction == "Accelerating" else
+                "Growth momentum strengthening" if sales_direction == "Growing" else
                 "Growth momentum stable" if sales_direction == "Stable" else
                 "Growth momentum weakening"
             ),
@@ -312,20 +376,23 @@ def build_report(
     elapsed = round(time.time() - t0, 3)
 
     report = {
-        "status": "success",
+        "status": report_status,
         "metric_name": "Market Intelligence Report",
         "summary": (
             f"Composite market health score: {composite_score}/100. "
-            f"{len(engines_ok)}/4 engines ran successfully. "
+            f"{len(sections_generated)} section(s) generated, {len(sections_skipped)} skipped. "
             f"Market covers {total_brands} brands and {total_products} products."
         ),
         "datasets_used": ["blackbox", "magnet"],
-        "columns_used": [],
+        "columns_used": columns_used,
         "formula_used": (
-            "Composite Score = mean(Demand Strength, Sales Momentum, "
-            "Revenue Momentum, BSR Efficiency)"
+            "Overall Market Score = weighted average of successful module scores; "
+            "failed modules excluded and remaining weights re-normalized."
         ),
         "results": {
+            "sections_generated": sections_generated,
+            "sections_skipped": sections_skipped,
+            "warnings": report_warnings,
             # Requested structured sections
             **report_sections,
             # Backward-compatible keys
@@ -343,6 +410,7 @@ def build_report(
                 "sales_direction":         sales_direction,
                 "revenue_direction":       revenue_direction,
                 "market_direction":        market_direction,
+                "market_growth_rate":       market_growth_rate,
                 "data_reliability_score":  reliability_score,
             },
             "rankings": {
@@ -370,16 +438,17 @@ def build_report(
             "markdown_report": md,
         },
         "validation": {
-            "status": "passed",
-            "engines_successful": engines_ok,
-            "engines_total": 4,
+            "status": "passed" if report_status != "error" else "partial",
+            "sections_generated": sections_generated,
+            "sections_skipped": sections_skipped,
+            "warnings": report_warnings,
         },
         "processing_time_seconds": elapsed,
     }
     logger.info(
-        "Market report built: composite=%s, engines_ok=%s, opportunities=%s, risks=%s, elapsed=%ss",
+        "Market report built: composite=%s, sections=%s, opportunities=%s, risks=%s, elapsed=%ss",
         composite_score,
-        len(engines_ok),
+        len(sections_generated),
         len(opportunities),
         len(risks),
         elapsed,
@@ -435,7 +504,9 @@ def _build_markdown(
     # Top keywords
     if top_demand_keywords:
         lines += [
-            "## Top Demand Keywords",
+            "## Broader Category Demand Keywords",
+            "",
+            "> Generic keywords represent broader category demand and should not be interpreted as bamboo-specific demand.",
             "",
             "| Keyword | Search Volume | Keyword Sales |",
             "|---------|--------------|---------------|",
@@ -530,3 +601,16 @@ def _get(d: Dict, *keys: str) -> Any:
             return None
         d = d.get(k)
     return d
+
+
+def _module_score(result: Optional[Dict], key: str) -> Optional[float]:
+    """Extract a module score from engine results dict."""
+    if not result or result.get("status") not in ("success", "warning"):
+        return None
+    val = _get(result, "results", key)
+    if val is None:
+        return None
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return None

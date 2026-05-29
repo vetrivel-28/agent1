@@ -2,9 +2,8 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '../services/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/Card';
 import { DataTable, type Column } from '../components/tables/DataTable';
-import { adaptiveDomain, formatCurrency, formatNumber } from '../utils/cn';
+import { formatCurrency, formatNumber } from '../utils/cn';
 import { AlertCircle, Loader2 } from 'lucide-react';
-import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { motion } from 'framer-motion';
 
 export default function BsrEfficiency() {
@@ -44,26 +43,14 @@ export default function BsrEfficiency() {
     { header: "Efficiency", accessorKey: "efficiency_score", cell: (r) => r.efficiency_score != null ? `${r.efficiency_score.toFixed(1)}/100` : '—' },
   ];
 
-  const chartData = [
-    ...efficient.map((p: any) => ({ ...p, type: 'efficient' })),
-    ...inefficient.map((p: any) => ({ ...p, type: 'inefficient' }))
-  ];
-  const bsrDomain = adaptiveDomain(chartData.map((d: any) => Number(d.bsr || 0)), 0.02, 0.98);
-  const revenueDomain = adaptiveDomain(chartData.map((d: any) => Number(d.revenue || 0)), 0.02, 0.98);
-
-  const CustomTooltip = ({ active, payload }: any) => {
-    if (active && payload && payload.length) {
-      const data = payload[0].payload;
-      return (
-        <div className="bg-card border border-border p-3 rounded-lg shadow-sm">
-          <p className="font-semibold text-sm max-w-xs truncate mb-2">{data.title || data.asin}</p>
-          <p className="text-sm">BSR: {data.bsr != null ? formatNumber(data.bsr) : '—'}</p>
-          <p className="text-sm">Revenue: {data.revenue != null ? formatCurrency(data.revenue) : '—'}</p>
-          <p className="text-sm">Score: <span className={data.type === 'efficient' ? 'text-success' : 'text-danger'}>{data.efficiency_score?.toFixed(1)}</span></p>
-        </div>
-      );
-    }
-    return null;
+  const summary = results.quadrant_summary || {
+    rank_threshold_bsr: 0,
+    revenue_threshold: 0,
+    valid_products_count: 0,
+    market_leaders_count: 0,
+    optimization_gaps_count: 0,
+    hidden_winners_count: 0,
+    weak_listings_count: 0
   };
 
   return (
@@ -78,40 +65,57 @@ export default function BsrEfficiency() {
       <div className="grid grid-cols-1 gap-6">
         <Card>
           <CardHeader>
-            <CardTitle>Rank vs Revenue Frontier</CardTitle>
-            <CardDescription>Mapping market efficiency. Quadrant outliers indicate strategic opportunities.</CardDescription>
+            <CardTitle>Rank-to-Revenue Opportunity Map</CardTitle>
+            <CardDescription>Shows where rank visibility is successfully converting into revenue, and where optimization gaps may exist.</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="h-[400px] w-full mt-4">
-              <ResponsiveContainer width="100%" height="100%">
-                <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis 
-                    type="number" 
-                    dataKey="bsr" 
-                    name="Best Sellers Rank"
-                    domain={bsrDomain}
-                    reversed
-                    tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }} 
-                    tickFormatter={(val) => formatNumber(val)}
-                  />
-                  <YAxis 
-                    type="number" 
-                    dataKey="revenue" 
-                    name="Revenue"
-                    domain={revenueDomain}
-                    tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 12 }}
-                    tickFormatter={(val) => `$${formatNumber(val)}`}
-                  />
-                  <Tooltip content={<CustomTooltip />} cursor={{strokeDasharray: '3 3'}} />
-                  <Scatter data={chartData}>
-                    {chartData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.type === 'efficient' ? '#10b981' : '#ef4444'} />
-                    ))}
-                  </Scatter>
-                </ScatterChart>
-              </ResponsiveContainer>
-            </div>
+            {summary.valid_products_count > 0 ? (
+              <>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-4xl mx-auto mt-2">
+                  <div className="p-6 rounded-xl border bg-emerald-500/10 border-emerald-500/20 flex flex-col items-center justify-center text-center shadow-sm">
+                    <h3 className="font-bold text-lg text-emerald-600 dark:text-emerald-400 mb-1">Market Leaders</h3>
+                    <p className="text-sm text-muted-foreground mb-4">Strong Rank + Strong Revenue</p>
+                    <div className="text-4xl font-bold text-foreground">{summary.market_leaders_count}</div>
+                    <p className="text-xs text-muted-foreground mt-1 uppercase tracking-widest font-medium">Products</p>
+                  </div>
+
+                  <div className="p-6 rounded-xl border bg-amber-500/10 border-amber-500/20 flex flex-col items-center justify-center text-center shadow-sm">
+                    <h3 className="font-bold text-lg text-amber-600 dark:text-amber-400 mb-1">Optimization Gaps</h3>
+                    <p className="text-sm text-muted-foreground mb-4">Strong Rank + Weak Revenue</p>
+                    <div className="text-4xl font-bold text-foreground">{summary.optimization_gaps_count}</div>
+                    <p className="text-xs text-muted-foreground mt-1 uppercase tracking-widest font-medium">Products</p>
+                  </div>
+
+                  <div className="p-6 rounded-xl border bg-blue-500/10 border-blue-500/20 flex flex-col items-center justify-center text-center shadow-sm">
+                    <h3 className="font-bold text-lg text-blue-600 dark:text-blue-400 mb-1">Hidden Winners</h3>
+                    <p className="text-sm text-muted-foreground mb-4">Weaker Rank + Strong Revenue</p>
+                    <div className="text-4xl font-bold text-foreground">{summary.hidden_winners_count}</div>
+                    <p className="text-xs text-muted-foreground mt-1 uppercase tracking-widest font-medium">Products</p>
+                  </div>
+
+                  <div className="p-6 rounded-xl border bg-slate-500/10 border-slate-500/20 flex flex-col items-center justify-center text-center shadow-sm">
+                    <h3 className="font-bold text-lg text-slate-600 dark:text-slate-400 mb-1">Weak Listings</h3>
+                    <p className="text-sm text-muted-foreground mb-4">Weaker Rank + Weak Revenue</p>
+                    <div className="text-4xl font-bold text-foreground">{summary.weak_listings_count}</div>
+                    <p className="text-xs text-muted-foreground mt-1 uppercase tracking-widest font-medium">Products</p>
+                  </div>
+                </div>
+                
+                <div className="mt-6 flex flex-col sm:flex-row justify-center items-center gap-4 text-sm text-muted-foreground border-t pt-4 max-w-4xl mx-auto">
+                  <div><span className="font-medium text-foreground">Valid products used:</span> {summary.valid_products_count}</div>
+                  <div className="hidden sm:block">•</div>
+                  <div><span className="font-medium text-foreground">Strong rank threshold:</span> BSR ≤ {formatNumber(summary.rank_threshold_bsr)}</div>
+                  <div className="hidden sm:block">•</div>
+                  <div><span className="font-medium text-foreground">Strong revenue threshold:</span> Revenue ≥ {formatCurrency(summary.revenue_threshold)}</div>
+                </div>
+              </>
+            ) : (
+              <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
+                <AlertCircle className="w-8 h-8 mb-2 opacity-50" />
+                <p>Insufficient valid product data</p>
+                <p className="text-sm opacity-80 mt-1">Check that products have numeric BSR and Revenue values &gt; 0.</p>
+              </div>
+            )}
           </CardContent>
         </Card>
 

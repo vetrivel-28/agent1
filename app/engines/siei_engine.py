@@ -10,6 +10,7 @@ from app.utils.column_mapper import find_column
 from app.utils.logger import get_logger
 from app.utils.normalization import safe_log_normalize
 from app.utils.numeric_cleaner import clean_numeric_series
+from app.utils.validation_helpers import build_validation
 
 logger = get_logger("siei_engine")
 
@@ -71,11 +72,14 @@ def run(magnet_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
         work["keyword"] = magnet_df[keyword_col].astype(str)
 
     click_nonzero = work["click_share"].replace(0, np.nan)
-    work["siei"] = work["conv_share"] / click_nonzero
-    work["siei"] = work["siei"].replace([np.inf, -np.inf], np.nan)
-    work["siei_rank_score"] = safe_log_normalize(work["siei"])
+    work["raw_siei"] = work["conv_share"] / click_nonzero
+    work["raw_siei"] = work["raw_siei"].replace([np.inf, -np.inf], np.nan)
+    work["siei"] = work["raw_siei"]
+    work["siei_percentile_score"] = work["raw_siei"].rank(pct=True, method="average") * 100.0
+    work["siei_percentile_score"] = work["siei_percentile_score"].clip(0.0, 100.0)
+    work["siei_rank_score"] = work["siei_percentile_score"]
 
-    valid = work.dropna(subset=["siei"])
+    valid = work.dropna(subset=["raw_siei"])
     if valid.empty:
         return {
             "status": "warning",
@@ -135,7 +139,11 @@ def run(magnet_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
         "summary": "SIEI computed with safe division and percentile-based ranking.",
         "datasets_used": ["magnet"],
         "columns_used": [click_col, conv_col] + ([keyword_col] if keyword_col else []),
-        "formula_used": "SIEI = ABA Total Conv. Share / ABA Total Click Share.",
+        "formula_used": (
+            "SIEI = ABA Total Conversion Share / ABA Total Click Share. "
+            "Rows with missing or zero click share are skipped. "
+            "SIEI percentile score ranks keywords relative to other valid keywords."
+        ),
         "results": {
             "siei_percentile_20": round(p20, 6),
             "siei_percentile_80": round(p80, 6),
@@ -145,11 +153,14 @@ def run(magnet_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
             "market_friction_keywords": market_friction,
             "click_heavy_low_conversion_keywords": click_heavy_low_conversion,
         },
-        "validation": {
-            "rows_before_cleaning": rows_before_cleaning,
-            "rows_after_cleaning": rows_after_cleaning,
-            "rows_skipped": rows_skipped,
-            "numeric_columns_cleaned": [click_col, conv_col],
-        },
+        "validation": build_validation(
+            rows_before_cleaning=rows_before_cleaning,
+            rows_after_cleaning=rows_after_cleaning,
+            columns_used=[click_col, conv_col] + ([keyword_col] if keyword_col else []),
+            valid_rows_by_metric={"siei": rows_after_cleaning},
+            skipped_rows_by_metric={"zero_click_share": rows_skipped},
+            warnings=[],
+            numeric_columns_cleaned=[click_col, conv_col],
+        ),
         "processing_time_seconds": round(time.time() - t0, 3),
     }

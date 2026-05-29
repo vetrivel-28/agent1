@@ -44,7 +44,11 @@ export default function IntentEfficiency() {
     )},
     { header: "Click Share", accessorKey: "click_share", cell: (r) => r.click_share != null ? formatShare(Number(r.click_share)) : '—' },
     { header: "Conv Share", accessorKey: "conv_share", cell: (r) => r.conv_share != null ? formatShare(Number(r.conv_share)) : '—' },
-    { header: "SIEI Score", accessorKey: "siei_rank_score", cell: (r) => r.siei_rank_score != null ? `${Number(r.siei_rank_score).toFixed(1)}/100` : '—' },
+    { header: "Raw SIEI", accessorKey: "raw_siei", cell: (r) => r.raw_siei != null ? Number(r.raw_siei).toFixed(2) : (r.siei != null ? Number(r.siei).toFixed(2) : '—') },
+    { header: "Percentile Score", accessorKey: "siei_percentile_score", cell: (r) => {
+      const v = r.siei_percentile_score ?? r.siei_rank_score;
+      return v != null ? `${Number(v).toFixed(1)}/100` : '—';
+    }},
   ];
 
   const chartData = [

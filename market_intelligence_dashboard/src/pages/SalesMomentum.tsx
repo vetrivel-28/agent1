@@ -21,13 +21,28 @@ export default function SalesMomentum() {
     );
   }
 
-  if (isError || !data || data.status !== 'success') {
+  if (isError || !data || (data.status !== 'success' && data.status !== 'warning')) {
     return (
       <Card className="border-danger/50 bg-danger/5 mt-10">
         <CardContent className="p-8 flex flex-col items-center">
           <AlertCircle className="w-12 h-12 text-danger mb-4" />
           <h2 className="text-xl font-bold text-danger mb-2">Analysis Failed</h2>
           <p className="text-danger/80">Dataset processing failed or missing.</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (data.status === 'warning') {
+    return (
+      <Card className="border-warning/50 bg-warning/5 mt-10">
+        <CardContent className="p-8 flex flex-col items-center text-center">
+          <AlertCircle className="w-12 h-12 text-warning mb-4" />
+          <h2 className="text-xl font-bold mb-2">Partial Data</h2>
+          <p className="text-muted-foreground">{data.message || data.summary}</p>
+          {data.validation?.required_columns && (
+            <p className="text-sm mt-2">Required: {data.validation.required_columns.join(', ')}</p>
+          )}
         </CardContent>
       </Card>
     );

@@ -56,6 +56,7 @@ from app.services.report_builder import build_report
 from app.utils.dataframe_checks import is_empty_dataframe
 from app.utils.logger import get_logger
 from app.validators.dataset_validator import validate_csv_bytes
+from app.utils.niche_alignment import check_niche_alignment
 
 logger = get_logger("routes")
 router = APIRouter(prefix="/api/v1", tags=["Market Intelligence"])
@@ -205,12 +206,18 @@ async def upload_datasets(
         overall = "success"
         message = "All provided datasets uploaded and validated successfully."
 
+    alignment_warnings = check_niche_alignment(
+        registry.get_magnet(),
+        registry.get_blackbox(),
+    )
+
     return {
         "status": overall,
         "message": message,
         "datasets_loaded": datasets_loaded,
         "rows_loaded": rows_loaded,
         "errors": errors if errors else None,
+        "alignment_warnings": alignment_warnings if alignment_warnings else None,
     }
 
 
@@ -235,11 +242,14 @@ def demand_strength(top_n: int = 10):
 
     magnet_df = registry.get_magnet()
     blackbox_df = registry.get_blackbox()
+    kc_df = registry.get_keyword_classification()
 
     if is_empty_dataframe(magnet_df) and is_empty_dataframe(blackbox_df):
         return _datasets_not_loaded("Demand Strength", "magnet and/or blackbox")
 
-    result = demand_engine.run(magnet_df, blackbox_df, top_n=top_n)
+    result = demand_engine.run(
+        magnet_df, blackbox_df, top_n=top_n, keyword_classification_df=kc_df
+    )
     logger.info(
         f"Demand Strength complete — status={result['status']}, "
         f"score={result.get('results', {}).get('overall_demand_score', 'n/a')}"
@@ -338,8 +348,9 @@ def bsr_efficiency(top_n: int = 10):
     description=(
         "Measures how fast market demand is accelerating.\n\n"
         "**Datasets**: Magnet Keyword + BlackBox Products\n\n"
-        "**Formula**: `Demand Velocity = (Normalized Sales Trend + Normalized Search Trend + "
-        "Normalized YoY Growth + Normalized Revenue Trend) / 4` with min-max normalization.\n\n"
+        "**Formula**: Demand Velocity = average of available normalized signals: Search Trend, Sales Trend, YoY Growth, and Revenue Trend. "
+        "Each signal is cleaned, smoothed, log-scaled, and normalized; missing signals are excluded from the average. "
+        "This is a market-level score, not a row-wise join.\n\n"
         "**Returns**: velocity score, market phase, strongest/weakest growth signals, validation stats."
     ),
 )
@@ -359,7 +370,7 @@ def demand_velocity(top_n: int = 10):
     description=(
         "Measures alignment between search growth and sales growth.\n\n"
         "**Datasets**: Magnet Keyword + BlackBox Products\n\n"
-        "**Formula**: `Search Momentum = Normalized Search Trend * Normalized Sales Trend`.\n\n"
+        "**Formula**: Search Momentum = weighted market-level score using Magnet keyword search trend, Blackbox product sales trend, and Blackbox sales volume. Magnet and Blackbox are NOT row-wise joined.\n\n"
         "**Returns**: momentum alignment, healthy keywords, weak-conversion keywords, strongest/weakest products."
     ),
 )
@@ -436,7 +447,8 @@ def whitespace_opportunities(top_n: int = 15):
     magnet_df = registry.get_magnet()
     if is_empty_dataframe(magnet_df):
         return _datasets_not_loaded("Whitespace Opportunity", "magnet")
-    result = whitespace_engine.run(magnet_df, None, top_n=top_n)
+    blackbox_df = registry.get_blackbox()
+    result = whitespace_engine.run(magnet_df, blackbox_df, top_n=top_n)
     logger.info(
         f"Whitespace Opportunity complete — status={result['status']}, "
         f"score={result.get('results', {}).get('overall_whitespace_score', 'n/a')}"
@@ -633,13 +645,18 @@ def market_report(top_n: int = 10):
         return _datasets_not_loaded("Market Report", "blackbox")
 
     # Run all engines safely
-    demand_result = demand_engine.run(magnet_df, blackbox_df, top_n=top_n)
+    demand_result = demand_engine.run(
+        magnet_df, blackbox_df, top_n=top_n, keyword_classification_df=kc_df
+    )
     sales_result = sales_momentum_engine.run(blackbox_df, top_n=top_n)
     revenue_result = revenue_momentum_engine.run(blackbox_df, top_n=top_n)
     bsr_result = bsr_efficiency_engine.run(blackbox_df, top_n=top_n)
 
     siei_result = siei_engine.run(magnet_df, top_n=top_n) if not is_empty_dataframe(magnet_df) else None
-    whitespace_result = whitespace_engine.run(magnet_df, None, top_n=top_n) if not is_empty_dataframe(magnet_df) else None
+    whitespace_result = (
+        whitespace_engine.run(magnet_df, blackbox_df, top_n=top_n)
+        if not is_empty_dataframe(magnet_df) else None
+    )
     
     direct_comp_result = direct_competitor_engine.run(None, blackbox_df, top_n=top_n) if not is_empty_dataframe(blackbox_df) else None
     price_elasticity_result = price_elasticity_engine.run(None, blackbox_df) if not is_empty_dataframe(blackbox_df) else None
@@ -687,13 +704,18 @@ def market_report_pdf(top_n: int = 10):
     if is_empty_dataframe(blackbox_df):
         return _datasets_not_loaded("Market Report PDF", "blackbox")
 
-    demand_result = demand_engine.run(magnet_df, blackbox_df, top_n=top_n)
+    demand_result = demand_engine.run(
+        magnet_df, blackbox_df, top_n=top_n, keyword_classification_df=kc_df
+    )
     sales_result = sales_momentum_engine.run(blackbox_df, top_n=top_n)
     revenue_result = revenue_momentum_engine.run(blackbox_df, top_n=top_n)
     bsr_result = bsr_efficiency_engine.run(blackbox_df, top_n=top_n)
     
     siei_result = siei_engine.run(magnet_df, top_n=top_n) if not is_empty_dataframe(magnet_df) else None
-    whitespace_result = whitespace_engine.run(magnet_df, None, top_n=top_n) if not is_empty_dataframe(magnet_df) else None
+    whitespace_result = (
+        whitespace_engine.run(magnet_df, blackbox_df, top_n=top_n)
+        if not is_empty_dataframe(magnet_df) else None
+    )
     
     direct_comp_result = direct_competitor_engine.run(None, blackbox_df, top_n=top_n) if not is_empty_dataframe(blackbox_df) else None
     price_elasticity_result = price_elasticity_engine.run(None, blackbox_df) if not is_empty_dataframe(blackbox_df) else None

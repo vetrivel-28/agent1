@@ -66,9 +66,12 @@ export default function DashboardOverview() {
       <Card className="border-danger/50 bg-danger/5 max-w-2xl mx-auto mt-20">
         <CardContent className="p-8 flex flex-col items-center text-center">
           <AlertTriangle className="w-12 h-12 text-danger mb-4" />
-          <h2 className="text-xl font-bold text-danger mb-2">Engines Failed</h2>
+          <h2 className="text-xl font-bold text-danger mb-2">Could Not Load Market Report</h2>
           <p className="text-danger/80 mb-6">
-            {(error as any)?.response?.data?.detail?.[0]?.msg || (error as any)?.message || "Failed to generate market report."}
+            Could not connect to backend API. Please check backend server, API URL, route availability, and CORS configuration.
+            {(error as any)?.response?.data?.detail?.[0]?.msg && (
+              <span className="block mt-2 text-sm">Details: {(error as any).response.data.detail[0].msg}</span>
+            )}
           </p>
           <Button variant="outline" onClick={() => window.location.reload()}>Retry Analysis</Button>
         </CardContent>
@@ -84,6 +87,7 @@ export default function DashboardOverview() {
   const opportunitySignals = results.opportunity_signals || {};
   const riskSignals = results.risk_signals || {};
   const topKeywords = results.rankings?.top_demand_keywords || [];
+  const reportPlaceholder = 'Run analysis to generate dashboard summary';
 
   return (
     <motion.div 
@@ -107,34 +111,34 @@ export default function DashboardOverview() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
         <KPICard 
           title="Demand Strength"
-          value={engineScores.demand_strength?.toFixed(1) || '0.0'}
+          value={engineScores.demand_strength != null ? engineScores.demand_strength.toFixed(1) : reportPlaceholder}
           trend={0}
           icon={<Activity className="w-5 h-5" />}
-          status={engineScores.demand_strength > 60 ? 'success' : 'warning'}
+          status={engineScores.demand_strength != null ? (engineScores.demand_strength > 60 ? 'success' : 'warning') : 'neutral'}
         />
         <KPICard 
           title="Market Direction"
-          value={marketHealth.market_direction || marketOverview.market_direction || 'Unknown'}
+          value={marketHealth.market_direction || marketOverview.market_direction || reportPlaceholder}
           icon={<TrendingUp className="w-5 h-5" />}
           status={
             (marketHealth.market_direction || marketOverview.market_direction) === 'growing'
               ? 'success'
               : (marketHealth.market_direction || marketOverview.market_direction) === 'stable'
               ? 'warning'
-              : 'danger'
+              : (marketHealth.market_direction || marketOverview.market_direction) ? 'danger' : 'neutral'
           }
         />
         <KPICard 
           title="Market Revenue"
-          value={formatCurrency(marketOverview.total_market_revenue || 0)}
+          value={marketOverview.total_market_revenue != null ? formatCurrency(marketOverview.total_market_revenue) : reportPlaceholder}
           icon={<DollarSign className="w-5 h-5" />}
           status="neutral"
         />
         <KPICard 
           title="Data Reliability"
-          value={`${(marketHealth.data_reliability_score ?? marketOverview.data_reliability_score ?? 0).toFixed(1)}/100`}
+          value={marketOverview.data_reliability_score != null ? `${marketOverview.data_reliability_score.toFixed(1)}/100` : reportPlaceholder}
           icon={<Crosshair className="w-5 h-5" />}
-          status={(marketHealth.data_reliability_score ?? marketOverview.data_reliability_score ?? 0) > 60 ? 'success' : 'warning'}
+          status={marketOverview.data_reliability_score != null && marketOverview.data_reliability_score > 60 ? 'success' : marketOverview.data_reliability_score != null ? 'warning' : 'neutral'}
         />
       </div>
 

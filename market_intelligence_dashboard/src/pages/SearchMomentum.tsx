@@ -34,13 +34,16 @@ export default function SearchMomentum() {
 
   const results = data.results;
   const healthy = results.healthy_keywords || [];
-  const weak = results.weak_conversion_keywords || [];
+  const weak = results.weak_momentum_keywords || [];
 
   const columns: Column<any>[] = [
     { header: "Keyword", accessorKey: "keyword", cell: (r) => (
       <div className="font-semibold">{r.keyword || '—'}</div>
     )},
-    { header: "Trend Strength", accessorKey: "momentum_score", cell: (r) => r.momentum_score != null ? `${r.momentum_score.toFixed(1)}/100` : '—' },
+    { header: "Search Trend", accessorKey: "norm_search_trend", cell: (r) => r.norm_search_trend != null ? r.norm_search_trend.toFixed(1) : '—' },
+    { header: "Market Sales Trend", accessorKey: "market_avg_sales_trend", cell: (r) => r.market_avg_sales_trend != null ? r.market_avg_sales_trend.toFixed(1) : '—' },
+    { header: "Market Sales Vol", accessorKey: "market_avg_sales_volume", cell: (r) => r.market_avg_sales_volume != null ? r.market_avg_sales_volume.toFixed(1) : '—' },
+    { header: "Momentum Score", accessorKey: "momentum_score", cell: (r) => r.momentum_score != null ? `${r.momentum_score.toFixed(1)}/100` : '—' },
     { header: "Trend Category", accessorKey: "momentum_score", cell: (r) => growthLabelFromScore(r.momentum_score ?? 0) },
   ];
 
@@ -53,11 +56,11 @@ export default function SearchMomentum() {
         </p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         <Card>
           <CardHeader>
-            <CardTitle>Healthy Growth Keywords</CardTitle>
-            <CardDescription>Search traffic rises AND correlates with sales.</CardDescription>
+            <CardTitle>Strong Search Momentum Keywords</CardTitle>
+            <CardDescription>Keywords with stronger search trend within a market where average product sales signals are supportive.</CardDescription>
           </CardHeader>
           <CardContent>
             <DataTable columns={columns} data={healthy} pageSize={10} />
@@ -66,8 +69,8 @@ export default function SearchMomentum() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Weak Conversion Keywords</CardTitle>
-            <CardDescription>High search growth but failing to translate into sales.</CardDescription>
+            <CardTitle>Weak Search Momentum Keywords</CardTitle>
+            <CardDescription>Keywords with weaker search momentum compared with market-level sales support.</CardDescription>
           </CardHeader>
           <CardContent>
             <DataTable columns={columns} data={weak} pageSize={10} />

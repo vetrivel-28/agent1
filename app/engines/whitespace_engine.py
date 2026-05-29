@@ -21,8 +21,26 @@ from app.utils.column_mapper import find_column
 from app.utils.logger import get_logger
 from app.utils.normalization import min_max_normalize, percentile_clip, safe_log_normalize
 from app.utils.numeric_cleaner import clean_numeric_series
+from app.utils.text_matching import title_token_density
 
 logger = get_logger("whitespace_engine")
+
+# Configurable weights for whitespace score calculation
+_WHITESPACE_WEIGHTS_WITH_COMPETITION = {
+    "search_volume": 0.4,
+    "title_density": 0.3,
+    "sponsored_competition": 0.15,
+    "organic_competition": 0.15,
+}
+_WHITESPACE_WEIGHTS_WITHOUT_COMPETITION = {
+    "search_volume": 0.5,
+    "title_density": 0.5,
+}
+
+# Configurable thresholds for opportunity classification
+_OPPORTUNITY_LOW_THRESHOLD = 30
+_OPPORTUNITY_MODERATE_THRESHOLD = 60
+_OPPORTUNITY_HIGH_THRESHOLD = 80
 
 # ---------------------------------------------------------------------------
 # Column candidate lists
@@ -36,6 +54,9 @@ _SEARCH_VOL_CANDIDATES = [
 _TITLE_DENSITY_CANDIDATES = [
     "Title Density", "title density", "TitleDensity",
 ]
+_TITLE_CANDIDATES = ["Title", "title", "Product Title"]
+_SPONSORED_COMP_CANDIDATES = ["Sponsored Competition", "sponsored competition"]
+_ORGANIC_COMP_CANDIDATES = ["Organic Competition", "organic competition"]
 
 
 # ---------------------------------------------------------------------------
@@ -146,24 +167,43 @@ def run(
     df["_search_volume_clean"] = sv_clean
     numeric_cols_cleaned.append(search_vol_col)
 
-    # Clean Title Density (if available)
-    td_clean = None
-    if title_density_col:
-        td_clean, td_stats = clean_numeric_series(
-            df[title_density_col], title_density_col
-        )
-        logger.info(
-            f"Title Density '{title_density_col}': "
-            f"original={td_stats['original_count']}, "
-            f"cleaned={td_stats['cleaned_count']}, "
-            f"nan={td_stats['nan_introduced']}"
-        )
-        df["_title_density_clean"] = td_clean
-        numeric_cols_cleaned.append(title_density_col)
-    else:
-        # Assume no competition if column missing
-        logger.info("Title Density not found; assuming 0 density for all keywords.")
-        df["_title_density_clean"] = 0.0
+    title_col_bb = None
+    products_for_title_density = 0
+    title_column_found = False
+    if blackbox_df is not None and not blackbox_df.empty:
+        title_col_bb = find_column(blackbox_df, _TITLE_CANDIDATES)
+        if title_col_bb:
+            title_column_found = True
+            products_for_title_density = len(blackbox_df)
+            titles = blackbox_df[title_col_bb].astype(str).tolist()
+
+            def _avg_title_density(kw: str) -> float:
+                if not titles:
+                    return 0.0
+                densities = [title_token_density(kw, t) for t in titles[:500]]
+                return float(np.mean(densities)) if densities else 0.0
+
+            kw_source = keyword_col if keyword_col else search_vol_col
+            if keyword_col:
+                df["_title_density_clean"] = df[keyword_col].astype(str).apply(_avg_title_density) * 100.0
+            else:
+                df["_title_density_clean"] = 0.0
+            logger.info("Title density computed via token match against BlackBox product titles.")
+    if "_title_density_clean" not in df.columns:
+        if title_density_col:
+            td_clean, td_stats = clean_numeric_series(
+                df[title_density_col], title_density_col
+            )
+            logger.info(
+                f"Title Density '{title_density_col}': "
+                f"original={td_stats['original_count']}, "
+                f"cleaned={td_stats['cleaned_count']}"
+            )
+            df["_title_density_clean"] = td_clean
+            numeric_cols_cleaned.append(title_density_col)
+        else:
+            logger.info("Title Density not found; assuming 0 density for all keywords.")
+            df["_title_density_clean"] = 0.0
 
     # -----------------------------------------------------------------------
     # 4. Filter rows with valid Search Volume
@@ -212,14 +252,40 @@ def run(
     td_norm = min_max_normalize(df_valid["_title_density_clean"])
     logger.info(f"Title Density normalized: min={td_norm.min():.2f}, max={td_norm.max():.2f}")
 
+    sponsored_col = find_column(magnet_df, _SPONSORED_COMP_CANDIDATES)
+    organic_col = find_column(magnet_df, _ORGANIC_COMP_CANDIDATES)
+    has_competition = sponsored_col is not None or organic_col is not None
+
+    inv_td = 100.0 - td_norm
+    if sponsored_col:
+        sp_clean, _ = clean_numeric_series(df_valid[sponsored_col], sponsored_col)
+        inv_sp = 100.0 - min_max_normalize(sp_clean)
+        numeric_cols_cleaned.append(sponsored_col)
+    else:
+        inv_sp = None
+    if organic_col:
+        og_clean, _ = clean_numeric_series(df_valid[organic_col], organic_col)
+        inv_og = 100.0 - min_max_normalize(og_clean)
+        numeric_cols_cleaned.append(organic_col)
+    else:
+        inv_og = None
+
     # -----------------------------------------------------------------------
     # 7. Calculate Whitespace Score
     # -----------------------------------------------------------------------
-    # Whitespace = Search Volume × (1 - Title Density)
-    # High search volume + low title density = high whitespace (opportunity)
-    df_valid["_whitespace_score"] = sv_norm * (100.0 - td_norm) / 100.0
+    if has_competition and inv_sp is not None and inv_og is not None:
+        df_valid["_whitespace_score"] = (
+            sv_norm * _WHITESPACE_WEIGHTS_WITH_COMPETITION["search_volume"]
+            + inv_td * _WHITESPACE_WEIGHTS_WITH_COMPETITION["title_density"]
+            + inv_sp * _WHITESPACE_WEIGHTS_WITH_COMPETITION["sponsored_competition"]
+            + inv_og * _WHITESPACE_WEIGHTS_WITH_COMPETITION["organic_competition"]
+        )
+    else:
+        df_valid["_whitespace_score"] = (
+            sv_norm * _WHITESPACE_WEIGHTS_WITHOUT_COMPETITION["search_volume"]
+            + inv_td * _WHITESPACE_WEIGHTS_WITHOUT_COMPETITION["title_density"]
+        )
 
-    # Re-normalize to 0-100 scale
     df_valid["_whitespace_score"] = min_max_normalize(df_valid["_whitespace_score"])
 
     overall_score = _format_score(df_valid["_whitespace_score"].mean())
@@ -230,11 +296,11 @@ def run(
     # -----------------------------------------------------------------------
     def classify_opportunity(score: float) -> str:
         """Deterministic opportunity label based on score."""
-        if score < 30:
+        if score < _OPPORTUNITY_LOW_THRESHOLD:
             return "low opportunity"
-        elif score < 60:
+        elif score < _OPPORTUNITY_MODERATE_THRESHOLD:
             return "moderate opportunity"
-        elif score < 80:
+        elif score < _OPPORTUNITY_HIGH_THRESHOLD:
             return "high opportunity"
         else:
             return "extreme opportunity"
@@ -242,6 +308,16 @@ def run(
     df_valid["_opportunity_label"] = df_valid["_whitespace_score"].apply(
         classify_opportunity
     )
+
+    zero_density_pct = float((df_valid["_title_density_clean"] == 0).mean() * 100.0)
+    whitespace_warnings: List[str] = []
+    if zero_density_pct > 80:
+        whitespace_warnings.append(
+            "Title density is zero for most keywords. Whitespace scores may be inflated."
+        )
+        df_valid.loc[
+            df_valid["_opportunity_label"] == "extreme opportunity", "_opportunity_label"
+        ] = "high opportunity"
 
     # -----------------------------------------------------------------------
     # 9. Extract top whitespace keywords
@@ -326,9 +402,10 @@ def run(
         "datasets_used": ["magnet"],
         "columns_used": [col for col in [search_vol_col, title_density_col] if col],
         "formula_used": (
-            "Whitespace Score = Norm(Search Volume) × (1 - Norm(Title Density)), "
-            "then normalized to 0-100. "
-            "Log scaling and percentile clipping applied before normalization."
+            "Whitespace Score uses normalized search volume and inverse title density "
+            "(token match vs product titles when BlackBox is available). "
+            "With competition columns: + inverse sponsored/organic competition. "
+            "Log scaling applied before normalization."
         ),
         "results": {
             "overall_whitespace_score": overall_score,
@@ -341,6 +418,11 @@ def run(
             "rows_before_cleaning": rows_before,
             "rows_after_cleaning": rows_after,
             "rows_skipped": rows_skipped,
+            "columns_used": [col for col in [search_vol_col, title_density_col, title_col_bb] if col],
+            "title_column_found": title_column_found,
+            "products_used_for_title_density": products_for_title_density,
+            "keywords_with_zero_density_pct": round(zero_density_pct, 2),
+            "warnings": whitespace_warnings,
             "numeric_columns_cleaned": numeric_cols_cleaned,
             "missing_columns": [],
         },

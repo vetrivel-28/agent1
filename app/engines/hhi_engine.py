@@ -9,6 +9,7 @@ import pandas as pd
 from app.utils.column_mapper import find_column
 from app.utils.logger import get_logger
 from app.utils.numeric_cleaner import clean_numeric_series
+from app.utils.validation_helpers import build_validation
 
 logger = get_logger("hhi_engine")
 
@@ -64,7 +65,9 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
     work = pd.DataFrame(index=blackbox_df.index)
     work["brand"] = blackbox_df[brand_col].astype(str).str.strip()
     work["revenue"], _ = clean_numeric_series(blackbox_df[revenue_col], revenue_col)
+    excluded_zero_revenue = int((work["revenue"].isna() | (work["revenue"] <= 0)).sum())  # noqa: before filter
     work = work.dropna(subset=["revenue"])
+    work = work[work["revenue"] > 0]
     work = work[work["brand"] != ""]
 
     if work.empty:
@@ -149,12 +152,13 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
         "datasets_used": ["blackbox"],
         "columns_used": [brand_col, revenue_col],
         "formula_used": (
-            "Total Revenue = SUM(Revenue); "
-            "Brand Market Share = Brand Revenue / Total Revenue; "
-            "HHI = SUM((market_share * 100)^2)."
+            "HHI = sum of squared brand revenue market shares. "
+            "Market share is calculated only from brands with valid ASIN Revenue."
         ),
         "results": {
+            "raw_hhi_index": round(hhi_score, 2),
             "hhi_score": round(hhi_score, 2),
+            "normalized_concentration_score": round(min(hhi_score / 100.0, 100.0), 2),
             "hhi_normalized_score": round(min(hhi_score / 100.0, 100.0), 2),
             "market_structure_type": structure,
             "top_brands_by_market_share": top_brands,
@@ -165,11 +169,13 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
                 "largest_brand_share_pct": round(float(brand_revenue["market_share_pct"].max()), 4),
             },
         },
-        "validation": {
-            "rows_before_cleaning": rows_before_cleaning,
-            "rows_after_cleaning": rows_after_cleaning,
-            "rows_skipped": rows_skipped,
-            "numeric_columns_cleaned": [revenue_col],
-        },
+        "validation": build_validation(
+            rows_before_cleaning=rows_before_cleaning,
+            rows_after_cleaning=rows_after_cleaning,
+            columns_used=[brand_col, revenue_col],
+            valid_rows_by_metric={"brand_revenue": rows_after_cleaning},
+            skipped_rows_by_metric={"zero_revenue": excluded_zero_revenue},
+            warnings=[],
+        ),
         "processing_time_seconds": round(time.time() - t0, 3),
     }
