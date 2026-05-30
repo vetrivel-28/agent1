@@ -288,11 +288,11 @@ def sales_momentum(top_n: int = 10):
     response_model=RevenueMomentumResult,
     summary="Revenue Momentum",
     description=(
-        "Measures revenue acceleration by brand.\n\n"
+        "Measures brand growth velocity and traction in the market.\n\n"
         "**Dataset**: BlackBox Products (grouped by Brand)\n\n"
-        "**Formula**: `Revenue Momentum = mean(norm_revenue, norm_revenue_trend)` "
-        "— revenue summed per brand, trend averaged, normalised to 0-100.\n\n"
-        "**Returns**: top revenue-growth brands, declining brands, total market revenue."
+        "**Formula**: `Revenue Momentum = 0.40×SalesVelocity + 0.30×ReviewVelocity + "
+        "0.20×BSRMomentum + 0.10×RevenueStrength`, normalized to 0-100.\n\n"
+        "**Returns**: momentum leaders, momentum laggards, component scores, market momentum direction."
     ),
 )
 def revenue_momentum(top_n: int = 10):

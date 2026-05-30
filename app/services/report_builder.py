@@ -177,8 +177,8 @@ def build_report(
     top_demand_products = _get(demand_result, "results", "top_demand_products") or []
     fastest_brands      = _get(sales_result,  "results", "fastest_growing_brands") or []
     declining_brands    = _get(sales_result,  "results", "declining_brands") or []
-    top_rev_brands      = _get(revenue_result,"results", "top_revenue_growth_brands") or []
-    declining_rev       = _get(revenue_result,"results", "declining_revenue_brands") or []
+    top_rev_brands      = _get(revenue_result,"results", "momentum_leaders") or _get(revenue_result,"results", "top_revenue_growth_brands") or []
+    declining_rev       = _get(revenue_result,"results", "momentum_laggards") or _get(revenue_result,"results", "declining_revenue_brands") or []
     efficient_products  = _get(bsr_result,    "results", "efficient_products") or []
     inefficient_products= _get(bsr_result,    "results", "inefficient_products") or []
 
@@ -228,7 +228,7 @@ def build_report(
     risks: List[str] = []
 
     sales_direction   = _get(sales_result,   "results", "market_momentum_direction") or ""
-    revenue_direction = _get(revenue_result, "results", "market_revenue_direction")  or ""
+    revenue_direction = _get(revenue_result, "results", "market_momentum_direction") or _get(revenue_result, "results", "market_revenue_direction")  or ""
     demand_phase = _get(demand_result, "results", "interpretation") or _get(demand_result, "summary") or ""
 
     direction_score = (sales_score * 0.4) + (revenue_score * 0.4) + (demand_score * 0.2)
