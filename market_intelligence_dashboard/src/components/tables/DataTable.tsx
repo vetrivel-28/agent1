@@ -16,9 +16,10 @@ interface DataTableProps<T> {
   data: T[];
   pageSize?: number;
   searchable?: boolean;
+  rowClassName?: (row: T, index: number) => string;
 }
 
-export function DataTable<T>({ columns, data, pageSize = 10, searchable = true }: DataTableProps<T>) {
+export function DataTable<T>({ columns, data, pageSize = 10, searchable = true, rowClassName }: DataTableProps<T>) {
   const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
@@ -124,7 +125,7 @@ export function DataTable<T>({ columns, data, pageSize = 10, searchable = true }
             <tbody>
               {paginatedData.length > 0 ? (
                 paginatedData.map((row, i) => (
-                  <tr key={i} className="border-b last:border-b-0 hover:bg-muted/50 transition-colors">
+                  <tr key={i} className={cn("border-b last:border-b-0 hover:bg-muted/50 transition-colors", rowClassName ? rowClassName(row, i) : "")}>
                     {columns.map((col, j) => (
                       <td key={j} className="px-4 py-3">
                         {col.cell ? col.cell(row) : String((row as any)[col.accessorKey] ?? '-')}

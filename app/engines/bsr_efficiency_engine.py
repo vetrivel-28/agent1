@@ -1,21 +1,36 @@
 """
-BSR Efficiency Engine
-=====================
-Purpose  : Measure revenue efficiency relative to BSR rank.
+BSR Efficiency Engine  —  Product Performance Intelligence
+==========================================================
+Purpose  : Identify products that outperform or underperform market expectations
+           using market-relative percentile analysis.
 Dataset  : BlackBox Products
 Required : BSR + Revenue columns
 
-Step 1 — Normalise BSR (lower BSR = better rank = higher score):
-    Norm BSR = (1 - BSR / max_BSR) × 100
+Core logic (no fixed thresholds — all market-relative):
 
-Step 2 — Normalise Revenue (min-max 0-100):
-    Norm Revenue = (Revenue - min) / (max - min) × 100
+  Step 1  BSR Percentile
+          Rank all products by BSR.  Best BSR (lowest number) = 100, worst = 0.
+          bsr_percentile = (1 - rank(bsr) / n) * 100   [rank ascending]
 
-Step 3 — Efficiency Score:
-    Efficiency = (Norm Revenue × 0.6) + (Norm BSR × 0.4)
+  Step 2  Revenue Percentile
+          Rank all products by Revenue.  Highest = 100, lowest = 0.
+          rev_percentile = rank(revenue) / n * 100      [rank descending]
 
-Rows dropped ONLY when BOTH BSR and Revenue are NaN simultaneously.
-Numeric cleaning applied before every step.
+  Step 3  Revenue-Rank Gap
+          gap = rev_percentile - bsr_percentile
+          Positive gap  → product earns more than its rank would predict.
+          Negative gap  → product ranks well but monetises poorly.
+
+  Step 4  Efficiency Score (0-100)
+          efficiency = 50% * norm(gap) + 30% * rev_percentile + 20% * bsr_percentile
+          Normalised to 0-100 across the product set.
+
+Segment classification (gap-based):
+  gap > +20   Revenue Outlier
+  +10 to +20  Highly Efficient
+  -10 to +10  Market Normal
+  -10 to -20  Underperforming
+  < -20       Revenue Leakage
 """
 from __future__ import annotations
 
@@ -27,13 +42,13 @@ import pandas as pd
 
 from app.utils.column_mapper import find_column
 from app.utils.logger import get_logger
-from app.utils.normalization import adaptive_scaling, safe_log_normalize
+from app.utils.normalization import min_max_normalize
 from app.utils.numeric_cleaner import clean_numeric_series
 
 logger = get_logger("bsr_efficiency_engine")
 
 # ---------------------------------------------------------------------------
-# Column candidate lists
+# Column candidates
 # ---------------------------------------------------------------------------
 _BSR_CANDIDATES = [
     "BSR", "bsr",
@@ -51,12 +66,96 @@ _TITLE_CANDIDATES = ["Title", "title", "Product Title"]
 _ASIN_CANDIDATES  = ["ASIN", "asin"]
 _BRAND_CANDIDATES = ["Brand", "brand", "Seller", "seller"]
 
-_WEIGHT_REVENUE = 0.6
-_WEIGHT_BSR     = 0.4
+
+# ---------------------------------------------------------------------------
+# Segment classification
+# ---------------------------------------------------------------------------
+
+def _segment(gap: float) -> str:
+    if gap > 20:
+        return "Revenue Outlier"
+    elif gap > 10:
+        return "Highly Efficient"
+    elif gap >= -10:
+        return "Market Normal"
+    elif gap >= -20:
+        return "Underperforming"
+    else:
+        return "Revenue Leakage"
+
+
+def _quadrant(bsr_pct: float, rev_pct: float) -> str:
+    """Scatter-plot quadrant label (midpoint = 50)."""
+    if bsr_pct >= 50 and rev_pct >= 50:
+        return "Elite Performers"
+    elif bsr_pct < 50 and rev_pct >= 50:
+        return "Revenue Outliers"
+    elif bsr_pct >= 50 and rev_pct < 50:
+        return "Revenue Leakage"
+    else:
+        return "Underperformers"
+
+
+def _opportunity_priority(gap: float, recovery: float, bsr_pct: float) -> str:
+    """
+    Classify leakage products by optimization urgency.
+    Uses gap magnitude, recovery potential, and BSR strength.
+    """
+    score = (abs(gap) / 100.0) * 0.4 + (min(recovery, 1e6) / 1e6) * 0.3 + (bsr_pct / 100.0) * 0.3
+    if score >= 0.55:
+        return "Critical"
+    elif score >= 0.35:
+        return "High"
+    elif score >= 0.18:
+        return "Medium"
+    else:
+        return "Low"
+
+
+def _likely_cause(gap: float, bsr_pct: float, rev_pct: float) -> str:
+    """
+    Infer the most probable root cause of revenue leakage from available metrics.
+    No external data required — uses percentile positions as proxies.
+    """
+    # Strong rank but very low revenue → conversion or listing issue
+    if bsr_pct >= 70 and rev_pct <= 20:
+        return "Weak Conversion"
+    # Strong rank, moderate revenue → pricing may be suppressing AOV
+    if bsr_pct >= 60 and rev_pct <= 40:
+        return "Pricing Issue"
+    # Moderate rank, very low revenue → traffic not reaching the listing
+    if bsr_pct >= 40 and rev_pct <= 15:
+        return "Traffic Deficit"
+    # Weak rank, low revenue → listing quality or discoverability
+    if bsr_pct < 40 and rev_pct <= 25:
+        return "Listing Quality Issue"
+    # Default: gap is large but rank is moderate — likely review/social proof gap
+    return "Review Deficit"
+
+
+def _expected_revenue(bsr_pct: float, work: pd.DataFrame, band: float = 10.0) -> Optional[float]:
+    """
+    Estimate expected revenue for a product by averaging revenue of products
+    with a similar BSR percentile (within ±band points).
+    Returns None if fewer than 2 comparable products exist.
+    """
+    peers = work[
+        (work["bsr_pct"] >= bsr_pct - band) &
+        (work["bsr_pct"] <= bsr_pct + band)
+    ]["revenue"]
+    if len(peers) < 2:
+        # Widen band if too few peers
+        peers = work[
+            (work["bsr_pct"] >= bsr_pct - band * 2) &
+            (work["bsr_pct"] <= bsr_pct + band * 2)
+        ]["revenue"]
+    if len(peers) < 2:
+        return None
+    return float(peers.median())
 
 
 # ---------------------------------------------------------------------------
-# Main engine function
+# Main engine
 # ---------------------------------------------------------------------------
 
 def run(
@@ -67,303 +166,332 @@ def run(
     logger.info("BSR Efficiency engine started.")
 
     if blackbox_df is None or blackbox_df.empty:
-        return _no_data_error("blackbox")
+        return _no_data_error("blackbox", t0)
 
     rows_original = len(blackbox_df)
-    logger.info(f"Original rows: {rows_original}")
 
-    # -----------------------------------------------------------------------
-    # Locate required columns
-    # -----------------------------------------------------------------------
-    bsr_col = find_column(blackbox_df, _BSR_CANDIDATES)
-    rev_col = find_column(blackbox_df, _REVENUE_CANDIDATES)
-
-    logger.info(f"Columns mapped — bsr='{bsr_col}', revenue='{rev_col}'")
+    # ── Locate columns ──────────────────────────────────────────────────────
+    bsr_col   = find_column(blackbox_df, _BSR_CANDIDATES)
+    rev_col   = find_column(blackbox_df, _REVENUE_CANDIDATES)
+    title_col = find_column(blackbox_df, _TITLE_CANDIDATES)
+    asin_col  = find_column(blackbox_df, _ASIN_CANDIDATES)
+    brand_col = find_column(blackbox_df, _BRAND_CANDIDATES)
 
     missing: List[str] = []
     if bsr_col is None:
         missing.extend(_BSR_CANDIDATES[:2])
     if rev_col is None:
         missing.extend(_REVENUE_CANDIDATES[:2])
-
     if missing:
-        return {
-            "status": "error",
-            "metric_name": "BSR Efficiency",
-            "summary": "Required columns (BSR and/or Revenue) not found.",
-            "datasets_used": ["blackbox"],
-            "columns_used": [],
-            "formula_used": "",
-            "results": {},
-            "validation": {
-                "status": "failed",
-                "message": "Required columns not found.",
-                "missing_columns": missing,
-                "rows_before_cleaning": rows_original,
-                "rows_after_cleaning": 0,
-                "rows_skipped": rows_original,
-                "numeric_columns_cleaned": [],
-            },
-            "processing_time_seconds": round(time.time() - t0, 3),
-        }
+        return _missing_columns_error(missing, rows_original, t0)
 
-    title_col = find_column(blackbox_df, _TITLE_CANDIDATES)
-    asin_col  = find_column(blackbox_df, _ASIN_CANDIDATES)
-    brand_col = find_column(blackbox_df, _BRAND_CANDIDATES)
+    columns_used = [c for c in [bsr_col, rev_col, title_col, asin_col, brand_col] if c]
 
-    columns_used = [bsr_col, rev_col]
-    for c in [title_col, asin_col, brand_col]:
-        if c:
-            columns_used.append(c)
-
-    # -----------------------------------------------------------------------
-    # Build working dataframe — clean numerics
-    # -----------------------------------------------------------------------
+    # ── Build working frame ─────────────────────────────────────────────────
     work = pd.DataFrame(index=blackbox_df.index)
+    work["bsr"],     _ = clean_numeric_series(blackbox_df[bsr_col],   bsr_col)
+    work["revenue"], _ = clean_numeric_series(blackbox_df[rev_col],   rev_col)
+    if title_col: work["title"] = blackbox_df[title_col].astype(str).str[:120]
+    if asin_col:  work["asin"]  = blackbox_df[asin_col].astype(str)
+    if brand_col: work["brand"] = blackbox_df[brand_col].astype(str).str.strip()
 
-    bsr_clean, bsr_stats = clean_numeric_series(blackbox_df[bsr_col], bsr_col)
-    logger.info(
-        f"BSR '{bsr_col}': "
-        f"original={bsr_stats['original_count']}, "
-        f"cleaned={bsr_stats['cleaned_count']}, "
-        f"nan={bsr_stats['nan_introduced']}"
+    # Require both BSR and Revenue to be valid
+    work = work.dropna(subset=["bsr", "revenue"])
+    work = work[(work["bsr"] > 0) & (work["revenue"] >= 0)]
+    rows_after = len(work)
+
+    if rows_after < 3:
+        return _insufficient_data_error(rows_original, rows_after, columns_used, t0)
+
+    n = rows_after
+
+    # ── Step 1: BSR Percentile (lower BSR = better rank = higher percentile) ─
+    # rank(ascending) so rank 1 = best BSR → percentile = (n - rank + 1) / n * 100
+    work["bsr_rank"]    = work["bsr"].rank(method="average", ascending=True)
+    work["bsr_pct"]     = (1.0 - (work["bsr_rank"] - 1) / (n - 1)) * 100.0
+    work["bsr_pct"]     = work["bsr_pct"].clip(0, 100)
+
+    # ── Step 2: Revenue Percentile (higher revenue = higher percentile) ──────
+    work["rev_rank"]    = work["revenue"].rank(method="average", ascending=False)
+    work["rev_pct"]     = (1.0 - (work["rev_rank"] - 1) / (n - 1)) * 100.0
+    work["rev_pct"]     = work["rev_pct"].clip(0, 100)
+
+    # ── Step 3: Revenue-Rank Gap ─────────────────────────────────────────────
+    work["gap"]         = work["rev_pct"] - work["bsr_pct"]
+
+    # ── Step 4: Efficiency Score ─────────────────────────────────────────────
+    # Raw: 50% gap (shifted to 0-100) + 30% rev_pct + 20% bsr_pct
+    gap_shifted         = (work["gap"] + 100.0) / 2.0          # map -100..+100 → 0..100
+    raw_score           = 0.50 * gap_shifted + 0.30 * work["rev_pct"] + 0.20 * work["bsr_pct"]
+    work["efficiency"]  = min_max_normalize(raw_score)          # final 0-100
+
+    # ── Segment & quadrant ───────────────────────────────────────────────────
+    work["segment"]     = work["gap"].apply(_segment)
+    work["quadrant"]    = work.apply(lambda r: _quadrant(r["bsr_pct"], r["rev_pct"]), axis=1)
+
+    # ── Segment counts ───────────────────────────────────────────────────────
+    seg_counts = work["segment"].value_counts().to_dict()
+    outlier_count  = int(seg_counts.get("Revenue Outlier",  0))
+    leakage_count  = int(seg_counts.get("Revenue Leakage",  0))
+    efficient_count= int(seg_counts.get("Highly Efficient", 0))
+    normal_count   = int(seg_counts.get("Market Normal",    0))
+    under_count    = int(seg_counts.get("Underperforming",  0))
+
+    # Elite performers: top quartile of BOTH rev_pct and bsr_pct
+    elite_mask      = (work["rev_pct"] >= 75) & (work["bsr_pct"] >= 75)
+    elite_count     = int(elite_mask.sum())
+
+    avg_efficiency  = round(float(work["efficiency"].mean()), 2)
+
+    # ── Largest outlier / leakage ────────────────────────────────────────────
+    outlier_df  = work[work["segment"] == "Revenue Outlier"].sort_values("gap", ascending=False)
+    leakage_df  = work[work["segment"] == "Revenue Leakage"].sort_values("gap", ascending=True)
+
+    # ── Expected revenue + recovery for every product ────────────────────────
+    work["expected_revenue"] = work["bsr_pct"].apply(
+        lambda p: _expected_revenue(p, work)
     )
-    work["bsr"] = bsr_clean
+    work["revenue_recovery"] = (work["expected_revenue"] - work["revenue"]).clip(lower=0)
 
-    rev_clean, rev_stats = clean_numeric_series(blackbox_df[rev_col], rev_col)
-    logger.info(
-        f"Revenue '{rev_col}': "
-        f"original={rev_stats['original_count']}, "
-        f"cleaned={rev_stats['cleaned_count']}, "
-        f"nan={rev_stats['nan_introduced']}"
-    )
-    work["revenue"] = rev_clean
+    # Re-sort leakage by opportunity priority after recovery is computed
+    def _priority_row(row: pd.Series) -> str:
+        rec = float(row["revenue_recovery"]) if pd.notna(row["revenue_recovery"]) else 0.0
+        return _opportunity_priority(float(row["gap"]), rec, float(row["bsr_pct"]))
 
-    if title_col:
-        work["title"] = blackbox_df[title_col].astype(str).str[:120]
-    if asin_col:
-        work["asin"] = blackbox_df[asin_col].astype(str)
-    if brand_col:
-        work["brand"] = blackbox_df[brand_col].astype(str).str.strip()
+    leakage_df = work[work["segment"] == "Revenue Leakage"].copy()
+    leakage_df["opportunity_priority"] = leakage_df.apply(_priority_row, axis=1)
+    _priority_order = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}
+    leakage_df["_pri_sort"] = leakage_df["opportunity_priority"].map(_priority_order).fillna(4)
+    leakage_df = leakage_df.sort_values(["_pri_sort", "gap"], ascending=[True, True])
 
-    # Drop rows where BOTH bsr AND revenue are NaN (truly unusable rows)
-    rows_before_filter = len(work)
-    work = work.dropna(subset=["bsr", "revenue"], how="all")
-    rows_after_filter = len(work)
-    rows_skipped = rows_before_filter - rows_after_filter
-
-    logger.info(
-        f"Rows after cleaning: {rows_after_filter} "
-        f"(dropped {rows_skipped} where both BSR and Revenue are NaN)"
+    # Total recoverable revenue
+    total_recoverable = float(
+        work.loc[work["segment"] == "Revenue Leakage", "revenue_recovery"].sum()
     )
 
-    if work.empty:
-        return {
-            "status": "warning",
-            "metric_name": "BSR Efficiency",
-            "summary": "No valid rows after cleaning — both BSR and Revenue are NaN for all rows.",
-            "datasets_used": ["blackbox"],
-            "columns_used": columns_used,
-            "formula_used": "",
-            "results": {},
-            "validation": {
-                "status": "warning",
-                "message": "No valid numeric rows after cleaning.",
-                "rows_before_cleaning": rows_original,
-                "rows_after_cleaning": 0,
-                "rows_skipped": rows_original,
-                "numeric_columns_cleaned": [bsr_col, rev_col],
-            },
-            "processing_time_seconds": round(time.time() - t0, 3),
+    # ── Elite benchmark stats ────────────────────────────────────────────────
+    elite_df = work[elite_mask].sort_values("efficiency", ascending=False)
+    benchmark_revenue    = float(elite_df["revenue"].median())    if not elite_df.empty else 0.0
+    benchmark_bsr        = float(elite_df["bsr"].median())        if not elite_df.empty else 0.0
+    benchmark_efficiency = float(elite_df["efficiency"].median()) if not elite_df.empty else 0.0
+    best_benchmark_title = ""
+    if not elite_df.empty:
+        best_row = elite_df.iloc[0]
+        best_benchmark_title = str(best_row.get("title", best_row.get("asin", "—")))
+
+    def _top_product(df: pd.DataFrame) -> Dict:
+        if df.empty:
+            return {}
+        row = df.iloc[0]
+        rec = {
+            "title":      str(row.get("title", row.get("asin", "—"))),
+            "asin":       str(row.get("asin", "—")),
+            "gap":        round(float(row["gap"]), 2),
+            "efficiency": round(float(row["efficiency"]), 2),
+            "revenue":    _sv(row["revenue"]),
+            "bsr":        _sv(row["bsr"]),
         }
+        if pd.notna(row.get("expected_revenue")):
+            rec["expected_revenue"]  = _sv(row["expected_revenue"])
+            rec["revenue_recovery"]  = _sv(row["revenue_recovery"])
+        return rec
 
-    # -----------------------------------------------------------------------
-    # Step 1 — Normalise BSR  (invert: lower BSR = better = higher score)
-    # -----------------------------------------------------------------------
-    work["norm_bsr"] = safe_log_normalize(work["bsr"])
-    work["inverse_norm_bsr"] = 100.0 - work["norm_bsr"]
-    max_bsr = float(work["bsr"].dropna().max()) if not work["bsr"].dropna().empty else 0.0
-    logger.info(f"BSR normalised with log+clip: max_bsr={max_bsr:.0f}")
+    largest_outlier = _top_product(outlier_df)
+    largest_leakage = _top_product(leakage_df)
 
-    # -----------------------------------------------------------------------
-    # Step 2 — Normalise Revenue (min-max 0-100)
-    # -----------------------------------------------------------------------
-    work["norm_revenue"] = safe_log_normalize(work["revenue"])
-    rev_nan_count = work["norm_revenue"].isna().sum()
-    logger.info(
-        f"Revenue normalised: {len(work) - rev_nan_count} valid, "
-        f"{rev_nan_count} NaN (filled with 0 for efficiency calc)"
-    )
+    # ── Product record builder ───────────────────────────────────────────────
+    def _records(df: pd.DataFrame, limit: int, include_recovery: bool = False, include_priority: bool = False) -> List[Dict]:
+        out = []
+        for _, row in df.head(limit).iterrows():
+            rec: Dict[str, Any] = {
+                "bsr":                _sv(row["bsr"]),
+                "revenue":            _sv(row["revenue"]),
+                "bsr_percentile":     round(float(row["bsr_pct"]),   2),
+                "revenue_percentile": round(float(row["rev_pct"]),   2),
+                "revenue_rank_gap":   round(float(row["gap"]),       2),
+                "efficiency_score":   round(float(row["efficiency"]),2),
+                "segment":            row["segment"],
+                "quadrant":           row["quadrant"],
+            }
+            if include_recovery and "expected_revenue" in row.index:
+                rec["expected_revenue"] = _sv(row["expected_revenue"])
+                rec["revenue_recovery"] = _sv(row["revenue_recovery"])
+                rec["likely_cause"]     = _likely_cause(
+                    float(row["gap"]), float(row["bsr_pct"]), float(row["rev_pct"])
+                )
+            if include_priority and "opportunity_priority" in row.index:
+                rec["opportunity_priority"] = row["opportunity_priority"]
+            for f in ("title", "asin", "brand"):
+                if f in row.index:
+                    rec[f] = str(row[f])
+            out.append(rec)
+        return out
 
-    # -----------------------------------------------------------------------
-    # Step 3 — Efficiency Score
-    # NaN revenue → treated as 0 contribution (product has no revenue data)
-    # NaN BSR    → treated as 0 contribution (product has no rank data)
-    # -----------------------------------------------------------------------
-    work["efficiency_score"] = (
-        work["norm_revenue"].fillna(0.0) * _WEIGHT_REVENUE
-        + work["inverse_norm_bsr"].fillna(0.0) * _WEIGHT_BSR
-    )
-
-    # Rows where BOTH norm values are NaN get NaN score (truly no data)
-    both_nan_mask = work["norm_revenue"].isna() & work["inverse_norm_bsr"].isna()
-    work.loc[both_nan_mask, "efficiency_score"] = np.nan
-    work = work.dropna(subset=["efficiency_score"])
-
-    if work.empty:
-        return {
-            "status": "warning",
-            "metric_name": "BSR Efficiency",
-            "summary": "Efficiency score could not be computed — insufficient valid data.",
-            "datasets_used": ["blackbox"],
-            "columns_used": columns_used,
-            "formula_used": "",
-            "results": {},
-            "validation": {
-                "status": "warning",
-                "message": "No valid numeric rows after cleaning.",
-                "rows_before_cleaning": rows_original,
-                "rows_after_cleaning": 0,
-                "rows_skipped": rows_original,
-                "numeric_columns_cleaned": [bsr_col, rev_col],
-            },
-            "processing_time_seconds": round(time.time() - t0, 3),
+    # ── Scatter data (up to 300 points) ─────────────────────────────────────
+    scatter = []
+    for _, row in work.head(300).iterrows():
+        pt: Dict[str, Any] = {
+            "bsr_percentile":     round(float(row["bsr_pct"]),   2),
+            "revenue_percentile": round(float(row["rev_pct"]),   2),
+            "revenue_rank_gap":   round(float(row["gap"]),       2),
+            "efficiency_score":   round(float(row["efficiency"]),2),
+            "segment":            row["segment"],
+            "quadrant":           row["quadrant"],
+            "revenue":            _sv(row["revenue"]),
+            "bsr":                _sv(row["bsr"]),
         }
+        for f in ("title", "asin", "brand"):
+            if f in row.index:
+                pt[f] = str(row[f])
+        scatter.append(pt)
 
-    # -----------------------------------------------------------------------
-    # Percentile-based classification
-    # -----------------------------------------------------------------------
-    p75 = work["efficiency_score"].quantile(0.75)
-    p25 = work["efficiency_score"].quantile(0.25)
+    # ── Quadrant counts ──────────────────────────────────────────────────────
+    quad_counts = work["quadrant"].value_counts().to_dict()
 
-    work_sorted = work.sort_values("efficiency_score", ascending=False)
-
-    efficient_df   = work_sorted[work_sorted["efficiency_score"] >= p75]
-    inefficient_df = work_sorted[work_sorted["efficiency_score"] <= p25].sort_values(
-        "efficiency_score"
+    # ── Automated insights ───────────────────────────────────────────────────
+    insights = _generate_insights(
+        n=n,
+        outlier_count=outlier_count,
+        leakage_count=leakage_count,
+        elite_count=elite_count,
+        avg_efficiency=avg_efficiency,
+        largest_outlier=largest_outlier,
+        largest_leakage=largest_leakage,
+        normal_count=normal_count,
+        total_recoverable=total_recoverable,
+        best_benchmark_title=best_benchmark_title,
+        benchmark_efficiency=benchmark_efficiency,
     )
 
-    efficient_products   = _product_records(efficient_df, top_n)
-    inefficient_products = _product_records(inefficient_df, top_n)
-
-    # -----------------------------------------------------------------------
-    # Market-level stats
-    # -----------------------------------------------------------------------
-    market_efficiency = float(work["efficiency_score"].mean(skipna=True))
-    market_median     = float(work["efficiency_score"].median(skipna=True))
-
-    if market_efficiency >= 60:
-        interpretation = (
-            "High market efficiency. Top products achieve strong revenue "
-            "relative to their BSR rank."
-        )
-    elif market_efficiency >= 40:
-        interpretation = (
-            "Moderate market efficiency. Revenue and BSR rank are reasonably "
-            "aligned across the market."
-        )
+    # ── Market health metrics (business-oriented) ────────────────────────────
+    if avg_efficiency >= 65:
+        efficiency_status = "High — category is well-monetised"
+    elif avg_efficiency >= 45:
+        efficiency_status = "Moderate — meaningful optimization headroom"
     else:
-        interpretation = (
-            "Low market efficiency. Many products have poor revenue relative "
-            "to their BSR rank — potential opportunity for well-optimised entrants."
-        )
+        efficiency_status = "Low — significant revenue being left on the table"
 
-    bsr_stats_out = {
-        "min_bsr":    _sv(work["bsr"].min()),
-        "max_bsr":    _sv(work["bsr"].max()),
-        "median_bsr": _sv(work["bsr"].median()),
-        "mean_bsr":   _sv(work["bsr"].mean()),
-    }
-    rev_stats_out = {
-        "min_revenue":    _sv(work["revenue"].min()),
-        "max_revenue":    _sv(work["revenue"].max()),
-        "median_revenue": _sv(work["revenue"].median()),
-        "mean_revenue":   _sv(work["revenue"].mean()),
-    }
+    leakage_pct = round(leakage_count / n * 100, 1)
+    if leakage_pct >= 30:
+        monetization_quality = "Poor — high proportion of undermonetised products"
+    elif leakage_pct >= 15:
+        monetization_quality = "Fair — notable leakage across the category"
+    else:
+        monetization_quality = "Good — most products monetise near expectations"
 
-    corr_df = work.dropna(subset=["bsr", "revenue"])
-    rank_revenue_correlation = None
-    if len(corr_df) >= 3:
-        rank_revenue_correlation = round(float(corr_df["bsr"].corr(corr_df["revenue"])), 4)
+    outlier_pct = round(outlier_count / n * 100, 1)
+    if outlier_pct >= 20:
+        opportunity_density = "High — many products outperform rank expectations"
+    elif outlier_pct >= 10:
+        opportunity_density = "Moderate — selective outperformance visible"
+    else:
+        opportunity_density = "Low — few products exceed rank-based expectations"
 
-    rank_threshold = float(work["bsr"].median(skipna=True))
-    revenue_threshold = float(work["revenue"].median(skipna=True))
-    valid_mask = work["bsr"].notna() & work["revenue"].notna()
-    valid_products = work[valid_mask]
-    quadrant_summary = {
-        "valid_products_count": int(len(valid_products)),
-        "rank_threshold_bsr": round(rank_threshold, 2),
-        "revenue_threshold": round(revenue_threshold, 2),
-        "rank_revenue_correlation": rank_revenue_correlation,
-        "correlation_interpretation": (
-            "Strong inverse rank-revenue relationship (better rank → more revenue)"
-            if rank_revenue_correlation is not None and rank_revenue_correlation < -0.3
-            else "Weak rank-revenue alignment — optimization opportunities exist"
-            if rank_revenue_correlation is not None
-            else "Insufficient data for correlation"
-        ),
-        "market_leaders_count": int(
-            ((valid_products["bsr"] <= rank_threshold) & (valid_products["revenue"] >= revenue_threshold)).sum()
-        ),
-        "optimization_gaps_count": int(
-            ((valid_products["bsr"] <= rank_threshold) & (valid_products["revenue"] < revenue_threshold)).sum()
-        ),
-        "hidden_winners_count": int(
-            ((valid_products["bsr"] > rank_threshold) & (valid_products["revenue"] >= revenue_threshold)).sum()
-        ),
-        "weak_listings_count": int(
-            ((valid_products["bsr"] > rank_threshold) & (valid_products["revenue"] < revenue_threshold)).sum()
-        ),
+    market_health = {
+        "category_efficiency_status": efficiency_status,
+        "monetization_quality":       monetization_quality,
+        "opportunity_density":        opportunity_density,
+        "recoverable_revenue_pool":   round(total_recoverable, 2),
+        "average_category_efficiency": avg_efficiency,
+        # kept for backward compat
+        "revenue_outlier_ratio":  round(outlier_count / n * 100, 2),
+        "revenue_leakage_ratio":  round(leakage_count / n * 100, 2),
+        "elite_performer_ratio":  round(elite_count   / n * 100, 2),
+        "efficiency_distribution": {
+            "p25": round(float(work["efficiency"].quantile(0.25)), 2),
+            "p50": round(float(work["efficiency"].quantile(0.50)), 2),
+            "p75": round(float(work["efficiency"].quantile(0.75)), 2),
+            "p90": round(float(work["efficiency"].quantile(0.90)), 2),
+        },
     }
 
     elapsed = round(time.time() - t0, 3)
     logger.info(
-        f"BSR Efficiency complete: {len(work)} products, "
-        f"market_efficiency={market_efficiency:.2f}, elapsed={elapsed}s"
+        f"BSR Efficiency complete: n={n}, avg_eff={avg_efficiency}, "
+        f"outliers={outlier_count}, leakage={leakage_count}, elapsed={elapsed}s"
     )
 
     return {
         "status": "success",
         "metric_name": "BSR Efficiency",
-        "summary": interpretation,
+        "summary": (
+            f"{outlier_count} revenue outliers and {leakage_count} revenue leakage products "
+            f"identified across {n} products. Average category efficiency: {avg_efficiency}/100. "
+            f"Recoverable revenue: ${total_recoverable:,.0f}."
+        ),
         "datasets_used": ["blackbox"],
         "columns_used": columns_used,
         "formula_used": (
-            f"Step 1: Norm BSR = (1 - BSR / max_BSR) × 100  "
-            f"[lower BSR = better rank = higher score, max_bsr={max_bsr:.0f}]. "
-            f"Step 2: Norm Revenue = min-max normalised to 0-100. "
-            f"Step 3: Efficiency = (Norm Revenue × {_WEIGHT_REVENUE}) + "
-            f"(Norm BSR × {_WEIGHT_BSR}). "
-            "Classification: p75 = efficient, p25 = inefficient."
+            "BSR Percentile = (1 - rank(BSR,asc) / n) × 100; "
+            "Revenue Percentile = (1 - rank(Revenue,desc) / n) × 100; "
+            "Gap = Revenue Percentile − BSR Percentile; "
+            "Efficiency = norm(0.5×gap_shifted + 0.3×rev_pct + 0.2×bsr_pct); "
+            "Expected Revenue = median revenue of products with similar BSR percentile (±10 pts); "
+            "Revenue Recovery = max(0, Expected Revenue − Actual Revenue)."
         ),
         "results": {
-            "market_efficiency_score": round(market_efficiency, 2),
-            "market_median_efficiency": round(market_median, 2),
-            "total_products_analysed": len(work),
-            "efficient_products_count": len(efficient_df),
-            "inefficient_products_count": len(inefficient_df),
-            "efficient_products": efficient_products,
-            "inefficient_products": inefficient_products,
-            "bsr_distribution": bsr_stats_out,
-            "revenue_distribution": rev_stats_out,
-            "quadrant_summary": quadrant_summary,
-            "rank_revenue_correlation": rank_revenue_correlation,
-            "rank_revenue_scatter": [
-                {"bsr": _sv(r["bsr"]), "revenue": _sv(r["revenue"]), "efficiency_score": _sv(r["efficiency_score"])}
-                for _, r in valid_products.head(200).iterrows()
-            ],
-            "graph_scaling": {
-                "bsr_axis": adaptive_scaling(work["bsr"]),
-                "revenue_axis": adaptive_scaling(work["revenue"]),
+            # KPI summary
+            "average_category_efficiency": avg_efficiency,
+            "total_products_analysed":     n,
+            "revenue_outlier_count":       outlier_count,
+            "revenue_leakage_count":       leakage_count,
+            "elite_performer_count":       elite_count,
+            "highly_efficient_count":      efficient_count,
+            "market_normal_count":         normal_count,
+            "underperforming_count":       under_count,
+
+            # Recovery KPI
+            "total_recoverable_revenue":   round(total_recoverable, 2),
+
+            # Spotlight products
+            "largest_revenue_outlier":  largest_outlier,
+            "largest_revenue_leakage":  largest_leakage,
+
+            # Elite benchmark
+            "elite_benchmark": {
+                "benchmark_revenue":    round(benchmark_revenue,    2),
+                "benchmark_bsr":        round(benchmark_bsr,        2),
+                "benchmark_efficiency": round(benchmark_efficiency, 2),
+                "best_product_title":   best_benchmark_title,
             },
+
+            # Segment tables
+            "revenue_outliers":  _records(outlier_df,  max(top_n, 20)),
+            "revenue_leakage":   _records(leakage_df,  max(top_n, 20), include_recovery=True, include_priority=True),
+            "elite_performers":  _records(elite_df,    max(top_n, 20)),
+            "all_products":      _records(work.sort_values("efficiency", ascending=False), min(n, 300)),
+
+            # Scatter matrix
+            "scatter_data": scatter,
+
+            # Quadrant counts
+            "quadrant_summary": {
+                "elite_performers":   int(quad_counts.get("Elite Performers",  0)),
+                "revenue_outliers":   int(quad_counts.get("Revenue Outliers",  0)),
+                "revenue_leakage":    int(quad_counts.get("Revenue Leakage",   0)),
+                "underperformers":    int(quad_counts.get("Underperformers",   0)),
+            },
+
+            # Market health (business-oriented)
+            "market_health": market_health,
+
+            # Automated insights
+            "insights": insights,
+
+            # Legacy fields (backward compat)
+            "market_efficiency_score":    avg_efficiency,
+            "efficient_products_count":   outlier_count + efficient_count,
+            "inefficient_products_count": leakage_count + under_count,
+            "efficient_products":   _records(work[work["gap"] > 10].sort_values("gap", ascending=False), top_n),
+            "inefficient_products": _records(work[work["gap"] < -10].sort_values("gap", ascending=True),  top_n),
         },
         "validation": {
             "status": "passed",
-            "bsr_column_used": bsr_col,
+            "bsr_column_used":     bsr_col,
             "revenue_column_used": rev_col,
             "rows_before_cleaning": rows_original,
-            "rows_after_cleaning": len(work),
-            "rows_skipped": rows_skipped,
+            "rows_after_cleaning":  rows_after,
+            "rows_skipped":         rows_original - rows_after,
             "numeric_columns_cleaned": [bsr_col, rev_col],
         },
         "processing_time_seconds": elapsed,
@@ -371,30 +499,92 @@ def run(
 
 
 # ---------------------------------------------------------------------------
+# Insight generator
+# ---------------------------------------------------------------------------
+
+def _generate_insights(
+    n: int,
+    outlier_count: int,
+    leakage_count: int,
+    elite_count: int,
+    avg_efficiency: float,
+    largest_outlier: Dict,
+    largest_leakage: Dict,
+    normal_count: int,
+    total_recoverable: float = 0.0,
+    best_benchmark_title: str = "",
+    benchmark_efficiency: float = 0.0,
+) -> List[str]:
+    insights: List[str] = []
+
+    # Biggest revenue opportunity
+    if total_recoverable > 0:
+        insights.append(
+            f"Total recoverable revenue across leakage products: "
+            f"${total_recoverable:,.0f}. Optimising these listings represents the "
+            f"highest-value opportunity in this category."
+        )
+
+    # Largest revenue outlier
+    if largest_outlier.get("gap"):
+        gap = abs(largest_outlier["gap"])
+        title = largest_outlier.get("title") or largest_outlier.get("asin") or "Unknown"
+        short = title[:40] + "…" if len(title) > 40 else title
+        insights.append(
+            f"Largest revenue outlier: '{short}' outperforms comparable ranked products "
+            f"by {gap:.0f} percentile points — a strong signal of premium positioning or superior conversion."
+        )
+
+    # Leakage count
+    if leakage_count > 0:
+        insights.append(
+            f"{leakage_count} product{'s' if leakage_count > 1 else ''} rank well "
+            f"but monetise below category expectations. Likely causes include weak conversion, "
+            f"pricing issues, or listing quality gaps."
+        )
+
+    # Outlier count
+    if outlier_count > 0:
+        insights.append(
+            f"{outlier_count} product{'s' if outlier_count > 1 else ''} generate "
+            f"substantially more revenue than similarly ranked competitors — "
+            f"study these for positioning and conversion benchmarks."
+        )
+
+    # Best benchmark product
+    if best_benchmark_title and benchmark_efficiency > 0:
+        short = best_benchmark_title[:40] + "…" if len(best_benchmark_title) > 40 else best_benchmark_title
+        insights.append(
+            f"Best-in-class benchmark: '{short}' leads elite performers "
+            f"with an efficiency score of {benchmark_efficiency:.1f}/100."
+        )
+
+    # Category efficiency assessment
+    if avg_efficiency < 40:
+        insights.append(
+            "Category efficiency is low. Many products have poor revenue relative "
+            "to their rank — a well-optimised entrant could capture significant share."
+        )
+    elif avg_efficiency >= 65:
+        insights.append(
+            "Category efficiency is high. Top products are well-optimised and "
+            "revenue closely tracks rank performance."
+        )
+    else:
+        insights.append(
+            f"Category efficiency is moderate at {avg_efficiency}/100. "
+            "Meaningful optimization headroom exists across the product set."
+        )
+
+    return insights
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _product_records(df: pd.DataFrame, n: int) -> List[Dict]:
-    records = []
-    for _, row in df.head(n).iterrows():
-        rec: Dict[str, Any] = {
-            "efficiency_score": _sv(row.get("efficiency_score")),
-            "bsr":              _sv(row.get("bsr")),
-            "revenue":          _sv(row.get("revenue")),
-            "norm_bsr":         _sv(row.get("norm_bsr")),
-            "norm_revenue":     _sv(row.get("norm_revenue")),
-        }
-        for field in ("title", "asin", "brand"):
-            if field in row.index:
-                rec[field] = str(row[field])
-        records.append(rec)
-    return records
-
-
 def _sv(v: Any) -> Any:
-    if v is None:
-        return None
-    if pd.isna(v):
+    if v is None or (isinstance(v, float) and np.isnan(v)):
         return None
     if isinstance(v, np.integer):
         return int(v)
@@ -403,7 +593,7 @@ def _sv(v: Any) -> Any:
     return v
 
 
-def _no_data_error(dataset: str) -> Dict:
+def _no_data_error(dataset: str, t0: float) -> Dict:
     return {
         "status": "error",
         "metric_name": "BSR Efficiency",
@@ -420,5 +610,48 @@ def _no_data_error(dataset: str) -> Dict:
             "rows_skipped": 0,
             "numeric_columns_cleaned": [],
         },
-        "processing_time_seconds": 0.0,
+        "processing_time_seconds": round(time.time() - t0, 3),
+    }
+
+
+def _missing_columns_error(missing: List[str], rows: int, t0: float) -> Dict:
+    return {
+        "status": "error",
+        "metric_name": "BSR Efficiency",
+        "summary": "Required columns (BSR and/or Revenue) not found.",
+        "datasets_used": ["blackbox"],
+        "columns_used": [],
+        "formula_used": "",
+        "results": {},
+        "validation": {
+            "status": "failed",
+            "message": "Required columns not found.",
+            "missing_columns": missing,
+            "rows_before_cleaning": rows,
+            "rows_after_cleaning": 0,
+            "rows_skipped": rows,
+            "numeric_columns_cleaned": [],
+        },
+        "processing_time_seconds": round(time.time() - t0, 3),
+    }
+
+
+def _insufficient_data_error(rows_orig: int, rows_after: int, cols: List[str], t0: float) -> Dict:
+    return {
+        "status": "warning",
+        "metric_name": "BSR Efficiency",
+        "summary": "Insufficient valid rows after cleaning (need ≥ 3 products with both BSR and Revenue).",
+        "datasets_used": ["blackbox"],
+        "columns_used": cols,
+        "formula_used": "",
+        "results": {},
+        "validation": {
+            "status": "warning",
+            "message": "Insufficient valid rows.",
+            "rows_before_cleaning": rows_orig,
+            "rows_after_cleaning": rows_after,
+            "rows_skipped": rows_orig - rows_after,
+            "numeric_columns_cleaned": [],
+        },
+        "processing_time_seconds": round(time.time() - t0, 3),
     }
