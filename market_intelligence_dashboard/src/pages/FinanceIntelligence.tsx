@@ -233,19 +233,20 @@ export default function FinanceIntelligence() {
 
   if (isLoading) {
     return (
-      <div className="flex h-[80vh] items-center justify-center">
+      <div className="flex h-[80vh] items-center justify-center flex-col gap-3 theme-teal">
         <Loader2 className="w-8 h-8 animate-spin text-primary" />
+        <p className="text-sm text-muted-foreground font-mono uppercase tracking-widest">Evaluating Market Economics...</p>
       </div>
     );
   }
 
   if (isError || !isEngineOk(data)) {
     return (
-      <Card className="border-red-500/30 bg-red-500/5 mt-10">
+      <Card className="border-danger/20 bg-danger/5 mt-10 theme-teal">
         <CardContent className="p-8 flex flex-col items-center text-center">
-          <AlertCircle className="w-12 h-12 text-red-500 mb-4" />
-          <h2 className="text-xl font-bold text-red-500 mb-2">Market Entry Intelligence Unavailable</h2>
-          <p className="text-red-500/80 max-w-lg">
+          <AlertCircle className="w-12 h-12 text-danger mb-4" />
+          <h2 className="text-xl font-bold text-danger mb-2 font-serif">Market Entry Intelligence Unavailable</h2>
+          <p className="text-danger/80 max-w-lg">
             {getEngineErrorMessage(data, 'Upload Magnet and BlackBox datasets to generate market entry signals.')}
           </p>
         </CardContent>
@@ -386,10 +387,10 @@ export default function FinanceIntelligence() {
           : `Market conditions appear challenging for new entrants (attractiveness ${marketAttractivenessScore}/100).`;
 
   const insightPanels = [
-    { category: 'Key Finding', text: keyFinding, border: 'border-l-4 border-l-purple-500 border-purple-500/30', badge: 'bg-purple-500/10 text-purple-400', dot: 'bg-purple-500' },
-    { category: 'Biggest Barrier', text: biggestBarrier, border: 'border-l-4 border-l-red-500 border-red-500/30', badge: 'bg-red-500/10 text-red-400', dot: 'bg-red-500' },
-    { category: 'Entry Investment', text: entryInvestment, border: 'border-l-4 border-l-amber-500 border-amber-500/30', badge: 'bg-amber-500/10 text-amber-400', dot: 'bg-amber-500' },
-    { category: 'Market Attractiveness', text: marketAttractivenessInsight, border: 'border-l-4 border-l-blue-500 border-blue-500/30', badge: 'bg-blue-500/10 text-blue-400', dot: 'bg-blue-500' },
+    { category: 'Key Finding', text: keyFinding, border: 'border-l-4 border-l-purple-500 border-purple-500/30 bg-purple-500/5', badge: 'bg-purple-500/10 text-purple-500 border-purple-500/20', dot: 'bg-purple-500' },
+    { category: 'Biggest Barrier', text: biggestBarrier, border: 'border-l-4 border-l-red-500 border-red-500/30 bg-red-500/5', badge: 'bg-red-500/10 text-red-500 border-red-500/20', dot: 'bg-red-500' },
+    { category: 'Entry Investment', text: entryInvestment, border: 'border-l-4 border-l-amber-500 border-amber-500/30 bg-amber-500/5', badge: 'bg-amber-500/10 text-amber-500 border-amber-500/20', dot: 'bg-amber-500' },
+    { category: 'Market Attractiveness', text: marketAttractivenessInsight, border: 'border-l-4 border-l-blue-500 border-blue-500/30 bg-blue-500/5', badge: 'bg-blue-500/10 text-blue-500 border-blue-500/20', dot: 'bg-blue-500' },
   ];
 
   const attractivenessMatrix = results.economic_attractiveness_matrix;
@@ -439,13 +440,31 @@ export default function FinanceIntelligence() {
   }>;
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-8 pb-10 theme-teal">
 
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight text-gradient-primary">Market Entry Intelligence</h1>
-        <p className="text-muted-foreground mt-1">
-          Can you successfully enter this market and how difficult will it be?
-        </p>
+      {/* Header — Investment Dashboard Style */}
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 border-b border-border/50 pb-6">
+        <div>
+          <div className="inline-flex items-center justify-center px-2 py-1 rounded border border-primary/20 bg-primary/10 text-primary text-[10px] font-mono tracking-widest uppercase mb-3">
+            Investment Intelligence
+          </div>
+          <h1 className="text-4xl font-black tracking-tight text-foreground font-sans">Market Entry Intelligence</h1>
+          <p className="text-muted-foreground mt-2 max-w-2xl text-lg">
+            Evaluate barrier-to-entry economics and risk factors before allocating capital.
+          </p>
+        </div>
+        <div className="text-right flex gap-6">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-1">Attractiveness</p>
+            <p className={cn("text-3xl font-black font-mono", marketAttractivenessScore && marketAttractivenessScore >= 60 ? 'text-emerald-500' : 'text-red-500')}>{marketAttractivenessScore || '—'}</p>
+          </div>
+          <div>
+            <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-1">Risk Gauge</p>
+            <p className={cn("text-3xl font-black font-mono", marketRiskScore <= 40 ? 'text-emerald-500' : 'text-red-500')}>
+              {marketRiskScore.toFixed(0)}
+            </p>
+          </div>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
@@ -505,35 +524,35 @@ export default function FinanceIntelligence() {
         />
       </div>
 
-      <Card>
-        <CardHeader className="pb-3">
+      <Card className="border-border/50 shadow-sm glass">
+        <CardHeader className="pb-3 border-b border-border/50 bg-muted/10">
           <div className="flex items-center gap-2">
-            <Lightbulb className="w-4 h-4 text-yellow-500" />
-            <CardTitle className="text-base">Market Entry Intelligence</CardTitle>
+            <Lightbulb className="w-4 h-4 text-primary" />
+            <CardTitle className="text-sm font-bold uppercase tracking-widest text-muted-foreground">Executive Brief</CardTitle>
           </div>
           <CardDescription>What the signals show, why it matters, and where to focus entry effort</CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+        <CardContent className="pt-6 space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
             {insightPanels.map((p, i) => (
               <motion.div
                 key={i}
                 initial={{ opacity: 0, y: 6 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: i * 0.07 }}
-                className={cn('rounded-xl border p-4 space-y-2', p.border)}
+                className={cn('rounded-xl border p-5 space-y-3 glass shadow-sm hover:shadow-md transition-all', p.border)}
               >
-                <div className="flex items-center gap-2">
-                  <span className={cn('w-1.5 h-1.5 rounded-full flex-shrink-0', p.dot)} />
-                  <span className={cn('text-[11px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full', p.badge)}>
+                <div className="flex justify-between items-center">
+                  <span className={cn('text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-full border', p.badge)}>
                     {p.category}
                   </span>
+                  <span className={cn('w-2 h-2 rounded-full shadow-sm', p.dot)} />
                 </div>
-                <p className="text-sm text-foreground/90 leading-relaxed">{p.text}</p>
+                <p className="text-sm text-foreground/90 leading-relaxed font-medium">{p.text}</p>
               </motion.div>
             ))}
           </div>
-          <p className="text-xs text-muted-foreground/80 leading-relaxed border-t border-border/50 pt-3">
+          <p className="text-[10px] uppercase tracking-widest font-mono text-muted-foreground/60 leading-relaxed border-t border-border/50 pt-4 mt-6">
             Assessment uses demand, competition, visibility, CPR, and sponsorship signals only.
             Financial forecasts, margin estimates, and return projections are not included.
           </p>
@@ -558,19 +577,21 @@ export default function FinanceIntelligence() {
       )}
 
       {attractivenessMatrix?.quadrant && (
-        <AttractivenessMatrix data={attractivenessMatrix} />
+        <div className="glass rounded-xl border border-border/50 p-1">
+          <AttractivenessMatrix data={attractivenessMatrix} />
+        </div>
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <Card className="border-emerald-500/20">
-          <CardHeader className="pb-3">
+        <Card className="border-emerald-500/20 bg-emerald-500/5 shadow-sm">
+          <CardHeader className="pb-3 border-b border-emerald-500/10">
             <div className="flex items-center gap-2">
-              <TrendingUp className="w-4 h-4 text-emerald-500" />
-              <CardTitle className="text-base">Opportunities</CardTitle>
+              <TrendingUp className="w-5 h-5 text-emerald-500" />
+              <CardTitle className="text-base text-emerald-700 dark:text-emerald-400">Opportunities</CardTitle>
             </div>
-            <CardDescription>Supported by calculated market signals</CardDescription>
+            <CardDescription className="text-emerald-600/70 dark:text-emerald-400/70">Supported by calculated market signals</CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="pt-6">
             <BulletList
               items={opportunities}
               variant="opportunity"
@@ -579,15 +600,15 @@ export default function FinanceIntelligence() {
           </CardContent>
         </Card>
 
-        <Card className="border-red-500/20">
-          <CardHeader className="pb-3">
+        <Card className="border-red-500/20 bg-red-500/5 shadow-sm">
+          <CardHeader className="pb-3 border-b border-red-500/10">
             <div className="flex items-center gap-2">
-              <TrendingDown className="w-4 h-4 text-red-500" />
-              <CardTitle className="text-base">Risks</CardTitle>
+              <TrendingDown className="w-5 h-5 text-red-500" />
+              <CardTitle className="text-base text-red-700 dark:text-red-400">Risks</CardTitle>
             </div>
-            <CardDescription>Only risks backed by available metrics</CardDescription>
+            <CardDescription className="text-red-600/70 dark:text-red-400/70">Only risks backed by available metrics</CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="pt-6">
             <BulletList
               items={risks}
               variant="risk"
@@ -597,16 +618,18 @@ export default function FinanceIntelligence() {
         </Card>
       </div>
 
-      <Card className="border-primary/20 bg-primary/5">
-        <CardContent className="p-6 flex gap-4 items-start">
-          <Landmark className="w-6 h-6 text-primary flex-shrink-0 mt-0.5" />
-          <div>
-            <h3 className="font-semibold text-base">Market Entry Verdict</h3>
-            <p className="text-muted-foreground mt-1 text-sm leading-relaxed">
+      <Card className="border-primary/30 bg-primary/5 shadow-md">
+        <CardContent className="p-8 flex gap-5 items-start">
+          <div className="p-3 bg-primary/20 rounded-xl">
+            <Landmark className="w-8 h-8 text-primary flex-shrink-0" />
+          </div>
+          <div className="flex-1">
+            <h3 className="font-bold text-lg text-primary font-sans uppercase tracking-widest">Market Entry Verdict</h3>
+            <p className="text-foreground mt-2 text-base leading-relaxed font-medium">
               {entryVerdict ?? 'Upload datasets to generate a market entry verdict from available signals.'}
             </p>
             {narrative && (
-              <p className="text-xs text-muted-foreground/80 mt-3 leading-relaxed border-t border-border/40 pt-3">
+              <p className="text-sm text-muted-foreground/80 mt-4 leading-relaxed border-t border-primary/20 pt-4">
                 {narrative}
               </p>
             )}

@@ -237,13 +237,11 @@ def run(
     df_valid["_opp_score"] = _percentile_rank(composite_signal)
 
     # ── Classification & driver ──────────────────────────────────────────────
-    df_valid["_opp_label"] = df_valid["_opp_score"].apply(_classify_opportunity)
-    df_valid["_opp_driver"] = df_valid.apply(
-        lambda r: _opportunity_driver(
-            r["_vol_pct"], r["_sales_pct"], r["_inv_comp_pct"]
-        ),
-        axis=1,
-    )
+    df_valid["_opp_label"] = [_classify_opportunity(x) for x in df_valid["_opp_score"]]
+    df_valid["_opp_driver"] = [
+        _opportunity_driver(v, s, c)
+        for v, s, c in zip(df_valid["_vol_pct"], df_valid["_sales_pct"], df_valid["_inv_comp_pct"])
+    ]
 
     # ── Aggregate stats ──────────────────────────────────────────────────────
     overall_score = _format_score(float(df_valid["_opp_score"].mean()))
@@ -486,9 +484,9 @@ def _assign_entry_segment(keyword: str) -> str:
     return "General Search Terms"
 
 
-def _derive_cluster_name(rows: List[pd.Series], keyword_col: str) -> str:
+def _derive_cluster_name(rows: List[Dict[str, Any]], keyword_col: str) -> str:
     """Name a keyword cluster from its dominant search themes (never 'Other Niches')."""
-    if not rows or keyword_col not in rows[0].index:
+    if not rows or keyword_col not in rows[0]:
         return "Emerging Micro-Segment"
     keywords = [str(r[keyword_col]).lower() for r in rows if pd.notna(r[keyword_col])]
     themes = _extract_themes(keywords, top_n=3)
@@ -536,13 +534,12 @@ def _build_entry_segments(
     if df_opp.empty or not keyword_col or keyword_col not in df_opp.columns:
         return [], None, False
 
-    buckets: Dict[str, List[pd.Series]] = {}
-    for _, row in df_opp.iterrows():
+    buckets: Dict[str, List[Dict[str, Any]]] = {}
+    for row in df_opp.to_dict('records'):
         label = _assign_entry_segment(str(row[keyword_col]))
         buckets.setdefault(label, []).append(row)
 
-    # Reshape undersized rule-based buckets into theme-derived names
-    merged: Dict[str, List[pd.Series]] = {}
+    merged: Dict[str, List[Dict[str, Any]]] = {}
     for label, rows in buckets.items():
         seg_name = label if len(rows) >= min_cluster_size else _derive_cluster_name(rows, keyword_col)
         base = seg_name

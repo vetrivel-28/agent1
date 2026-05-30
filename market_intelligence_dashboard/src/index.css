@@ -27,7 +27,7 @@
   .dark {
     --background: 222.2 84% 4.9%;
     --foreground: 210 40% 98%;
-    --card: 222.2 84% 8%; /* Slightly lighter than background */
+    --card: 222.2 84% 8%;
     --card-foreground: 210 40% 98%;
     --primary: 217.2 91.2% 59.8%;
     --primary-foreground: 222.2 47.4% 11.2%;
@@ -40,6 +40,55 @@
     --border: 217.2 32.6% 17.5%;
     --input: 217.2 32.6% 17.5%;
     --ring: 224.3 76.3% 48%;
+  }
+
+  /* Page-specific Theme Overrides */
+  .theme-demand { /* Blue (Default Primary) */
+    --primary: 221.2 83.2% 53.3%;
+  }
+  .theme-structure { /* Purple */
+    --primary: 271.5 81.3% 55.9%;
+    --ring: 271.5 81.3% 55.9%;
+  }
+  .theme-revenue { /* Green */
+    --primary: 142.1 76.2% 36.3%;
+    --ring: 142.1 76.2% 36.3%;
+  }
+  .theme-price { /* Amber */
+    --primary: 37.7 92.1% 50.2%;
+    --ring: 37.7 92.1% 50.2%;
+  }
+  .theme-product { /* Indigo */
+    --primary: 239 84% 67%;
+    --ring: 239 84% 67%;
+  }
+  .theme-entry { /* Teal */
+    --primary: 173.4 80.4% 40%;
+    --ring: 173.4 80.4% 40%;
+  }
+
+  .dark .theme-demand {
+    --primary: 217.2 91.2% 59.8%;
+  }
+  .dark .theme-structure {
+    --primary: 270 95% 75%;
+    --ring: 270 95% 75%;
+  }
+  .dark .theme-revenue {
+    --primary: 142.1 70.6% 45.3%;
+    --ring: 142.1 70.6% 45.3%;
+  }
+  .dark .theme-price {
+    --primary: 47.9 95.8% 53.1%;
+    --ring: 47.9 95.8% 53.1%;
+  }
+  .dark .theme-product {
+    --primary: 239 84% 75%;
+    --ring: 239 84% 75%;
+  }
+  .dark .theme-entry {
+    --primary: 175 84% 47%;
+    --ring: 175 84% 47%;
   }
 }
 

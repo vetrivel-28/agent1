@@ -34,7 +34,7 @@ type NavItem = {
 
 const topStandalone: NavItem[] = [
   { name: 'Data Upload', href: '/upload', icon: UploadCloud },
-  { name: 'Dashboard Overview', href: '/', icon: LayoutDashboard },
+  { name: 'Dashboard Overview', href: '/overview', icon: LayoutDashboard },
 ];
 
 const marketIntelligenceItems: NavItem[] = [
