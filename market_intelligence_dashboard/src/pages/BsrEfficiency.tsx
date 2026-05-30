@@ -188,7 +188,6 @@ export default function BsrEfficiency() {
   const outliers: any[]      = r.revenue_outliers     || [];
   const leakage: any[]       = r.revenue_leakage      || [];
   const elite: any[]         = r.elite_performers     || [];
-  const insights: string[]   = r.insights             || [];
   const qs                   = r.quadrant_summary     || {};
   const mh                   = r.market_health        || {};
   const topOutlier           = r.largest_revenue_outlier || {};
@@ -375,7 +374,7 @@ export default function BsrEfficiency() {
       </div>
 
       {/* ── KPI Row ── */}
-      <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
         <KpiCard
           title="Avg Efficiency"
           value={`${r.average_category_efficiency ?? 0} / 100`}
@@ -454,8 +453,6 @@ export default function BsrEfficiency() {
 
       {/* ── Product Intelligence ── */}
       {(() => {
-        const totalProducts = r.total_products_analysed ?? 1;
-
         // Key finding
         const keyFinding = r.revenue_leakage_count > 0
           ? `${r.revenue_leakage_count} products monetise below category expectations.`
@@ -710,10 +707,10 @@ export default function BsrEfficiency() {
             </CardHeader>
             <CardContent className="space-y-3">
               {[
-                { label: 'Elite Performers', count: qs.elite_performers ?? 0, color: 'text-purple-400',  bg: 'bg-purple-500/10' },
-                { label: 'Revenue Outliers', count: qs.revenue_outliers  ?? 0, color: 'text-emerald-500', bg: 'bg-emerald-500/10' },
-                { label: 'Revenue Leakage',  count: qs.revenue_leakage   ?? 0, color: 'text-red-500',    bg: 'bg-red-500/10' },
-                { label: 'Underperformers',  count: qs.underperformers   ?? 0, color: 'text-slate-400',  bg: 'bg-muted' },
+                { label: 'Elite Performers', count: qs.elite_performers ?? 0, color: 'text-purple-400',  bg: 'bg-purple-500/10',  desc: 'Strong rank + strong revenue' },
+                { label: 'Revenue Outliers', count: qs.revenue_outliers  ?? 0, color: 'text-emerald-500', bg: 'bg-emerald-500/10', desc: 'Weak rank, high revenue' },
+                { label: 'Revenue Leakage',  count: qs.revenue_leakage   ?? 0, color: 'text-red-500',    bg: 'bg-red-500/10',     desc: 'Strong rank, low revenue' },
+                { label: 'Underperformers',  count: qs.underperformers   ?? 0, color: 'text-slate-400',  bg: 'bg-muted',          desc: 'Weak rank + weak revenue' },
               ].map((q) => {
                 const pct = totalProducts > 0 ? Math.round((q.count / totalProducts) * 100) : 0;
                 return (

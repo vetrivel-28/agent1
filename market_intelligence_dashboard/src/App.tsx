@@ -41,12 +41,11 @@ function App() {
             <Route index element={<DashboardOverview />} />
             <Route path="demand-strength" element={<DemandStrength />} />
             <Route path="sales-momentum" element={<SalesMomentum />} />
-            <Route path="market-concentration" element={<MarketConcentration />} />
             <Route path="revenue-momentum" element={<RevenueMomentum />} />
             <Route path="bsr-efficiency" element={<BsrEfficiency />} />
             <Route path="search-momentum" element={<SearchMomentum />} />
             <Route path="search-intent-efficiency" element={<IntentEfficiency />} />
-            <Route path="market-structure" element={<div className="p-8"><h1 className="text-3xl font-bold tracking-tight text-gradient-primary">Market Structure</h1><p className="mt-4 text-muted-foreground">Detailed market structure analysis will be displayed here.</p></div>} />
+            <Route path="market-structure" element={<MarketConcentration />} />
             <Route path="whitespace-opportunities" element={<WhitespaceOpportunities />} />
             <Route path="direct-competitors" element={<DirectCompetitors />} />
             <Route path="substitute-intelligence" element={<SubstituteIntelligence />} />
