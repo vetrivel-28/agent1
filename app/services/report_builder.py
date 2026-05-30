@@ -22,12 +22,11 @@ from app.utils.logger import get_logger
 logger = get_logger("report_builder")
 
 _PILLAR_WEIGHTS = {
-    "demand": 0.25,
+    "demand": 0.35,
     "momentum": 0.15,
     "competition": 0.15,
     "opportunity": 0.15,
     "finance": 0.20,
-    "search": 0.10,
 }
 
 
@@ -78,7 +77,6 @@ def build_report(
     direct_comp_result: Optional[Dict[str, Any]] = None,
     price_elasticity_result: Optional[Dict[str, Any]] = None,
     hhi_result: Optional[Dict[str, Any]] = None,
-    search_mom_result: Optional[Dict[str, Any]] = None,
     demand_vel_result: Optional[Dict[str, Any]] = None,
     substitute_result: Optional[Dict[str, Any]] = None,
     complement_result: Optional[Dict[str, Any]] = None,
@@ -128,15 +126,6 @@ def build_report(
     opportunity_score = float(whitespace_score) if whitespace_score else round(
         (_get(whitespace_result, "results", "market_whitespace_score") or 0.0), 2
     )
-    search_score_val = _get(search_mom_result, "results", "momentum_alignment")
-    search_score = (
-        round(float(search_score_val), 2)
-        if search_mom_result
-        and search_mom_result.get("status") == "success"
-        and search_score_val is not None
-        else None
-    )
-
     demand_status  = demand_result.get("status",  "error")
     sales_status   = sales_result.get("status",   "error")
     revenue_status = revenue_result.get("status", "error")
@@ -161,7 +150,6 @@ def build_report(
             and finance_result.get("results", {}).get("finance_health", {}).get("status") == "success"
             else None
         ),
-        "search": search_score,
     }
     composite_score = _weighted_pillar_score(pillar_scores)
 
@@ -353,7 +341,7 @@ def build_report(
     # Rule-based verdict
     # -----------------------------------------------------------------------
     if composite_score >= 70:
-        verdict = "Market demand is strong with healthy monetization and search alignment."
+        verdict = "Market demand is strong with healthy monetization and growth momentum."
     elif composite_score >= 45:
         verdict = "Market conditions are stable with selective growth opportunities."
     else:
@@ -448,8 +436,8 @@ def build_report(
         "final_market_verdict": {
             "verdict": verdict,
             "verdict_basis": (
-                "FinalMarketScore = 0.25*Demand + 0.15*Momentum + 0.15*Competition + "
-                "0.15*Opportunity + 0.20*Finance + 0.10*Search"
+                "FinalMarketScore = 0.35*Demand + 0.15*Momentum + 0.15*Competition + "
+                "0.15*Opportunity + 0.20*Finance"
             ),
             "final_market_score": composite_score,
             "market_rating": market_rating,
@@ -459,12 +447,11 @@ def build_report(
                 f"(health {round(float(finance_health_score or 0), 1)}/100)."
             ),
             "economic_risk": (
-                f"Economic risk gauge {round(float(economic_risk), 1)}/100 "
-                f"({finance_block.get('margin_compression', {}).get('risk', 'N/A')} margin compression)."
+                f"Market risk gauge {round(float(economic_risk), 1)}/100 "
+                "from available entry and competition signals."
             ),
             "pillar_scores": {k: v for k, v in pillar_scores.items() if v is not None},
             "finance_score": round(float(finance_health_score), 2),
-            "search_score": search_score,
         },
     }
 
@@ -505,8 +492,8 @@ def build_report(
         "datasets_used": ["blackbox", "magnet"],
         "columns_used": [],
         "formula_used": (
-            "FinalMarketScore = 0.25*Demand + 0.15*Momentum + 0.15*Competition + "
-            "0.15*Opportunity + 0.20*Finance + 0.10*Search"
+            "FinalMarketScore = 0.35*Demand + 0.15*Momentum + 0.15*Competition + "
+            "0.15*Opportunity + 0.20*Finance"
         ),
         "results": {
             # Requested structured sections
@@ -549,7 +536,6 @@ def build_report(
             "direct_competitors": direct_comp_result.get("results", {}) if direct_comp_result else {},
             "price_elasticity": price_elasticity_result.get("results", {}) if price_elasticity_result else {},
             "hhi": hhi_result.get("results", {}) if hhi_result else {},
-            "search_momentum": search_mom_result.get("results", {}) if search_mom_result else {},
             "demand_velocity": demand_vel_result.get("results", {}) if demand_vel_result else {},
             "substitute_intelligence": substitute_result.get("results", {}) if substitute_result else {},
             "complement_intelligence": complement_result.get("results", {}) if complement_result else {},

@@ -9,13 +9,26 @@ interface KPICardProps {
   value: string | number;
   trend?: number; // percentage change
   trendLabel?: string;
+  subtitle?: string;
+  subtitleClassName?: string;
   icon: React.ReactNode;
   status?: 'success' | 'warning' | 'danger' | 'neutral';
   loading?: boolean;
   trendIsPercent?: boolean;
 }
 
-export function KPICard({ title, value, trend, trendLabel, icon, status = 'neutral', loading, trendIsPercent = true }: KPICardProps) {
+export function KPICard({
+  title,
+  value,
+  trend,
+  trendLabel,
+  subtitle,
+  subtitleClassName,
+  icon,
+  status = 'neutral',
+  loading,
+  trendIsPercent = true,
+}: KPICardProps) {
   const statusColors = {
     success: 'text-success bg-success/10 border-success/20',
     warning: 'text-warning bg-warning/10 border-warning/20',
@@ -43,6 +56,10 @@ export function KPICard({ title, value, trend, trendLabel, icon, status = 'neutr
               >
                 {value}
               </motion.h3>
+            )}
+
+            {!loading && subtitle && (
+              <p className={cn('text-sm font-semibold', subtitleClassName)}>{subtitle}</p>
             )}
 
             {!loading && trend !== undefined && (

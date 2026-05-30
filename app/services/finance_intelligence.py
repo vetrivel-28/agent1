@@ -57,6 +57,18 @@ def _metric_health_value(metric: Dict[str, Any], invert: bool = False) -> Option
     return clamp_score(100.0 - value) if invert else clamp_score(value)
 
 
+def _narrative_health_phrase(health_class: str) -> str:
+    """Display-only phrasing for narratives (internal classification unchanged)."""
+    phrases = {
+        "Excellent Economics": "favorable",
+        "Attractive": "attractive",
+        "Moderate": "mixed",
+        "Challenging": "challenging",
+        "Unattractive": "difficult",
+    }
+    return phrases.get(health_class, health_class.lower())
+
+
 def _build_market_economics_narrative(
     health_score: float,
     health_class: str,
@@ -68,33 +80,24 @@ def _build_market_economics_narrative(
 ) -> str:
     parts: List[str] = []
     parts.append(
-        f"The market demonstrates {health_class.lower()} "
-        f"(finance health {health_score:.0f}/100)."
+        f"Available market signals indicate {_narrative_health_phrase(health_class)} entry conditions "
+        f"(market attractiveness {health_score:.0f}/100)."
     )
     if api.get("status") == "success":
         parts.append(
             f"Advertising pressure is {str(api.get('classification', '')).lower()} "
-            f"with {str(api.get('capital_requirement', '')).lower()} capital requirements."
+            f"({float(api.get('score', 0)):.0f}/100) with "
+            f"{str(api.get('capital_requirement', '')).lower()} entry-investment requirements."
         )
     if pvs.get("status") == "success":
         parts.append(
-            f"Premium pricing acceptance is {str(pvs.get('classification', '')).lower()} "
-            f"(best band: {pvs.get('best_price_band', 'N/A')})."
-        )
-    if mcr.get("status") == "success":
-        parts.append(
-            "Margin compression remains the primary financial risk "
-            f"at {str(mcr.get('risk', '')).lower()} levels."
-            if mcr.get("risk") == "High"
-            else f"Margin compression risk is {str(mcr.get('risk', '')).lower()}."
-        )
-    if ces.get("status") == "success":
-        parts.append(
-            f"Capital efficiency is {str(ces.get('classification', '')).lower()}."
+            f"Price positioning potential appears {str(pvs.get('classification', '')).lower()} "
+            f"({float(pvs.get('score', 0)):.0f}/100; strongest band: {pvs.get('best_price_band', 'N/A')})."
         )
     if eci.get("status") == "success":
         parts.append(
-            f"Entry difficulty is {str(eci.get('classification', '')).lower()}."
+            f"Entry difficulty is {str(eci.get('classification', '')).lower()} "
+            f"({float(eci.get('score', 0)):.0f}/100)."
         )
     return " ".join(parts)
 
@@ -187,19 +190,15 @@ def run(
 
     if health_status == "success":
         if finance_health >= 60:
-            economic_verdict = (
-                "Market economics support investment with manageable structural risks."
-            )
-        elif finance_health >= 40:
-            economic_verdict = (
-                "Market economics are mixed — selective positioning and cost control required."
-            )
+            economic_verdict = "Favourable Entry Conditions"
+        elif finance_health >= 45:
+            economic_verdict = "Moderately Attractive Market"
+        elif finance_health >= 35:
+            economic_verdict = "Competitive but Accessible Market"
         else:
-            economic_verdict = (
-                "Market economics are challenging — prioritize capital efficiency and pricing discipline."
-            )
+            economic_verdict = "Challenging Entry Environment"
     else:
-        economic_verdict = "Insufficient data to determine economic verdict."
+        economic_verdict = "Entry assessment unavailable — upload required datasets."
 
     columns_used: List[str] = []
     for block in (api, pvs, mcr, ces, eci):

@@ -28,7 +28,9 @@ export const api = {
   },
   
   getDemandStrength: async (topN = 10) => {
-    const response = await apiClient.post(`/demand-strength?top_n=${topN}`);
+    const response = await apiClient.post(`/demand-strength?top_n=${topN}`, undefined, {
+      timeout: 90_000,
+    });
     return response.data;
   },
   
@@ -49,11 +51,6 @@ export const api = {
   
   getDemandVelocity: async (topN = 10) => {
     const response = await apiClient.post(`/demand-velocity?top_n=${topN}`);
-    return response.data;
-  },
-  
-  getSearchMomentum: async (topN = 10) => {
-    const response = await apiClient.post(`/search-momentum?top_n=${topN}`);
     return response.data;
   },
   

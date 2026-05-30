@@ -87,10 +87,6 @@ class DemandVelocityResult(EngineResponse):
     metric_name: str = "Demand Velocity"
 
 
-class SearchMomentumPhase2Result(EngineResponse):
-    metric_name: str = "Search Momentum"
-
-
 class SIEIResult(EngineResponse):
     metric_name: str = "Search Intent Efficiency Index (SIEI)"
 
@@ -108,7 +104,7 @@ class DirectCompetitorsResult(EngineResponse):
 
 
 class PriceElasticityResult(EngineResponse):
-    metric_name: str = "Price Elasticity"
+    metric_name: str = "Price Intelligence"
 
 
 class SubstituteIntelligenceResult(EngineResponse):

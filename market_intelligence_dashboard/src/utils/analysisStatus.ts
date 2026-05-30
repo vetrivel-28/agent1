@@ -5,6 +5,7 @@ export function isEngineOk(data: unknown): boolean {
   const d = data as Record<string, unknown>;
   const status = d.status as string | undefined;
   if (status === 'success') return true;
+  if (status === 'unavailable') return false;
   if (status === 'insufficient_data') {
     const results = d.results as Record<string, unknown> | undefined;
     return !!results && Object.keys(results).length > 0;

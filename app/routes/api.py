@@ -26,7 +26,6 @@ from app.engines import (
     price_elasticity_engine,
     revenue_momentum_engine,
     sales_momentum_engine,
-    search_momentum_engine,
     siei_engine,
     substitute_engine,
     whitespace_engine,
@@ -45,7 +44,6 @@ from app.models.response_models import (
     RevenueMomentumResult,
     SalesMomentumResult,
     SIEIResult,
-    SearchMomentumPhase2Result,
     SubstituteIntelligenceResult,
     UploadResponse,
     WhitespaceOpportunityResult,
@@ -362,26 +360,6 @@ def demand_velocity(top_n: int = 10):
 
 
 @router.post(
-    "/search-momentum",
-    response_model=SearchMomentumPhase2Result,
-    summary="Search Momentum",
-    description=(
-        "Measures alignment between search growth and sales growth.\n\n"
-        "**Datasets**: Magnet Keyword + BlackBox Products\n\n"
-        "**Formula**: `Search Momentum = Normalized Search Trend * Normalized Sales Trend`.\n\n"
-        "**Returns**: momentum alignment, healthy keywords, weak-conversion keywords, strongest/weakest products."
-    ),
-)
-def search_momentum(top_n: int = 10):
-    logger.info(f"Search Momentum requested (top_n={top_n})")
-    magnet_df = registry.get_magnet()
-    blackbox_df = registry.get_blackbox()
-    if is_empty_dataframe(magnet_df) or is_empty_dataframe(blackbox_df):
-        return _datasets_not_loaded("Search Momentum", "magnet and blackbox")
-    return search_momentum_engine.run(magnet_df, blackbox_df, top_n=top_n)
-
-
-@router.post(
     "/search-intent-efficiency",
     response_model=SIEIResult,
     summary="Search Intent Efficiency Index (SIEI)",
@@ -485,16 +463,12 @@ def direct_competitors(top_n: int = 15, price_tolerance_pct: float = 17.5):
 @router.post(
     "/price-elasticity",
     response_model=PriceElasticityResult,
-    summary="Price Elasticity Analysis",
+    summary="Price Intelligence (Pricing Strategy)",
     description=(
-        "Find strongest-performing price ranges and identify demand dead zones.\n\n"
-        "**Dataset**: BlackBox Products\n\n"
-        "**Logic**: Creates adaptive price buckets using quantile-based sizing. "
-        "Analyzes sales, revenue, and BSR per bucket. Detects dead zones (>50% sales drop).\n\n"
-        "**Formula**: `Demand Score = avg(Norm(ASIN Sales), Norm(Revenue), Norm(1/BSR))` "
-        "per price bucket.\n\n"
-        "**Returns**: price buckets with demand scores, strongest ranges, dead zones, "
-        "sales distribution, pricing insights."
+        "Pricing strategy analysis: revenue by price band, market structure, "
+        "attractiveness scores, and entry recommendations.\n\n"
+        "**Dataset**: BlackBox Products (Price + ASIN Revenue or ASIN Sales required)\n\n"
+        "**Returns**: KPIs, price bands, insights, opportunity table, positioning."
     ),
 )
 def price_elasticity(n_buckets: int = 5):
@@ -701,7 +675,6 @@ def _build_report_from_snapshot(top_n: int = 10):
         direct_comp_result=_eng("direct_competitors") or None,
         price_elasticity_result=_eng("price_elasticity") or None,
         hhi_result=_eng("hhi") or None,
-        search_mom_result=_eng("search_momentum") or None,
         demand_vel_result=_eng("demand_velocity") or None,
         substitute_result=_eng("substitute") or None,
         complement_result=_eng("complement") or None,

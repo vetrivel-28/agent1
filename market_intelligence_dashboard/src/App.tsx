@@ -9,7 +9,6 @@ import DemandStrength from './pages/DemandStrength';
 import SalesMomentum from './pages/SalesMomentum';
 import RevenueMomentum from './pages/RevenueMomentum';
 import BsrEfficiency from './pages/BsrEfficiency';
-import SearchMomentum from './pages/SearchMomentum';
 import IntentEfficiency from './pages/IntentEfficiency';
 import MarketConcentration from './pages/MarketConcentration';
 import MarketReport from './pages/MarketReport';
@@ -43,7 +42,6 @@ function App() {
             <Route path="sales-momentum" element={<SalesMomentum />} />
             <Route path="revenue-momentum" element={<RevenueMomentum />} />
             <Route path="bsr-efficiency" element={<BsrEfficiency />} />
-            <Route path="search-momentum" element={<SearchMomentum />} />
             <Route path="search-intent-efficiency" element={<IntentEfficiency />} />
             <Route path="market-structure" element={<MarketConcentration />} />
             <Route path="whitespace-opportunities" element={<WhitespaceOpportunities />} />

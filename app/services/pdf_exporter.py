@@ -151,7 +151,6 @@ def export_market_report_pdf(report: Dict[str, Any]) -> str:
     direct_competitors = results.get("direct_competitors", {})
     price_elasticity = results.get("price_elasticity", {})
     hhi = results.get("hhi", {})
-    search_momentum = results.get("search_momentum", {})
     demand_velocity = results.get("demand_velocity", {})
     substitute = results.get("substitute_intelligence", {})
     complement = results.get("complement_intelligence", {})
@@ -302,10 +301,6 @@ def export_market_report_pdf(report: Dict[str, Any]) -> str:
     # 7. SEARCH INTELLIGENCE
     # ==========================================
     elems.extend(_section_header("Search Intelligence", "7"))
-    if search_momentum:
-        elems.extend(_table_from_records(search_momentum.get("healthy_keywords", []), "Healthy Search Momentum"))
-        elems.extend(_table_from_records(search_momentum.get("weak_conversion_keywords", []), "Weak Conversion Keywords"))
-    
     if siei:
         elems.extend(_table_from_records(siei.get("highest_efficiency_keywords", []), "High Intent Efficiency (SIEI)"))
         
@@ -400,12 +395,12 @@ def export_market_report_pdf(report: Dict[str, Any]) -> str:
                 ("FONTSIZE", (0, 0), (-1, -1), 9),
                 ("PADDING", (0, 0), (-1, -1), 8),
             ]))
-            elems.append(Paragraph("<b>Economic Attractiveness Matrix</b>", styles["Heading4"]))
+            elems.append(Paragraph("<b>Market Attractiveness Matrix</b>", styles["Heading4"]))
             elems.append(matrix_table)
             elems.append(Spacer(1, 12))
         verdict_text = finance.get("economic_verdict", "")
         if verdict_text:
-            elems.append(Paragraph(f"<b>Economic Verdict:</b> {verdict_text}", styles["BodyText"]))
+            elems.append(Paragraph(f"<b>Market Entry Verdict:</b> {verdict_text}", styles["BodyText"]))
             elems.append(Spacer(1, 10))
     else:
         elems.append(Paragraph("Finance Intelligence data not available.", styles["BodyText"]))

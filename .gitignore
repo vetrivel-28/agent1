@@ -6,6 +6,7 @@ venv/
 # Python
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # Environment variables
 .env
@@ -13,7 +14,15 @@ __pycache__/
 # VS Code
 .vscode/
 
+# Qoder
+.qoder/index/
+.qoder/cache/
+
 # OS files
 .DS_Store
 Thumbs.db
+
+# Datasets
 datasets/
+
+.qoder/

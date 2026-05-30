@@ -29,9 +29,9 @@ export function AttractivenessMatrix({ data }: { data: AttractivenessMatrixData 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Economic Attractiveness Matrix</CardTitle>
+        <CardTitle>Market Attractiveness Matrix</CardTitle>
         <CardDescription>
-          {data.y_axis || 'Demand Strength'} (Y) vs {data.x_axis || 'Finance Health'} (X) — threshold {data.threshold ?? 50}
+          {data.y_axis || 'Demand Strength'} (Y) vs {data.x_axis || 'Market Health'} (X) — threshold {data.threshold ?? 50}
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -47,7 +47,7 @@ export function AttractivenessMatrix({ data }: { data: AttractivenessMatrixData 
               )}
             >
               <p className="text-xs text-muted-foreground mb-1">
-                {q.demandHigh ? 'High Demand' : 'Low Demand'} · {q.financeHigh ? 'High Finance' : 'Low Finance'}
+                {q.demandHigh ? 'High Demand' : 'Low Demand'} · {q.financeHigh ? 'Strong Signals' : 'Weaker Signals'}
               </p>
               <p className="font-semibold text-sm">{q.key}</p>
             </div>
@@ -55,7 +55,7 @@ export function AttractivenessMatrix({ data }: { data: AttractivenessMatrixData 
         </div>
         <div className="flex flex-wrap justify-center gap-4 mt-6 text-sm">
           <span>Demand: <strong>{data.demand_strength?.toFixed(1) ?? '—'}</strong></span>
-          <span>Finance: <strong>{data.finance_health?.toFixed(1) ?? '—'}</strong></span>
+          <span>Market health: <strong>{data.finance_health?.toFixed(1) ?? '—'}</strong></span>
           <Badge variant="outline">{active}</Badge>
         </div>
         {data.launch_recommendation && (

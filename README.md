@@ -104,24 +104,6 @@ Outputs:
 
 ---
 
-### Search Momentum
-
-Tracks search growth and demand acceleration.
-
-Uses:
-
-* Search Volume Trend
-* Sales Volume Trend
-* Sales Trend
-
-Outputs:
-
-* Search Momentum Score
-* Growth Keywords
-* Weak Keywords
-
----
-
 ### Search Intent Efficiency (SIEI)
 
 Formula:
@@ -314,8 +296,6 @@ POST /api/v1/bsr-efficiency
 
 POST /api/v1/demand-velocity
 
-POST /api/v1/search-momentum
-
 POST /api/v1/search-intent-efficiency
 
 POST /api/v1/market-concentration
@@ -397,7 +377,6 @@ Modules Implemented:
 * Revenue Momentum
 * BSR Efficiency
 * Demand Velocity
-* Search Momentum
 * SIEI
 * Market Concentration
 * Whitespace Opportunities

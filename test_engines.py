@@ -1,4 +1,4 @@
-﻿import json
+import json
 import pandas as pd
 from app.services.dataset_registry import registry
 from app.engines import (
@@ -6,7 +6,6 @@ from app.engines import (
     sales_momentum_engine,
     revenue_momentum_engine,
     bsr_efficiency_engine,
-    search_momentum_engine,
     siei_engine,
     whitespace_engine,
     direct_competitor_engine,
@@ -51,7 +50,6 @@ demand = demand_engine.run(mag_df, bb_df)
 sales = sales_momentum_engine.run(bb_df)
 revenue = revenue_momentum_engine.run(bb_df)
 bsr = bsr_efficiency_engine.run(bb_df)
-search = search_momentum_engine.run(mag_df, bb_df)
 siei = siei_engine.run(mag_df)
 ws = whitespace_engine.run(mag_df, None)
 direct = direct_competitor_engine.run(None, bb_df)
@@ -69,7 +67,6 @@ report = build_report(
     whitespace_result=ws,
     direct_comp_result=direct,
     price_elasticity_result=price,
-    search_mom_result=search,
     substitute_result=sub,
     complement_result=comp,
     bundle_result=bundle,

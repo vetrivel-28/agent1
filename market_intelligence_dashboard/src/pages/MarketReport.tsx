@@ -173,7 +173,7 @@ export default function MarketReport() {
                     paddingAngle={5}
                     dataKey="value"
                   >
-                    {marketShareData.map((_, index) => (
+                    {marketShareData.map((_: { name: string; value: number }, index: number) => (
                       <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                     ))}
                   </Pie>

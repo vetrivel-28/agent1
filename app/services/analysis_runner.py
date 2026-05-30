@@ -16,7 +16,6 @@ from app.engines import (
     price_elasticity_engine,
     revenue_momentum_engine,
     sales_momentum_engine,
-    search_momentum_engine,
     siei_engine,
     substitute_engine,
     whitespace_engine,
@@ -55,9 +54,6 @@ def run_all_engines(top_n: int = DEFAULT_TOP_N) -> Dict[str, Any]:
         engines["siei"] = siei_engine.run(magnet_df, top_n=top_n)
         engines["whitespace"] = whitespace_engine.run(magnet_df, None, top_n=top_n)
         engines["demand_velocity"] = demand_velocity_engine.run(magnet_df, blackbox_df, top_n=top_n)
-
-    if not (is_empty_dataframe(magnet_df) or is_empty_dataframe(blackbox_df)):
-        engines["search_momentum"] = search_momentum_engine.run(magnet_df, blackbox_df, top_n=top_n)
 
     if not (is_empty_dataframe(kc_df) or is_empty_dataframe(blackbox_df)):
         engines["substitute"] = substitute_engine.run(kc_df, blackbox_df, top_n=top_n)
