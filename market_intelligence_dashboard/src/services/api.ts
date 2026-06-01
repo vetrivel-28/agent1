@@ -65,7 +65,7 @@ export const api = {
   },
   
   getMarketReport: async (topN = 10) => {
-    const response = await apiClient.post(`/market-report?top_n=${topN}`);
+    const response = await apiClient.get(`/market-report?top_n=${topN}`);
     return response.data;
   },
 

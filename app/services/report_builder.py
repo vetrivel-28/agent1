@@ -211,6 +211,35 @@ def build_report(
             )
 
     # -----------------------------------------------------------------------
+    # Dynamic Executive Verdict & Evidence
+    # -----------------------------------------------------------------------
+    top_3_share = _get(hhi_result, "results", "top_3_share") or 0.0
+    top_kw_sv = 0
+    top_kw = ""
+    if top_demand_keywords:
+        top_kw = top_demand_keywords[0].get("keyword", "")
+        top_kw_sv = top_demand_keywords[0].get("search_volume", 0)
+
+    verdict_lines = []
+    
+    if top_3_share > 50:
+        verdict_lines.append(f"Top 3 brands control {top_3_share:.1f}% of revenue.")
+    else:
+        verdict_lines.append(f"Market revenue is fragmented with top 3 brands holding {top_3_share:.1f}%.")
+
+    if top_kw:
+        verdict_lines.append(f"Demand is heavily concentrated in '{top_kw}'.")
+
+    best_price = _get(price_elasticity_result, "results", "kpis", "best_selling_price_band")
+    if best_price:
+        verdict_lines.append(f"Primary revenue cluster exists at {best_price}.")
+
+    entry_diff = _get(finance_result, "results", "entry_cost", "classification") or "Moderate"
+    verdict_lines.append(f"Entry competition is considered {entry_diff.lower()}.")
+
+    executive_verdict = " ".join(verdict_lines)
+    
+    # -----------------------------------------------------------------------
     # Risk findings (data-driven)
     # -----------------------------------------------------------------------
     risks: List[str] = []
@@ -218,14 +247,6 @@ def build_report(
     sales_direction   = _get(sales_result,   "results", "market_momentum_direction") or ""
     revenue_direction = _get(revenue_result, "results", "market_momentum_direction") or _get(revenue_result, "results", "market_revenue_direction")  or ""
     demand_phase = _get(demand_result, "results", "interpretation") or _get(demand_result, "summary") or ""
-
-    direction_score = (sales_score * 0.4) + (revenue_score * 0.4) + (demand_score * 0.2)
-    if direction_score >= 60:
-        market_direction = "growing"
-    elif direction_score >= 40:
-        market_direction = "stable"
-    else:
-        market_direction = "declining"
 
     validation_blocks = [
         demand_result.get("validation", {}),
@@ -272,50 +293,49 @@ def build_report(
         else:
             reliability_score = 0.0
 
+    # Determine market direction based on composite score and momentum
+    if composite_score >= 60:
+        market_direction = "growing"
+    elif composite_score >= 40:
+        market_direction = "stable"
+    else:
+        market_direction = "declining"
+    
     direction_explanation = (
         "Growing because overall momentum and demand scores are strong." if market_direction == "growing" else
         "Stable because overall momentum and demand scores are moderate." if market_direction == "stable" else
         "Declining because overall momentum and demand scores are weak."
     )
 
-    if sales_direction == "Decelerating":
-        risks.append(
-            "Market sales momentum is decelerating — overall brand-level "
-            "sales growth is slowing."
-        )
-    if revenue_direction == "Declining":
-        risks.append(
-            "Market revenue momentum is declining — total revenue across "
-            "brands is contracting."
-        )
-    if declining_brands:
-        n_declining = len(declining_brands)
-        risks.append(
-            f"{n_declining} brand(s) are in the bottom sales momentum quartile — "
-            "avoid entering segments dominated by these brands."
-        )
-    if bsr_score < 30:
-        risks.append(
-            "Low overall BSR efficiency score suggests most products are not "
-            "converting their rank into proportional revenue."
-        )
-
-    finance_narrative = ""
-    finance_overview = {}
-    finance_block = {}
-    if finance_result and finance_result.get("results"):
-        finance_block = finance_result["results"]
-        finance_narrative = finance_block.get("market_economics_narrative", "")
-        finance_overview = finance_block.get("overview_panel", {})
-        mcr_risk = finance_block.get("margin_compression", {}).get("risk", "")
-        if mcr_risk == "High":
-            risks.append(
-                "Margin compression risk is elevated — pricing wars may erode seller margins."
-            )
-        if finance_health_score >= 60 and finance_block.get("entry_cost", {}).get("classification") == "Difficult":
-            opportunities.append(
-                "Strong market economics despite difficult entry — incumbents may have defensible positioning."
-            )
+    # Market Risks Calculation
+    risks = []
+    
+    if hhi_score and hhi_score > 2500:
+        risks.append(f"High Concentration: HHI score of {hhi_score:.0f} indicates a highly consolidated market structure.")
+        
+    if top_3_share > 60:
+        risks.append(f"Incumbent Dominance: The top 3 brands control {top_3_share:.1f}% of total revenue, severely limiting share for new entrants.")
+        
+    market_leader = top_rev_brands[0].get("brand", "") if top_rev_brands else ""
+    market_leader_share = 0.0
+    if top_rev_brands and total_market_revenue > 0:
+        market_leader_share = (top_rev_brands[0].get("total_revenue", 0) / total_market_revenue) * 100
+        
+    if market_leader_share > 40:
+        risks.append(f"Monopoly Risk: {market_leader} dominates {market_leader_share:.1f}% of the market, posing a significant barrier to entry.")
+        
+    finance_block = finance_result.get("results", {}) if finance_result else {}
+    finance_narrative = finance_block.get("market_economics_narrative", "")
+    
+    entry_diff_class = finance_block.get("entry_cost", {}).get("classification", "Moderate")
+    req_reviews = finance_block.get("entry_cost", {}).get("estimated_required_reviews", 0)
+    
+    if entry_diff_class == "Difficult" or req_reviews > 1000:
+        risks.append(f"Review Barriers: Entering this market is {entry_diff_class.lower()}, with an estimated {req_reviews:,} reviews required to compete.")
+        
+    mcr_risk = finance_block.get("margin_compression", {}).get("risk", "")
+    if mcr_risk == "High":
+        risks.append("Margin Compression: Pricing wars or elevated advertising costs may erode seller margins.")
 
     attractiveness_matrix = finance_block.get("economic_attractiveness_matrix", {})
     if not attractiveness_matrix and finance_health_score > 0:
@@ -338,121 +358,210 @@ def build_report(
     )
 
     # -----------------------------------------------------------------------
-    # Rule-based verdict
+    # Intelligence Modules mapping
     # -----------------------------------------------------------------------
-    if composite_score >= 70:
-        verdict = "Market demand is strong with healthy monetization and growth momentum."
-    elif composite_score >= 45:
-        verdict = "Market conditions are stable with selective growth opportunities."
+    top_opp_kw = _get(whitespace_result, "results", "market_insights", "top_seo_opportunity", "keyword") or top_kw
+    top_rev_brand = top_rev_brands[0].get("brand") if top_rev_brands else "N/A"
+    top_cluster = _get(direct_comp_result, "results", "market_clusters", 0, "subcategory") or _get(direct_comp_result, "results", "market_clusters", 0, "category") or "N/A"
+    
+    # Get median price for market snapshot
+    median_price = _get(price_elasticity_result, "results", "kpis", "median_price") or 0.0
+    
+    # Get market leader (top brand by revenue share)
+    market_leader = top_rev_brand if top_rev_brand and top_rev_brand != "N/A" else ""
+    
+    # Calculate market leader share if available
+    market_leader_share = 0.0
+    if top_rev_brands and len(top_rev_brands) > 0:
+        top_brand_rev = top_rev_brands[0].get("total_revenue", 0)
+        market_leader_share = round((float(top_brand_rev) / float(total_market_revenue) * 100) if total_market_revenue > 0 else 0, 1)
+    
+    # -----------------------------------------------------------------------
+    # Market Snapshot Section
+    # -----------------------------------------------------------------------
+    market_snapshot = {
+        "total_revenue": f"${total_market_revenue:,.0f}" if total_market_revenue > 0 else "N/A",
+        "total_products": total_products,
+        "total_brands": total_brands,
+        "total_keywords": len(magnet_df) if magnet_df is not None else 0,
+        "top_3_share": f"{top_3_share:.1f}%" if top_3_share else "N/A",
+        "hhi_score": f"{hhi_score:.0f}" if hhi_score else "N/A",
+        "median_price": f"${median_price:.2f}" if median_price > 0 else "N/A",
+        "market_leader": market_leader if market_leader else "N/A",
+        "market_leader_share": f"{market_leader_share:.1f}%" if market_leader_share > 0 else "N/A",
+    }
+    
+    # -----------------------------------------------------------------------
+    # Key Insights Generation
+    # -----------------------------------------------------------------------
+    key_insights = []
+    
+    # Insight 1: Market Concentration
+    if top_3_share >= 60:
+        key_insights.append(f"Top 3 brands control {top_3_share:.1f}% of category revenue—market is highly concentrated.")
+    elif top_3_share >= 40:
+        key_insights.append(f"Top 3 brands control {top_3_share:.1f}% of revenue—moderate concentration with room for challengers.")
     else:
-        verdict = "Market fundamentals are weak and require cautious entry."
+        key_insights.append(f"Market revenue is fragmented across {total_brands} brands ({top_3_share:.1f}% held by top 3)—competitive landscape is open.")
+    
+    # Insight 2: Market Leader Position
+    if market_leader and market_leader_share > 0:
+        key_insights.append(f"{market_leader} leads with {market_leader_share:.1f}% market share—study their positioning strategy.")
+    
+    # Insight 3: Price Band Concentration
+    if best_price:
+        revenue_band_share = _get(price_elasticity_result, "results", "kpis", "best_selling_price_band_revenue_share") or 0.0
+        if revenue_band_share > 0:
+            key_insights.append(f"Revenue is concentrated in the {best_price} price band ({revenue_band_share:.1f}% share)—dominant pricing strategy.")
+        else:
+            key_insights.append(f"The {best_price} price band drives majority of market revenue—primary value cluster.")
+    
+    # Insight 4: Demand Distribution
+    if top_demand_keywords:
+        top_kw_sv = top_demand_keywords[0].get("search_volume", 0) if top_demand_keywords else 0
+        if top_kw_sv > 0:
+            total_sv = sum(kw.get("search_volume", 0) for kw in top_demand_keywords) if top_demand_keywords else 0
+            if total_sv > 0:
+                top_kw_pct = round((float(top_kw_sv) / float(total_sv) * 100), 1)
+                key_insights.append(f"Demand is concentrated: top keyword '{top_kw}' represents {top_kw_pct}% of top demand keywords.")
+    
+    # Insight 5: BSR Efficiency
+    if bsr_score >= 60:
+        key_insights.append(f"High BSR efficiency ({bsr_score}/100) indicates products effectively monetize their rank—strong market fundamentals.")
+    elif bsr_score < 30:
+        key_insights.append(f"Low BSR efficiency ({bsr_score}/100) indicates revenue leakage—opportunity for optimization.")
+    
+    # Limit to 5 insights
+    key_insights = key_insights[:5]
+    
+    # -----------------------------------------------------------------------
+    # Entry Strategy Section
+    # -----------------------------------------------------------------------
+    entry_strategy = {
+        "target_segment": top_opp_kw or top_cluster or "Market Leader Segment",
+        "target_price_band": best_price or "Median Market Price",
+        "target_keywords": [kw.get("keyword", "") for kw in top_demand_keywords[:3] if kw.get("keyword", "")],
+        "competition_level": "High" if top_3_share > 60 else "Moderate" if top_3_share > 40 else "Low",
+        "recommended_action": (
+            f"Target high-demand keywords ({top_opp_kw or 'market leader segment'}) in the {best_price or 'median'} price band. "
+            f"Differentiate from {market_leader or 'incumbent leader'} by focusing on underserved demand. "
+            f"Entry difficulty is {entry_diff.lower()}."
+        ) if best_price or top_opp_kw else "Insufficient data for entry recommendation.",
+    }
+    
+    # -----------------------------------------------------------------------
+    # Opportunity Summary Mapping (filter N/A values)
+    # -----------------------------------------------------------------------
+    opp_summary = []
+    if top_opp_kw and top_opp_kw != "N/A":
+        top_kw_sv = top_demand_keywords[0].get("search_volume", 0) if top_demand_keywords else 0
+        opp_summary.append({
+            "type": "Demand Opportunity",
+            "title": top_opp_kw,
+            "evidence": f"Search volume: {top_kw_sv:,} — highest demand keyword."
+        })
+    if efficient_products and len(efficient_products) > 0:
+        prod_title = efficient_products[0].get("title") or efficient_products[0].get("asin", "")
+        if len(prod_title) > 40:
+            prod_title = prod_title[:37] + "..."
+            
+        opp_summary.append({
+            "type": "Efficiency Model",
+            "title": prod_title,
+            "evidence": f"BSR efficiency score {efficient_products[0].get('efficiency_score', 0)}/100 — benchmark for conversion."
+        })
+    
+    revenue_band_share = _get(price_elasticity_result, "results", "kpis", "best_selling_price_band_revenue_share") or 0.0
+    band_prod_count = _get(price_elasticity_result, "results", "kpis", "best_selling_price_band_product_count") or 0
+    
+    if best_price and best_price != "N/A":
+        opp_summary.append({
+            "type": "Price Opportunity",
+            "title": best_price,
+            "evidence": f"Dominant price band—{revenue_band_share:.1f}% of revenue across {band_prod_count} products."
+        })
+    if fastest_brands and len(fastest_brands) > 0:
+        opp_summary.append({
+            "type": "Momentum Leader",
+            "title": fastest_brands[0].get("brand", ""),
+            "evidence": f"Growing at {fastest_brands[0].get('momentum_score', 0)}/100—accelerating brand."
+        })
+
+    
+    # -----------------------------------------------------------------------
+    # Primary Price Cluster & Market Assessment
+    # -----------------------------------------------------------------------
+    is_attractive = total_market_revenue > 10000 and top_3_share < 80 and (not entry_diff_class or entry_diff_class != "Difficult")
+    
+    market_entry_assessment = {
+        "attractiveness": "High" if is_attractive and composite_score >= 60 else "Low" if composite_score < 40 else "Moderate",
+        "key_advantages": [
+            f"Strong Demand ({top_kw_sv:,} SV)" if top_kw_sv > 10000 else "Stable Demand",
+            f"High Price Revenue Share ({revenue_band_share:.1f}%)" if revenue_band_share > 30 else "Fragmented Pricing",
+        ],
+        "key_risks": risks[:3] if risks else ["No extreme concentration detected"],
+        "recommended_approach": entry_strategy["recommended_action"]
+    }
+    
+    primary_price_cluster = {
+        "dominant_range": best_price or "N/A",
+        "revenue_share": f"{revenue_band_share:.1f}%" if revenue_band_share > 0 else "N/A",
+        "product_count": band_prod_count or 0
+    }
 
     # -----------------------------------------------------------------------
     # Deterministic report sections (requested structure)
     # -----------------------------------------------------------------------
     report_sections = {
-        "executive_summary": {
-            "composite_market_health_score": composite_score,
-            "final_market_score": composite_score,
-            "engines_successful": len(engines_ok),
-            "engines_total": 4,
-            "pillar_scores": pillar_scores,
-            "deterministic_note": "Generated from deterministic engine outputs only.",
-            "market_economics": finance_narrative or "Market economics data not available.",
+        "market_snapshot": market_snapshot,
+        "key_insights": key_insights,
+        "entry_strategy": entry_strategy,
+        "market_entry_assessment": market_entry_assessment,
+        "primary_price_cluster": primary_price_cluster,
+        "market_attractiveness": {
+            "revenue_potential": {
+                "value": f"${total_market_revenue:,.2f}",
+                "formula": "SUM(Revenue)",
+                "reason": "Total revenue across all analyzed products."
+            },
+            "competition_intensity": {
+                "value": f"{top_3_share:.1f}% Top 3 Share",
+                "formula": "Sum of Top 3 Brand Revenue / Total Revenue",
+                "reason": f"HHI Concentration Score is {hhi_score}."
+            },
+            "demand_strength": {
+                "value": f"{top_kw_sv:,} SV",
+                "formula": "Max(Search Volume)",
+                "reason": f"Peak demand driven by {top_kw}."
+            },
+            "entry_difficulty": {
+                "value": entry_diff,
+                "formula": "Capital + Competition + Advertising Pressure",
+                "reason": "Based on required review count and median prices."
+            }
         },
-        "finance_intelligence": {
-            "finance_health_score": round(float(finance_health_score), 2),
-            "economic_attractiveness": finance_overview.get(
-                "economic_attractiveness", "Not Available"
-            ),
-            "advertising_pressure": finance_block.get("advertising_pressure", {}),
-            "premium_viability": finance_block.get("premium_viability", {}),
-            "margin_compression": finance_block.get("margin_compression", {}),
-            "capital_efficiency": finance_block.get("capital_efficiency", {}),
-            "entry_cost": finance_block.get("entry_cost", {}),
-            "economic_verdict": finance_block.get("economic_verdict", ""),
-            "radar_chart": finance_block.get("radar_chart", []),
-            "economic_risk_gauge": finance_block.get("economic_risk_gauge", 0),
-            "economic_attractiveness_matrix": attractiveness_matrix,
+        "executive_verdict": {
+            "verdict": executive_verdict,
+            "is_attractive": is_attractive
         },
-        "economic_attractiveness_matrix": attractiveness_matrix,
-        "market_health": {
-            "overall_score": composite_score,
-            "data_reliability_score": reliability_score,
-            "data_reliability_explanation": "Data Reliability measures how complete and usable the uploaded dataset is. Higher reliability means the dashboard insights are more trustworthy.",
-            "market_direction": market_direction,
-            "market_direction_explanation": direction_explanation,
-            "sales_direction": sales_direction,
-            "revenue_direction": revenue_direction,
-            "demand_direction_signal": demand_phase,
-            "market_health_band": (
-                "high" if composite_score >= 70 else "medium" if composite_score >= 45 else "low"
-            ),
+        "intelligence_modules": {
+            "top_opportunity_keyword": top_opp_kw if top_opp_kw and top_opp_kw != "N/A" else None,
+            "top_revenue_brand": top_rev_brand if top_rev_brand and top_rev_brand != "N/A" else None,
+            "top_product_cluster": top_cluster if top_cluster and top_cluster != "N/A" else None,
+            "top_price_range": best_price if best_price and best_price != "N/A" else None,
+            "best_entry_segment": top_opp_kw or top_cluster if (top_opp_kw or top_cluster) and (top_opp_kw != "N/A" or top_cluster != "N/A") else None
+        },
+        "opportunity_summary": opp_summary,
+        "market_risks": risks,
+        "data_audit": {
+            "products_analyzed": total_products,
+            "brands_analyzed": total_brands,
+            "keywords_analyzed": len(magnet_df) if magnet_df is not None else 0
         },
         "demand_analysis": {
-            "demand_score": round(demand_score, 2),
             "top_demand_keywords": top_demand_keywords[:top_n],
-            "top_demand_products": top_demand_products[:top_n],
-            "deterministic_interpretation": (
-                "Market demand is strong" if demand_score >= 70 else
-                "Market demand is stable" if demand_score >= 45 else
-                "Market demand is weak"
-            ),
-        },
-        "brand_momentum": {
-            "sales_momentum_score": round(sales_score, 2),
-            "fastest_growing_brands": fastest_brands[:top_n],
-            "declining_brands": declining_brands[:top_n],
-            "deterministic_interpretation": (
-                "Growth momentum strengthening" if sales_direction == "Accelerating" else
-                "Growth momentum stable" if sales_direction == "Stable" else
-                "Growth momentum weakening"
-            ),
-        },
-        "revenue_analysis": {
-            "revenue_momentum_score": round(revenue_score, 2),
-            "total_market_revenue": round(total_market_revenue, 2),
-            "top_revenue_brands": top_rev_brands[:top_n],
-            "declining_revenue_brands": declining_rev[:top_n],
-        },
-        "bsr_efficiency_analysis": {
-            "bsr_efficiency_score": round(bsr_score, 2),
-            "most_efficient_products": efficient_products[:top_n],
-            "least_efficient_products": inefficient_products[:top_n],
-            "deterministic_interpretation": (
-                "Products monetizing efficiently" if bsr_score >= 60 else
-                "Products monetizing moderately" if bsr_score >= 40 else
-                "Products monetizing inefficiently"
-            ),
-        },
-        "opportunity_signals": {
-            "count": len(opportunities),
-            "signals": opportunities,
-        },
-        "risk_signals": {
-            "count": len(risks),
-            "signals": risks,
-        },
-        "final_market_verdict": {
-            "verdict": verdict,
-            "verdict_basis": (
-                "FinalMarketScore = 0.35*Demand + 0.15*Momentum + 0.15*Competition + "
-                "0.15*Opportunity + 0.20*Finance"
-            ),
-            "final_market_score": composite_score,
-            "market_rating": market_rating,
-            "launch_recommendation": launch_recommendation,
-            "finance_contribution": (
-                f"Finance pillar contributed ~{finance_contribution} points "
-                f"(health {round(float(finance_health_score or 0), 1)}/100)."
-            ),
-            "economic_risk": (
-                f"Market risk gauge {round(float(economic_risk), 1)}/100 "
-                "from available entry and competition signals."
-            ),
-            "pillar_scores": {k: v for k, v in pillar_scores.items() if v is not None},
-            "finance_score": round(float(finance_health_score), 2),
-        },
+            "top_demand_products": top_demand_products[:top_n]
+        }
     }
 
     # -----------------------------------------------------------------------
@@ -498,49 +607,6 @@ def build_report(
         "results": {
             # Requested structured sections
             **report_sections,
-            # Backward-compatible keys
-            "composite_market_health_score": composite_score,
-            "engine_scores": {
-                "demand_strength":   round(demand_score, 2),
-                "sales_momentum":    round(sales_score, 2),
-                "revenue_momentum":  round(revenue_score, 2),
-                "bsr_efficiency":    round(bsr_score, 2),
-                "finance_health":    round(float(finance_health_score), 2),
-            },
-            "pillar_scores": pillar_scores,
-            "market_overview": {
-                "total_brands_analysed":   total_brands,
-                "total_products_analysed": total_products,
-                "total_market_revenue":    round(total_market_revenue, 2),
-                "sales_direction":         sales_direction,
-                "revenue_direction":       revenue_direction,
-                "market_direction":        market_direction,
-                "market_direction_explanation": direction_explanation,
-                "data_reliability_score":  reliability_score,
-                "data_reliability_explanation": "Data Reliability measures how complete and usable the uploaded dataset is. Higher reliability means the dashboard insights are more trustworthy.",
-            },
-            "rankings": {
-                "top_demand_keywords":      top_demand_keywords[:top_n],
-                "top_demand_products":      top_demand_products[:top_n],
-                "fastest_growing_brands":   fastest_brands[:top_n],
-                "declining_brands":         declining_brands[:top_n],
-                "top_revenue_brands":       top_rev_brands[:top_n],
-                "declining_revenue_brands": declining_rev[:top_n],
-                "most_efficient_products":  efficient_products[:top_n],
-                "least_efficient_products": inefficient_products[:top_n],
-            },
-            "opportunity_findings": opportunities,
-            "risk_findings": risks,
-            "siei": siei_result.get("results", {}) if siei_result else {},
-            "whitespace": whitespace_result.get("results", {}) if whitespace_result else {},
-            "direct_competitors": direct_comp_result.get("results", {}) if direct_comp_result else {},
-            "price_elasticity": price_elasticity_result.get("results", {}) if price_elasticity_result else {},
-            "hhi": hhi_result.get("results", {}) if hhi_result else {},
-            "demand_velocity": demand_vel_result.get("results", {}) if demand_vel_result else {},
-            "substitute_intelligence": substitute_result.get("results", {}) if substitute_result else {},
-            "complement_intelligence": complement_result.get("results", {}) if complement_result else {},
-            "bundle_opportunities": bundle_result.get("results", {}) if bundle_result else {},
-            "finance_intelligence": finance_block,
             "market_economics_narrative": finance_narrative,
             "markdown_report": md,
         },

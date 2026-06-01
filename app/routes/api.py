@@ -823,47 +823,64 @@ def finance_intelligence(top_n: int = 10):
 
 def _build_report_from_snapshot(top_n: int = 10):
     """Single analysis run — report and UI share cached engine outputs."""
+    logger.info(f"Building market report snapshot (top_n={top_n})")
+    
     blackbox_df = registry.get_blackbox()
     magnet_df = registry.get_magnet()
+    
+    logger.info(f"Datasets loaded: blackbox={len(blackbox_df) if blackbox_df is not None else 0}, magnet={len(magnet_df) if magnet_df is not None else 0}")
+    
     if is_empty_dataframe(blackbox_df):
         return _datasets_not_loaded("Market Report", "blackbox")
 
     snapshot = analysis_cache.get_snapshot()
     if not snapshot or snapshot.get("top_n") != top_n:
+        logger.info(f"Cache miss or top_n mismatch, running all engines")
         snapshot = run_all_engines(top_n=top_n)
 
     engines = snapshot.get("engines", {})
+    logger.info(f"Engines snapshot ready: {list(engines.keys())}")
 
     def _eng(key: str):
         return engines.get(key) or {}
 
-    report = build_report(
-        demand_result=_eng("demand"),
-        sales_result=_eng("sales_momentum"),
-        revenue_result=_eng("revenue_momentum"),
-        bsr_result=_eng("bsr_efficiency"),
-        siei_result=_eng("siei") or None,
-        whitespace_result=_eng("whitespace") or None,
-        direct_comp_result=_eng("direct_competitors") or None,
-        price_elasticity_result=_eng("price_elasticity") or None,
-        hhi_result=_eng("hhi") or None,
-        demand_vel_result=_eng("demand_velocity") or None,
-        substitute_result=_eng("substitute") or None,
-        complement_result=_eng("complement") or None,
-        bundle_result=_eng("bundle") or None,
-        finance_result=_eng("finance") or None,
-        blackbox_df=blackbox_df,
-        magnet_df=magnet_df,
-        top_n=top_n,
-    )
+    try:
+        logger.info("Starting market report generation from engines")
+        report = build_report(
+            demand_result=_eng("demand"),
+            sales_result=_eng("sales_momentum"),
+            revenue_result=_eng("revenue_momentum"),
+            bsr_result=_eng("bsr_efficiency"),
+            siei_result=_eng("siei") or None,
+            whitespace_result=_eng("whitespace") or None,
+            direct_comp_result=_eng("direct_competitors") or None,
+            price_elasticity_result=_eng("price_elasticity") or None,
+            hhi_result=_eng("hhi") or None,
+            demand_vel_result=_eng("demand_velocity") or None,
+            substitute_result=_eng("substitute") or None,
+            complement_result=_eng("complement") or None,
+            bundle_result=_eng("bundle") or None,
+            finance_result=_eng("finance") or None,
+            blackbox_df=blackbox_df,
+            magnet_df=magnet_df,
+            top_n=top_n,
+        )
+        logger.info(f"Market report generation succeeded")
 
-    if report.get("results") is not None:
-        report["results"]["engine_outputs"] = engines
+        if report.get("results") is not None:
+            report["results"]["engine_outputs"] = engines
 
-    return format_response(report)
+        return format_response(report)
+    except Exception as e:
+        logger.exception(f"Market report generation failed: {str(e)}")
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=500,
+            detail=f"Market report generation failed: {str(e)}"
+        )
 
 
-@router.post(
+@router.get(
     "/market-report",
     response_model=StandardResponse,
     summary="Full Market Intelligence Report",

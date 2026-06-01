@@ -38,7 +38,7 @@ const marketIntelligenceItems: NavItem[] = [
   { name: 'Brand Momentum Intelligence', href: '/sales-momentum', icon: TrendingUp },
   { name: 'Market Structure', href: '/market-structure', icon: BarChart4 },
   { name: 'Revenue Growth', href: '/revenue-momentum', icon: DollarSign },
-  { name: 'BSR Efficiency', href: '/bsr-efficiency', icon: Crosshair },
+  // { name: 'BSR Efficiency', href: '/bsr-efficiency', icon: Crosshair },
   { name: 'Inbound Efficiency Index', href: '/search-intent-efficiency', icon: MousePointerClick },
 ];
 

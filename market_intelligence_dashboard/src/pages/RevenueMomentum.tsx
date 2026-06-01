@@ -48,25 +48,40 @@ export default function RevenueMomentum() {
       merged.revenue_strength_score = choose(existing.revenue_strength_score, b.revenue_strength_score);
       merged.total_revenue = Math.max(existing.total_revenue ?? 0, b.total_revenue ?? 0);
       merged.momentum_category = merged.momentum_category || b.momentum_category || existing.momentum_category;
+      merged.primary_engine = b.primary_engine || existing.primary_engine;
+      merged.drivers = b.drivers || existing.drivers;
+      merged.revenue_share = Math.max(existing.revenue_share ?? 0, b.revenue_share ?? 0);
+      merged.sales_estimate = Math.max(existing.sales_estimate ?? 0, b.sales_estimate ?? 0);
+      merged.total_review_count = Math.max(existing.total_review_count ?? 0, b.total_review_count ?? 0);
+      merged.average_bsr = existing.average_bsr ?? b.average_bsr;
+      merged.avg_sales_trend_pct = existing.avg_sales_trend_pct ?? b.avg_sales_trend_pct;
+      merged.avg_review_growth_pct = existing.avg_review_growth_pct ?? b.avg_review_growth_pct;
+      merged.avg_bsr_trend = existing.avg_bsr_trend ?? b.avg_bsr_trend;
       brandMap.set(name, merged);
     });
 
     const uniqueBrands = Array.from(brandMap.values());
 
     uniqueBrands.forEach((b: any) => {
-      const sales = Number(b.sales_velocity_score ?? 0);
-      const review = Number(b.review_velocity_score ?? 0);
-      const bsr = Number(b.bsr_momentum_score ?? 0);
       const rev = Number(b.revenue_strength_score ?? 0);
-      const drivers = [
-        { key: 'Sales Velocity', val: sales },
-        { key: 'Review Velocity', val: review },
-        { key: 'BSR Momentum', val: bsr },
-        { key: 'Revenue Strength', val: rev },
-      ];
-      drivers.sort((x, y) => y.val - x.val);
-      b.primary_driver = drivers[0].key;
-      b.weakest_driver = drivers[drivers.length - 1].key;
+      
+      // Use backend primary_engine if available, else fallback
+      if (b.primary_engine) {
+        b.primary_driver = b.primary_engine;
+      } else {
+        const sales = Number(b.sales_velocity_score ?? 0);
+        const review = Number(b.review_velocity_score ?? 0);
+        const bsr = Number(b.bsr_momentum_score ?? 0);
+        const drvs = [
+          { key: 'Sales Velocity', val: sales },
+          { key: 'Review Velocity', val: review },
+          { key: 'BSR Momentum', val: bsr },
+          { key: 'Revenue Strength', val: rev },
+        ];
+        drvs.sort((x, y) => y.val - x.val);
+        b.primary_driver = drvs[0].key;
+        b.weakest_driver = drvs[drvs.length - 1].key;
+      }
       
       const momentum = Number(b.momentum_score ?? 0);
       if (rev >= 60 && momentum >= 60) b.market_position = 'Market Leader';
@@ -106,6 +121,7 @@ export default function RevenueMomentum() {
       .slice()
       .sort((a: any, b: any) => (b.momentum_score ?? 0) - (a.momentum_score ?? 0))
       .map((brand: any, index: number) => ({
+        ...brand,
         rank: index + 1,
         brand: brand.brand,
         momentum_score: Number(brand.momentum_score ?? 0),
@@ -184,9 +200,93 @@ export default function RevenueMomentum() {
                    : drv === 'Review Velocity' ? <Target className="w-3 h-3 text-warning" />
                    : drv === 'BSR Momentum' ? <TrendingUp className="w-3 h-3 text-success" />
                    : <BarChart2 className="w-3 h-3 text-blue-500" />;
+        const drivers = r.drivers || {};
+        const audit = payload?.audit_flags || {};
+
+        const m_sales = drivers.sales_velocity ?? r.sales_velocity_score ?? 0;
+        const m_review = drivers.review_velocity ?? r.review_velocity_score ?? 0;
+        const m_bsr = drivers.bsr_momentum ?? r.bsr_momentum_score ?? 0;
+        const m_rev = drivers.revenue_strength ?? r.revenue_strength_score ?? 0;
+        const momentumScore = ((0.4 * m_sales) + (0.3 * m_review) + (0.2 * m_bsr) + (0.1 * m_rev)).toFixed(1);
+
+        const formatPercent = (v: any) => v != null ? `${Number(v).toFixed(1)}%` : 'N/A';
+        const formatNumber = (v: any) => v != null ? Number(v).toLocaleString() : 'N/A';
+        const formatMoney = (v: any) => v != null ? `$${Number(v).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : 'N/A';
+
+        const missingMetrics = [];
+        if (audit.sales_trend_available === false) missingMetrics.push('Sales Trend');
+        if (audit.sales_yoy_available === false) missingMetrics.push('Sales YoY');
+        if (audit.review_growth_available === false) missingMetrics.push('Review Growth');
+        if (audit.bsr_trend_available === false) missingMetrics.push('BSR Trend');
+        
+        const isAuditValid = Math.abs(Number(momentumScore) - Number(r.momentum_score)) < 0.2;
+
         return (
-          <div className="flex items-center gap-1.5 border border-border/50 bg-muted/20 px-2 py-0.5 rounded text-xs font-medium w-max">
+          <div className="relative group flex items-center gap-1.5 border border-border/50 bg-muted/20 px-2 py-0.5 rounded text-xs font-medium w-max cursor-help">
             {icon} {drv}
+            
+            <div className="hidden group-hover:block absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-96 bg-background/95 backdrop-blur-md border border-border/50 shadow-xl rounded-lg p-4 z-[999] text-left cursor-default">
+              <p className="font-bold text-sm mb-1 text-foreground">Primary Engine: <span className="text-primary">{drv}</span></p>
+              
+              <div className="space-y-4 mt-3">
+                {!isAuditValid && (
+                  <div className="bg-danger/10 border border-danger/20 p-2 rounded flex gap-2 items-start text-[10px]">
+                    <AlertTriangle className="w-3 h-3 text-danger shrink-0 mt-0.5" />
+                    <p className="text-danger">
+                      <strong>Audit Error:</strong> Computed Momentum ({momentumScore}) does not match Displayed Momentum ({Number(r.momentum_score).toFixed(1)}).
+                    </p>
+                  </div>
+                )}
+                
+                {missingMetrics.length > 0 && (
+                  <div className="bg-warning/10 border border-warning/20 p-2 rounded flex gap-2 items-start text-[10px]">
+                    <AlertTriangle className="w-3 h-3 text-warning shrink-0 mt-0.5" />
+                    <p className="text-warning">
+                      <strong>Data Audit:</strong> Historical metrics ({missingMetrics.join(', ')}) are missing from the snapshot and marked as <em>Not Available</em>.
+                    </p>
+                  </div>
+                )}
+                
+                <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+                  <div>
+                    <p className="text-[10px] uppercase font-mono tracking-wider text-muted-foreground mb-1 border-b border-border/50 pb-0.5">Raw Inputs</p>
+                    <ul className="text-xs space-y-1">
+                      <li className="flex justify-between"><span>Revenue:</span> <span className="font-mono">{formatMoney(r.total_revenue)}</span></li>
+                      <li className="flex justify-between"><span>Rev Share:</span> <span className="font-mono">{formatPercent(r.revenue_share)}</span></li>
+                      <li className="flex justify-between"><span>Sales Est:</span> <span className="font-mono">{formatNumber(r.sales_estimate)}</span></li>
+                      <li className="flex justify-between"><span>Reviews:</span> <span className="font-mono">{formatNumber(r.total_review_count)}</span></li>
+                      <li className="flex justify-between text-muted-foreground"><span>Sales Trend:</span> <span className="font-mono">{audit.sales_trend_available !== false ? formatPercent(r.avg_sales_trend_pct) : 'N/A'}</span></li>
+                      <li className="flex justify-between text-muted-foreground"><span>Rev Growth:</span> <span className="font-mono">{audit.review_growth_available !== false ? formatPercent(r.avg_review_growth_pct) : 'N/A'}</span></li>
+                      <li className="flex justify-between text-muted-foreground"><span>BSR Change:</span> <span className="font-mono">{audit.bsr_trend_available !== false ? formatPercent(r.avg_bsr_trend) : 'N/A'}</span></li>
+                      <li className="flex justify-between text-muted-foreground"><span>Avg BSR:</span> <span className="font-mono">{formatNumber(r.average_bsr)}</span></li>
+                    </ul>
+                  </div>
+                  <div>
+                    <p className="text-[10px] uppercase font-mono tracking-wider text-muted-foreground mb-1 border-b border-border/50 pb-0.5">Normalized Scores</p>
+                    <ul className="text-xs space-y-1">
+                      <li className="flex justify-between"><span>Sales Vel:</span> <span className="font-mono">{Number(m_sales).toFixed(1)}</span></li>
+                      <li className="flex justify-between"><span>Review Vel:</span> <span className="font-mono">{Number(m_review).toFixed(1)}</span></li>
+                      <li className="flex justify-between"><span>BSR Mom:</span> <span className="font-mono">{Number(m_bsr).toFixed(1)}</span></li>
+                      <li className="flex justify-between"><span>Rev Str:</span> <span className="font-mono">{Number(m_rev).toFixed(1)}</span></li>
+                    </ul>
+                  </div>
+                </div>
+
+                <div>
+                  <p className="text-[10px] uppercase font-mono tracking-wider text-muted-foreground mb-1 border-b border-border/50 pb-0.5">Final Calculation</p>
+                  <div className="text-[10px] bg-muted/30 p-2 rounded border border-border/30 font-mono text-muted-foreground leading-relaxed">
+                    <p>Momentum Score =</p>
+                    <p className="pl-2">(0.40 × {Number(m_sales).toFixed(1)})</p>
+                    <p className="pl-2">+ (0.30 × {Number(m_review).toFixed(1)})</p>
+                    <p className="pl-2">+ (0.20 × {Number(m_bsr).toFixed(1)})</p>
+                    <p className="pl-2">+ (0.10 × {Number(m_rev).toFixed(1)})</p>
+                    <p className="border-t border-border/50 mt-1 pt-1 font-bold text-foreground">= {momentumScore}</p>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-border/50" />
+            </div>
           </div>
         );
       },
