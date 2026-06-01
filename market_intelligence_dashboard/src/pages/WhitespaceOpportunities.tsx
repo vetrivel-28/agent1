@@ -173,7 +173,7 @@ export default function WhitespaceOpportunities() {
     );
   }
 
-  const r = whitespaceData.results || {};
+  const r = whitespaceData.data?.results || {};
   const wsKeywords: WhitespaceKeyword[] = r.top_whitespace_keywords || [];
   const distribution = r.opportunity_distribution || {};
   const insights: { category: string; text: string }[] = r.insights || [];

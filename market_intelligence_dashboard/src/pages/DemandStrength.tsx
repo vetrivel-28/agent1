@@ -1,13 +1,13 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../services/api';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/Card';
+import { Card, CardContent, } from '../components/ui/Card';
 import { DataTable, type ColumnDef } from '../components/ui/DataTable';
 import { Badge } from '../components/ui/Badge';
 import { formatNumber, cn } from '../utils/cn';
 import { isEngineOk, getEngineErrorMessage } from '../utils/analysisStatus';
 import {
   AlertCircle, Loader2, Target, Lightbulb, TrendingDown,
-  TrendingUp, Rocket, Flame, Layers, BarChart3, AlertTriangle, ArrowUpRight
+  TrendingUp, Rocket, Flame, Layers, AlertTriangle, ArrowUpRight
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
@@ -90,7 +90,7 @@ export default function DemandStrength() {
     );
   }
 
-  const results = data.results || {};
+  const results = data.data?.results || {};
   const distribution: SegmentRow[] = Array.isArray(results.demand_distribution)
     ? results.demand_distribution.map((row: any) => ({
         segment: String(row.segment || 'Other'),
@@ -112,7 +112,7 @@ export default function DemandStrength() {
 
   const clusterColumns: ColumnDef<SegmentRow>[] = [
     { header: 'Segment Theme', cell: (r) => <span className="font-semibold text-foreground/90">{r.segment || '—'}</span> },
-    { header: 'Search Intent %', cell: (r) => <Badge variant="secondary">{safeNum(r.demand_share).toFixed(1)}%</Badge> },
+    { header: 'Search Intent %', cell: (r) => <Badge variant="outline">{safeNum(r.demand_share).toFixed(1)}%</Badge> },
     { header: 'Revenue Share', cell: (r) => <span className="font-medium">{safeNum(r.revenue_share).toFixed(1)}%</span> },
     { header: 'Volume', cell: (r) => formatNumber(safeNum(r.total_search_volume)), className: 'text-muted-foreground' },
     {

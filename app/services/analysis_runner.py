@@ -63,7 +63,17 @@ def run_all_engines(top_n: int = DEFAULT_TOP_N) -> Dict[str, Any]:
             futures["complement"] = executor.submit(complement_engine.run, kc_df, blackbox_df, top_n)
             futures["bundle"] = executor.submit(bundle_opportunity_engine.run, kc_df, blackbox_df, top_n)
             
-        engines = {name: future.result() for name, future in futures.items()}
+        for name, future in futures.items():
+            try:
+                engines[name] = future.result()
+            except Exception as exc:
+                logger.exception(f"{name} engine failed")
+                engines[name] = {
+                    "status": "error",
+                    "message": f"{name} engine failed: {str(exc)}",
+                    "results": {},
+                    "processing_time_seconds": 0.0,
+                }
 
     demand_score = (
         engines.get("demand", {}).get("results", {}).get("market_demand_index")

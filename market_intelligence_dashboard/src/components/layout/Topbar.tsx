@@ -10,12 +10,13 @@ export function Topbar() {
     refetchInterval: 30000, // Check every 30s
   });
 
-  const isHealthy = health?.status === 'ok';
+  const healthData = health?.data || {};
+  const isHealthy = health?.success === true && healthData?.status === 'ok';
   
   // Count loaded datasets
-  const datasets = health?.datasets_loaded || {};
+  const datasets = healthData?.datasets_loaded || {};
   const loadedCount = Object.values(datasets).filter(Boolean).length;
-  const missingCount = Object.values(datasets).length - loadedCount;
+  const missingCount = 3 - loadedCount;
 
   return (
     <header className="sticky top-0 z-30 flex h-16 w-full items-center justify-between border-b bg-background/80 px-6 backdrop-blur-xl">

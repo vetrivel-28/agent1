@@ -28,6 +28,7 @@ import numpy as np
 import pandas as pd
 
 from app.engines import complement_engine
+from app.services.analysis_cache import analysis_cache
 from app.utils.column_mapper import find_column, minmax_normalize
 from app.utils.logger import get_logger
 from app.utils.numeric_cleaner import clean_numeric_series
@@ -82,7 +83,13 @@ def run(
     # Step 1: Run complement engine to get complement products
     # -----------------------------------------------------------------------
     logger.info("Running complement engine for bundle analysis...")
-    comp_result = complement_engine.run(kc_df, blackbox_df, top_n=rows_bb)
+    comp_cached = analysis_cache.get_engine("complement")
+    if comp_cached and comp_cached.get("status") == "success":
+        logger.info("Using cached complement engine results.")
+        comp_result = comp_cached
+    else:
+        logger.info("Running complement engine from scratch...")
+        comp_result = complement_engine.run(kc_df, blackbox_df, top_n=rows_bb)
 
     if comp_result["status"] == "error":
         return _error(
@@ -150,8 +157,8 @@ def run(
             a = str(r[asin_col])
             p = _sv(r.get(price_col, 0)) if price_col else 0.0
             rev = _sv(r.get(rev_col, 0)) if rev_col else 0.0
-            asin_to_price[a] = float(p or 0.0)
-            asin_to_rev[a] = float(rev or 0.0)
+            asin_to_price[a] = safe_float(p)
+            asin_to_rev[a] = safe_float(rev)
 
     # -----------------------------------------------------------------------
     # Step 5: Score bundle pairs
@@ -201,8 +208,8 @@ def run(
                 10.0 if p_subcat == comp_subcat else 0.0
             )
 
-            p_price = float(_sv(prow.get(price_col, 0)) or 0.0) if price_col else 0.0
-            p_rev   = float(_sv(prow.get(rev_col, 0)) or 0.0) if rev_col else 0.0
+            p_price = safe_float(_sv(prow.get(price_col, 0))) if price_col else 0.0
+            p_rev   = safe_float(_sv(prow.get(rev_col, 0))) if rev_col else 0.0
             c_price = asin_to_price.get(comp_asin, 0.0)
             c_rev   = asin_to_rev.get(comp_asin, 0.0)
 
@@ -391,6 +398,19 @@ def _bundle_insight(primary_title: str, comp_title: str, keywords: List[str]) ->
     kw = keywords[0] if keywords else "shared keywords"
     return f"'{p}' + '{c}' share demand around '{kw}'."
 
+
+
+def safe_float(value, default=0.0):
+    if value is None:
+        return default
+    if isinstance(value, str):
+        value = value.strip().replace("$", "").replace(",", "").replace("%", "")
+        if value in ["", "-", "—", "N/A", "NA", "nan", "None", "null"]:
+            return default
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return default
 
 def _sv(v: Any) -> Any:
     if v is None:

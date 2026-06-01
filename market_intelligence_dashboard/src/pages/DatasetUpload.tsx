@@ -6,9 +6,12 @@ import { Button } from '../components/ui/Button';
 import { UploadCloud, File, X, CheckCircle, AlertCircle, Loader2, Database } from 'lucide-react';
 import { motion } from 'framer-motion';
 
+import { useNavigate } from 'react-router-dom';
+
 type FileState = File | null;
 
 export default function DatasetUpload() {
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [blackbox, setBlackbox] = useState<FileState>(null);
   const [magnet, setMagnet] = useState<FileState>(null);
@@ -32,8 +35,10 @@ export default function DatasetUpload() {
         message: 'Datasets uploaded successfully.',
         details: data
       });
-      queryClient.invalidateQueries({ queryKey: ['health'] });
-      queryClient.invalidateQueries({ queryKey: ['status'] });
+      queryClient.invalidateQueries();
+      
+      // Navigate to overview immediately
+      navigate('/overview');
       
       // Reset files on success after a short delay
       setTimeout(() => {

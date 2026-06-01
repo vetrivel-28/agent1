@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../services/api';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/Card';
+import { Card, CardContent, CardHeader, CardTitle, } from '../components/ui/Card';
 import { DataTable, type ColumnDef } from '../components/ui/DataTable';
 import { Badge } from '../components/ui/Badge';
 import { cn } from '../utils/cn';
@@ -41,7 +41,8 @@ export default function RevenueMomentum() {
     );
   }
 
-  const results = data.results || {};
+  const payload = data?.data;
+  const results = payload?.results || {};
 
   const memoized = useMemo(() => {
     const normalizeBrand = (raw: string) => {
@@ -194,7 +195,7 @@ export default function RevenueMomentum() {
       header: 'Classification',
       cell: (r) => {
         const pos = r.market_position;
-        const variant = pos === 'Market Leader' ? 'default' : pos === 'Emerging Challenger' ? 'secondary' : pos === 'Mature Incumbent' ? 'outline' : 'destructive';
+        const variant = pos === 'Market Leader' ? 'default' : pos === 'Emerging Challenger' ? 'warning' : pos === 'Mature Incumbent' ? 'outline' : 'danger';
         return <Badge variant={variant} className="uppercase text-[10px] tracking-wider font-mono">{pos}</Badge>;
       },
     },

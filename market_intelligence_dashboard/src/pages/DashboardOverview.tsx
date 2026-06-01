@@ -1,22 +1,21 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../services/api';
 import { KPICard } from '../components/ui/KPICard';
-import { Card, CardHeader, CardTitle, CardContent, CardDescription } from '../components/ui/Card';
-import { Badge } from '../components/ui/Badge';
+import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { formatCurrency, formatNumber } from '../utils/cn';
 import { Link } from 'react-router-dom';
 import { 
-  Activity, Zap, TrendingUp, DollarSign, Database, AlertTriangle, ArrowRight, Landmark,
-  Target, Users, BarChart4, TrendingDown, Package, FileText, ChevronRight, AlertOctagon, Lightbulb
+  Activity, Zap, TrendingUp, DollarSign, Database, AlertTriangle, ArrowRight,
+  Target, Users, BarChart4, Package, FileText, ChevronRight, AlertOctagon, Lightbulb
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { isEngineOk, getEngineErrorMessage } from '../utils/analysisStatus';
 
 export default function DashboardOverview() {
-  const { data: reportResp, isLoading, isError, error } = useQuery({
+  const { data: reportResp, isLoading, isError } = useQuery({
     queryKey: ['market-report'],
-    queryFn: () => api.getMarketReport(5),
+    queryFn: () => api.getMarketReport(10),
     retry: false,
     staleTime: 5 * 60 * 1000
   });
@@ -77,7 +76,7 @@ export default function DashboardOverview() {
     );
   }
 
-  const results = reportResp?.results || {};
+  const results = reportResp?.data?.results || {};
   const engineOutputs = results.engine_outputs || {};
   
   const demandOut = engineOutputs.demand?.results || {};

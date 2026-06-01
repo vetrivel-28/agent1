@@ -254,7 +254,7 @@ export default function FinanceIntelligence() {
     );
   }
 
-  const results = data.results || {};
+  const results = data.data?.results || {};
   const api_data = (results.advertising_pressure || {}) as MetricBlock;
   const pvs_data = (results.premium_viability || {}) as MetricBlock;
   const eci_data = (results.entry_cost || {}) as MetricBlock;

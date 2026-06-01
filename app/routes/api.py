@@ -10,7 +10,15 @@ wrappers that:
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Any
+from pydantic import BaseModel
+import math
+from fastapi import BackgroundTasks
+
+class StandardResponse(BaseModel):
+    success: bool
+    message: str
+    data: Any
 
 from fastapi import APIRouter, File, UploadFile
 from fastapi.responses import FileResponse
@@ -59,6 +67,28 @@ from app.utils.dataframe_checks import is_empty_dataframe
 from app.utils.logger import get_logger
 from app.validators.dataset_validator import validate_csv_bytes
 
+
+def sanitize_payload(obj):
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return 0.0
+        return obj
+    if isinstance(obj, dict):
+        return {k: sanitize_payload(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [sanitize_payload(x) for x in obj]
+    return obj
+
+def format_response(result: dict) -> dict:
+    status = result.get('status', 'success')
+    success = status != 'error'
+    message = result.get('message') or result.get('summary') or 'Success'
+    return {
+        'success': success,
+        'message': message,
+        'data': sanitize_payload(result)
+    }
+
 logger = get_logger("routes")
 router = APIRouter(prefix="/api/v1", tags=["Market Intelligence"])
 
@@ -69,17 +99,17 @@ router = APIRouter(prefix="/api/v1", tags=["Market Intelligence"])
 
 @router.get(
     "/health",
-    response_model=HealthCheck,
+    response_model=StandardResponse,
     summary="Health check",
     description="Returns API health status and which datasets are currently loaded.",
 )
 def health_check():
     logger.info("Health check requested")
-    return {
+    return format_response({
         "status": "ok",
         "message": "Market Intelligence Agent is running",
         "datasets_loaded": registry.get_status(),
-    }
+    })
 
 
 @router.get(
@@ -89,12 +119,12 @@ def health_check():
 )
 def get_status():
     logger.info("Status check requested")
-    return {
+    return format_response({
         "status": "ok",
         "datasets": registry.get_status(),
         "metadata": registry.get_meta(),
         "rows_loaded": registry.rows_loaded(),
-    }
+    })
 
 
 # =========================================================================
@@ -103,7 +133,7 @@ def get_status():
 
 @router.post(
     "/upload-datasets",
-    response_model=UploadResponse,
+    response_model=StandardResponse,
     summary="Upload CSV datasets",
     description=(
         "Upload up to three CSV files:\n"
@@ -115,6 +145,7 @@ def get_status():
     ),
 )
 async def upload_datasets(
+    background_tasks: BackgroundTasks,
     blackbox: Optional[UploadFile] = File(None, description="BlackBox Products CSV"),
     magnet: Optional[UploadFile] = File(None, description="Magnet Keyword CSV"),
     keyword_classification: Optional[UploadFile] = File(
@@ -212,13 +243,15 @@ async def upload_datasets(
         overall = "success"
         message = "All provided datasets uploaded and validated successfully."
 
-    return {
+    if any_loaded:
+        background_tasks.add_task(run_all_engines)
+    return format_response({
         "status": overall,
         "message": message,
         "datasets_loaded": datasets_loaded,
         "rows_loaded": rows_loaded,
         "errors": errors if errors else None,
-    }
+    })
 
 
 # =========================================================================
@@ -227,7 +260,7 @@ async def upload_datasets(
 
 @router.post(
     "/demand-strength",
-    response_model=DemandStrengthResult,
+    response_model=StandardResponse,
     summary="Demand Strength",
     description=(
         "Measures overall market demand health.\n\n"
@@ -246,17 +279,20 @@ def demand_strength(top_n: int = 10):
     if is_empty_dataframe(magnet_df) and is_empty_dataframe(blackbox_df):
         return _datasets_not_loaded("Demand Strength", "magnet and/or blackbox")
 
+    cached = analysis_cache.get_engine("demand")
+    if cached:
+        return format_response(cached)
     result = demand_engine.run(magnet_df, blackbox_df, top_n=top_n)
     logger.info(
         f"Demand Strength complete — status={result['status']}, "
         f"score={result.get('results', {}).get('overall_demand_score', 'n/a')}"
     )
-    return result
+    return format_response(result)
 
 
 @router.post(
     "/sales-momentum",
-    response_model=SalesMomentumResult,
+    response_model=StandardResponse,
     summary="Sales Momentum",
     description=(
         "Measures brand-level sales acceleration.\n\n"
@@ -273,17 +309,20 @@ def sales_momentum(top_n: int = 10):
     if is_empty_dataframe(blackbox_df):
         return _datasets_not_loaded("Sales Momentum", "blackbox")
 
+    cached = analysis_cache.get_engine("sales_momentum")
+    if cached:
+        return format_response(cached)
     result = sales_momentum_engine.run(blackbox_df, top_n=top_n)
     logger.info(
         f"Sales Momentum complete — status={result['status']}, "
         f"brands={result.get('results', {}).get('total_brands_analysed', 'n/a')}"
     )
-    return result
+    return format_response(result)
 
 
 @router.post(
     "/revenue-momentum",
-    response_model=RevenueMomentumResult,
+    response_model=StandardResponse,
     summary="Revenue Momentum",
     description=(
         "Measures brand growth velocity and traction in the market.\n\n"
@@ -300,17 +339,20 @@ def revenue_momentum(top_n: int = 10):
     if is_empty_dataframe(blackbox_df):
         return _datasets_not_loaded("Revenue Momentum", "blackbox")
 
+    cached = analysis_cache.get_engine("revenue_momentum")
+    if cached:
+        return format_response(cached)
     result = revenue_momentum_engine.run(blackbox_df, top_n=top_n)
     logger.info(
         f"Revenue Momentum complete — status={result['status']}, "
         f"brands={result.get('results', {}).get('total_brands_analysed', 'n/a')}"
     )
-    return result
+    return format_response(result)
 
 
 @router.post(
     "/bsr-efficiency",
-    response_model=BSREfficiencyResult,
+    response_model=StandardResponse,
     summary="BSR Efficiency",
     description=(
         "Measures revenue efficiency relative to BSR rank.\n\n"
@@ -330,17 +372,20 @@ def bsr_efficiency(top_n: int = 10):
     if is_empty_dataframe(blackbox_df):
         return _datasets_not_loaded("BSR Efficiency", "blackbox")
 
+    cached = analysis_cache.get_engine("bsr_efficiency")
+    if cached:
+        return format_response(cached)
     result = bsr_efficiency_engine.run(blackbox_df, top_n=top_n)
     logger.info(
         f"BSR Efficiency complete — status={result['status']}, "
         f"products={result.get('results', {}).get('total_products_analysed', 'n/a')}"
     )
-    return result
+    return format_response(result)
 
 
 @router.post(
     "/demand-velocity",
-    response_model=DemandVelocityResult,
+    response_model=StandardResponse,
     summary="Demand Velocity",
     description=(
         "Measures how fast market demand is accelerating.\n\n"
@@ -356,12 +401,15 @@ def demand_velocity(top_n: int = 10):
     blackbox_df = registry.get_blackbox()
     if is_empty_dataframe(magnet_df) and is_empty_dataframe(blackbox_df):
         return _datasets_not_loaded("Demand Velocity", "magnet and/or blackbox")
-    return demand_velocity_engine.run(magnet_df, blackbox_df, top_n=top_n)
+    cached = analysis_cache.get_engine("demand_velocity")
+    if cached:
+        return format_response(cached)
+    return format_response(demand_velocity_engine.run(magnet_df, blackbox_df, top_n=top_n))
 
 
 @router.post(
     "/search-intent-efficiency",
-    response_model=SIEIResult,
+    response_model=StandardResponse,
     summary="Search Intent Efficiency Index (SIEI)",
     description=(
         "Finds keywords receiving clicks but under-converting.\n\n"
@@ -376,12 +424,15 @@ def search_intent_efficiency(top_n: int = 10):
     magnet_df = registry.get_magnet()
     if is_empty_dataframe(magnet_df):
         return _datasets_not_loaded("Search Intent Efficiency Index (SIEI)", "magnet")
-    return siei_engine.run(magnet_df, top_n=top_n)
+    cached = analysis_cache.get_engine("siei")
+    if cached:
+        return format_response(cached)
+    return format_response(siei_engine.run(magnet_df, top_n=top_n))
 
 
 @router.post(
     "/market-concentration",
-    response_model=HHIResult,
+    response_model=StandardResponse,
     summary="Market Concentration Index (HHI)",
     description=(
         "Measures monopoly vs fragmentation using Herfindahl-Hirschman Index.\n\n"
@@ -398,7 +449,10 @@ def market_concentration(top_n: int = 10):
     blackbox_df = registry.get_blackbox()
     if is_empty_dataframe(blackbox_df):
         return _datasets_not_loaded("Market Concentration Index (HHI)", "blackbox")
-    return hhi_engine.run(blackbox_df, top_n=top_n)
+    cached = analysis_cache.get_engine("hhi")
+    if cached:
+        return format_response(cached)
+    return format_response(hhi_engine.run(blackbox_df, top_n=top_n))
 
 
 # =========================================================================
@@ -407,7 +461,7 @@ def market_concentration(top_n: int = 10):
 
 @router.post(
     "/whitespace-opportunities",
-    response_model=WhitespaceOpportunityResult,
+    response_model=StandardResponse,
     summary="Whitespace Opportunity Analysis",
     description=(
         "Find high-demand keywords with weak competitor optimization.\n\n"
@@ -423,17 +477,20 @@ def whitespace_opportunities(top_n: int = 15):
     magnet_df = registry.get_magnet()
     if is_empty_dataframe(magnet_df):
         return _datasets_not_loaded("Whitespace Opportunity", "magnet")
+    cached = analysis_cache.get_engine("whitespace")
+    if cached:
+        return format_response(cached)
     result = whitespace_engine.run(magnet_df, None, top_n=top_n)
     logger.info(
         f"Whitespace Opportunity complete — status={result['status']}, "
         f"score={result.get('results', {}).get('overall_whitespace_score', 'n/a')}"
     )
-    return result
+    return format_response(result)
 
 
 @router.post(
     "/direct-competitors",
-    response_model=DirectCompetitorsResult,
+    response_model=StandardResponse,
     summary="Direct Competitor Analysis",
     description=(
         "Identify direct market competitors by category, subcategory, and price.\n\n"
@@ -450,6 +507,9 @@ def direct_competitors(top_n: int = 15, price_tolerance_pct: float = 17.5):
     blackbox_df = registry.get_blackbox()
     if is_empty_dataframe(blackbox_df):
         return _datasets_not_loaded("Direct Competitors", "blackbox")
+    cached = analysis_cache.get_engine("direct_competitors")
+    if cached:
+        return format_response(cached)
     result = direct_competitor_engine.run(
         None, blackbox_df, top_n=top_n, price_tolerance_pct=price_tolerance_pct
     )
@@ -457,12 +517,12 @@ def direct_competitors(top_n: int = 15, price_tolerance_pct: float = 17.5):
         f"Direct Competitors complete — status={result['status']}, "
         f"clusters={result.get('results', {}).get('total_clusters', 'n/a')}"
     )
-    return result
+    return format_response(result)
 
 
 @router.post(
     "/price-elasticity",
-    response_model=PriceElasticityResult,
+    response_model=StandardResponse,
     summary="Price Intelligence (Pricing Strategy)",
     description=(
         "Pricing strategy analysis: revenue by price band, market structure, "
@@ -476,12 +536,15 @@ def price_elasticity(n_buckets: int = 5):
     blackbox_df = registry.get_blackbox()
     if is_empty_dataframe(blackbox_df):
         return _datasets_not_loaded("Price Elasticity", "blackbox")
+    cached = analysis_cache.get_engine("price_elasticity")
+    if cached:
+        return format_response(cached)
     result = price_elasticity_engine.run(None, blackbox_df, n_buckets=n_buckets)
     logger.info(
         f"Price Elasticity complete — status={result['status']}, "
         f"buckets={result.get('results', {}).get('bucket_count', 'n/a')}"
     )
-    return result
+    return format_response(result)
 
 # =========================================================================
 # Ecosystem Intelligence Engines
@@ -489,7 +552,7 @@ def price_elasticity(n_buckets: int = 5):
 
 @router.post(
     "/substitute-intelligence",
-    response_model=SubstituteIntelligenceResult,
+    response_model=StandardResponse,
     summary="Substitute Intelligence",
     description=(
         "Identifies substitute products stealing demand from the target market.\n\n"
@@ -512,17 +575,20 @@ def substitute_intelligence(top_n: int = 10):
         return _datasets_not_loaded("Substitute Intelligence", "keyword_classification")
     if is_empty_dataframe(blackbox_df):
         return _datasets_not_loaded("Substitute Intelligence", "blackbox")
+    cached = analysis_cache.get_engine("substitute")
+    if cached:
+        return format_response(cached)
     result = substitute_engine.run(kc_df, blackbox_df, top_n=top_n)
     logger.info(
         f"Substitute Intelligence complete — status={result['status']}, "
         f"substitutes={result.get('results', {}).get('total_substitute_products', 'n/a')}"
     )
-    return result
+    return format_response(result)
 
 
 @router.post(
     "/complement-intelligence",
-    response_model=ComplementIntelligenceResult,
+    response_model=StandardResponse,
     summary="Complement Intelligence",
     description=(
         "Identifies complementary ecosystem products and cross-sell opportunities.\n\n"
@@ -546,17 +612,20 @@ def complement_intelligence(top_n: int = 10):
         return _datasets_not_loaded("Complement Intelligence", "keyword_classification")
     if is_empty_dataframe(blackbox_df):
         return _datasets_not_loaded("Complement Intelligence", "blackbox")
+    cached = analysis_cache.get_engine("complement")
+    if cached:
+        return format_response(cached)
     result = complement_engine.run(kc_df, blackbox_df, top_n=top_n)
     logger.info(
         f"Complement Intelligence complete — status={result['status']}, "
         f"complements={result.get('results', {}).get('total_complement_products', 'n/a')}"
     )
-    return result
+    return format_response(result)
 
 
 @router.post(
     "/bundle-opportunities",
-    response_model=BundleOpportunityResult,
+    response_model=StandardResponse,
     summary="Bundle Opportunity Analysis",
     description=(
         "Identifies high-potential bundle combinations using complement relationships.\n\n"
@@ -581,12 +650,15 @@ def bundle_opportunities(top_n: int = 10):
         return _datasets_not_loaded("Bundle Opportunity", "keyword_classification")
     if is_empty_dataframe(blackbox_df):
         return _datasets_not_loaded("Bundle Opportunity", "blackbox")
+    cached = analysis_cache.get_engine("bundle")
+    if cached:
+        return format_response(cached)
     result = bundle_opportunity_engine.run(kc_df, blackbox_df, top_n=top_n)
     logger.info(
         f"Bundle Opportunities complete — status={result['status']}, "
         f"bundles={result.get('results', {}).get('total_bundle_opportunities', 'n/a')}"
     )
-    return result
+    return format_response(result)
 
 
 @router.get(
@@ -597,8 +669,87 @@ def bundle_opportunities(top_n: int = 10):
 def analysis_snapshot():
     snap = analysis_cache.get_snapshot()
     if not snap:
-        return {"status": "empty", "message": "No analysis run yet. Upload data and open Dashboard or Market Report."}
-    return {"status": "success", **snap}
+        return format_response({"status": "error", "message": "No analysis run yet. Upload data and open Dashboard or Market Report."})
+    return format_response({"status": "success", **snap})
+
+
+
+@router.post(
+    "/product-intelligence",
+    response_model=StandardResponse,
+    summary="Product Intelligence",
+    description=(
+        "Combined Product Intelligence page output. Returns only top 5 Direct Competitors, "
+        "Substitutes, Complements, and Bundle Opportunities for the UI."
+    ),
+)
+def product_intelligence(top_n: int = 5, price_tolerance_pct: float = 17.5):
+    logger.info(f"Product Intelligence requested (top_n={top_n})")
+
+    blackbox_df = registry.get_blackbox()
+    kc_df = registry.get_keyword_classification()
+
+    if is_empty_dataframe(blackbox_df):
+        return _datasets_not_loaded("Product Intelligence", "blackbox")
+
+    direct_cached = analysis_cache.get_engine("direct_competitors")
+    substitute_cached = analysis_cache.get_engine("substitute")
+    complement_cached = analysis_cache.get_engine("complement")
+    bundle_cached = analysis_cache.get_engine("bundle")
+
+    direct_result = direct_cached or direct_competitor_engine.run(
+        None,
+        blackbox_df,
+        top_n=top_n,
+        price_tolerance_pct=price_tolerance_pct,
+    )
+
+    if is_empty_dataframe(kc_df):
+        substitute_result = _datasets_not_loaded(
+            "Substitute Intelligence",
+            "keyword_classification",
+        )["data"]
+        complement_result = _datasets_not_loaded(
+            "Complement Intelligence",
+            "keyword_classification",
+        )["data"]
+        bundle_result = _datasets_not_loaded(
+            "Bundle Opportunity",
+            "keyword_classification",
+        )["data"]
+    else:
+        substitute_result = substitute_cached or substitute_engine.run(
+            kc_df,
+            blackbox_df,
+            top_n=top_n,
+        )
+        complement_result = complement_cached or complement_engine.run(
+            kc_df,
+            blackbox_df,
+            top_n=top_n,
+        )
+        bundle_result = bundle_cached or bundle_opportunity_engine.run(
+            kc_df,
+            blackbox_df,
+            top_n=top_n,
+        )
+
+    return format_response({
+        "status": "success",
+        "message": "Product Intelligence generated successfully",
+        "results": {
+            "direct_competitors": direct_result.get("results", {}),
+            "substitutes": substitute_result.get("results", {}),
+            "complements": complement_result.get("results", {}),
+            "bundle_opportunities": bundle_result.get("results", {}),
+        },
+        "engine_outputs": {
+            "direct_competitors": direct_result,
+            "substitute": substitute_result,
+            "complement": complement_result,
+            "bundle": bundle_result,
+        },
+    })
 
 
 # =========================================================================
@@ -607,7 +758,7 @@ def analysis_snapshot():
 
 @router.post(
     "/finance-intelligence",
-    response_model=FinanceIntelligenceResult,
+    response_model=StandardResponse,
     summary="Finance Intelligence",
     description=(
         "Market economics pillar: advertising pressure, premium viability, "
@@ -628,30 +779,21 @@ def finance_intelligence(top_n: int = 10):
         demand_res = demand_engine.run(magnet_df, blackbox_df, top_n=top_n)
         if demand_res.get("status") == "success":
             demand_score = demand_res.get("results", {}).get("overall_demand_score")
+    cached = analysis_cache.get_engine("finance")
+    if cached:
+        return format_response(cached)
     result = run_finance_intelligence(magnet_df, blackbox_df, demand_score=demand_score)
     logger.info(
         f"Finance Intelligence complete — status={result['status']}, "
         f"health={result.get('results', {}).get('finance_health', {}).get('finance_health')}"
     )
-    return result
+    return format_response(result)
 
 
 # =========================================================================
 # Market Report
 # =========================================================================
 
-@router.post(
-    "/market-report",
-    response_model=MarketReportResult,
-    summary="Full Market Intelligence Report",
-    description=(
-        "Runs all four engines and aggregates results into a structured "
-        "business intelligence report.\n\n"
-        "**Requires**: BlackBox dataset (mandatory). Magnet dataset (optional, enriches demand).\n\n"
-        "**Returns**: JSON report with rankings, opportunity findings, risk findings, "
-        "and Markdown narrative. Future-ready for PDF/HTML export."
-    ),
-)
 def _build_report_from_snapshot(top_n: int = 10):
     """Single analysis run — report and UI share cached engine outputs."""
     blackbox_df = registry.get_blackbox()
@@ -659,7 +801,10 @@ def _build_report_from_snapshot(top_n: int = 10):
     if is_empty_dataframe(blackbox_df):
         return _datasets_not_loaded("Market Report", "blackbox")
 
-    snapshot = run_all_engines(top_n=top_n)
+    snapshot = analysis_cache.get_snapshot()
+    if not snapshot or snapshot.get("top_n") != top_n:
+        snapshot = run_all_engines(top_n=top_n)
+
     engines = snapshot.get("engines", {})
 
     def _eng(key: str):
@@ -684,11 +829,24 @@ def _build_report_from_snapshot(top_n: int = 10):
         magnet_df=magnet_df,
         top_n=top_n,
     )
+
     if report.get("results") is not None:
         report["results"]["engine_outputs"] = engines
-    return report
+
+    return format_response(report)
 
 
+@router.post(
+    "/market-report",
+    response_model=StandardResponse,
+    summary="Full Market Intelligence Report",
+    description=(
+        "Runs all engines and aggregates results into a structured business intelligence report.\n\n"
+        "**Requires**: BlackBox dataset mandatory. Magnet dataset optional, enriches demand.\n\n"
+        "**Returns**: JSON report with rankings, opportunity findings, risk findings, "
+        "and Markdown narrative. Future-ready for PDF/HTML export."
+    ),
+)
 def market_report(top_n: int = 10):
     logger.info(f"Market Report requested (top_n={top_n})")
     report = _build_report_from_snapshot(top_n=top_n)
@@ -704,11 +862,11 @@ def market_report(top_n: int = 10):
 def market_report_pdf(top_n: int = 10):
     logger.info(f"Market Report PDF requested (top_n={top_n})")
     report = _build_report_from_snapshot(top_n=top_n)
-    if report.get("status") == "error":
+    if not report.get("success"):
         return report
-    if not report.get("results"):
+    if not report.get("data") or not report["data"].get("results"):
         return report
-    pdf_path = export_market_report_pdf(report)
+    pdf_path = export_market_report_pdf(report["data"])
     return FileResponse(
         path=pdf_path,
         media_type="application/pdf",
@@ -723,8 +881,9 @@ def market_report_pdf(top_n: int = 10):
 def _datasets_not_loaded(metric_name: str, required: str) -> dict:
     msg = f"Required dataset(s) not uploaded: {required}. Use POST /api/v1/upload-datasets first."
     logger.warning(f"{metric_name}: {msg}")
-    return {
+    return format_response({
         "status": "error",
+        "message": msg,
         "metric_name": metric_name,
         "summary": msg,
         "datasets_used": [],
@@ -741,4 +900,4 @@ def _datasets_not_loaded(metric_name: str, required: str) -> dict:
             "numeric_columns_cleaned": [],
         },
         "processing_time_seconds": 0.0,
-    }
+    })

@@ -1,4 +1,4 @@
-import React, { ReactNode, useState } from 'react';
+import React, { type ReactNode, useState } from 'react';
 import { Card } from './Card';
 import { Button } from './Button';
 import { ChevronLeft, ChevronRight } from 'lucide-react';

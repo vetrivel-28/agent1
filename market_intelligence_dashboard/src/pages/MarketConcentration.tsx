@@ -6,7 +6,7 @@ import { Badge } from '../components/ui/Badge';
 import { formatCurrency, cn } from '../utils/cn';
 import { isEngineOk, getEngineErrorMessage } from '../utils/analysisStatus';
 import {
-  AlertCircle, Loader2, Crown, Users, BarChart3, Lightbulb, Info, Target, Network, Layers, Shield
+  AlertCircle, Loader2, Crown, Lightbulb, Network, Layers, Shield
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
@@ -107,7 +107,7 @@ export default function MarketConcentration() {
     );
   }
 
-  const r = data.results || {};
+  const r = data.data?.results || {};
   const topBrands: any[] = r.top_brands_by_market_share || [];
   const insights: { category: string; text: string }[] = r.strategic_insights || [];
 

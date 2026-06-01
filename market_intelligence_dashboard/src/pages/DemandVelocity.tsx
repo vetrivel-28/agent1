@@ -21,7 +21,7 @@ export default function DemandVelocity() {
     );
   }
 
-  if (isError || !data || data.status !== 'success') {
+  if (isError || !data || data.data?.data?.status !== 'success') {
     return (
       <Card className="border-danger/50 bg-danger/5 mt-10">
         <CardContent className="p-8 flex flex-col items-center">
@@ -33,7 +33,7 @@ export default function DemandVelocity() {
     );
   }
 
-  const results = data.results;
+  const results = data.data?.results;
   const strongest = results.strongest_growth_signals || [];
   const weakest = results.weakest_growth_signals || [];
 

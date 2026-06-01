@@ -183,7 +183,7 @@ export default function BsrEfficiency() {
     );
   }
 
-  const r = data.results || {};
+  const r = data.data?.results || {};
   const scatter: any[]       = r.scatter_data        || [];
   const outliers: any[]      = r.revenue_outliers     || [];
   const leakage: any[]       = r.revenue_leakage      || [];

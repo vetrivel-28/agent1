@@ -88,7 +88,7 @@ export default function SalesMomentum() {
     );
   }
 
-  const results = data.results;
+  const results = data.data?.results;
   const allBrands: any[] = results.all_brands_momentum || [];
   const leaders: any[] = results.market_leaders || [];
   const challengers: any[] = results.emerging_challengers || [];

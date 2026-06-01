@@ -320,7 +320,7 @@ def run(
         ),
         "results": {
             "substitute_keywords": sub_keywords,
-            "substitute_products": substitute_products[:top_n],
+            "substitute_products": [{**p, "reason": f"Matched because keyword '{p.get('keyword', 'N/A')}' is classified as Substitute and overlaps with title. Similarity Score: {p.get('similarity_score', 0)}"} for p in substitute_products[:5]],
             "substitute_clusters": substitute_clusters[:top_n],
             "market_overlap_score": market_overlap_score,
             "total_substitute_keywords": len(sub_keywords),

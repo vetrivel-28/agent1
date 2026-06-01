@@ -163,7 +163,7 @@ export default function IntentEfficiency() {
     );
   }
 
-  const r = data.results || {};
+  const r = data.data?.results || {};
   const scatter: any[]        = r.scatter_data         || [];
   const winners: any[]        = r.demand_winners        || [];
   const friction: any[]       = r.friction_keywords     || [];

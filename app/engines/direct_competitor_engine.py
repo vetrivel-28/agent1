@@ -134,8 +134,8 @@ def run(
     # -----------------------------------------------------------------------
     # 1. Validate dataset availability
     # -----------------------------------------------------------------------
-    if magnet_df is None or magnet_df.empty or blackbox_df is None or blackbox_df.empty:
-        logger.warning("Direct Competitor: missing required dataset (magnet_df or blackbox_df).")
+    if blackbox_df is None or blackbox_df.empty:
+        logger.warning("Direct Competitor: missing required dataset (blackbox_df).")
         return {
             "status": "error",
             "metric_name": "Direct Competitors",
@@ -304,7 +304,7 @@ def run(
                 "subcategory": str(product[subcategory_col]),
             }
             market_cluster["products"].append(product_entry)
-            all_direct_competitors.append(product_entry)
+            product_entry["reason"] = f"Direct competitor identified based on shared subcategory {product_entry.get('subcategory', '')}."; all_direct_competitors.append(product_entry)
 
         market_clusters.append(market_cluster)
         competition_density[f"{cat}/{subcat}"] = cluster_size
@@ -377,7 +377,7 @@ def run(
                 "competitor_count": len(top_competitors_for_ref),
                 "top_competitors": top_competitors_for_ref,
             }
-            product_competitors.append(product_entry)
+            product_entry["top_competitors"] = [{**c, "reason": f"Direct market competition identified via category overlap and price similarity. Score: {c.get('similarity_score', 0)}"} for c in product_entry["top_competitors"][:5]]; product_competitors.append(product_entry)
 
     # -----------------------------------------------------------------------
     # 7. Price positioning analysis

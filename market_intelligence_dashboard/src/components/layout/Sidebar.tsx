@@ -11,11 +11,7 @@ import {
   MousePointerClick,
   FileText,
   Target,
-  Users,
   TrendingDown,
-  ShieldAlert,
-  LinkIcon,
-  PackagePlus,
   BarChart4,
   Landmark,
   Package,
@@ -51,12 +47,7 @@ const opportunityIntelligenceItems: NavItem[] = [
   { name: 'Market Entry Intelligence', href: '/finance-intelligence', icon: Landmark },
 ];
 
-const productIntelligenceItems: NavItem[] = [
-  { name: 'Competitive Landscape', href: '/direct-competitors', icon: Users },
-  { name: 'Substitute Analysis', href: '/substitute-intelligence', icon: ShieldAlert },
-  { name: 'Complement Analysis', href: '/complement-intelligence', icon: LinkIcon },
-  { name: 'Bundle Opportunity Insights', href: '/bundle-opportunities', icon: PackagePlus },
-];
+
 
 const pricingIntelligenceItems: NavItem[] = [
   { name: 'Price Intelligence', href: '/price-elasticity', icon: TrendingDown },
@@ -206,7 +197,7 @@ export function Sidebar() {
         
         <NavGroup name="Market Intelligence" icon={LineChart} items={marketIntelligenceItems} />
         <NavGroup name="Opportunity Intelligence" icon={Lightbulb} items={opportunityIntelligenceItems} />
-        <NavGroup name="Product Intelligence" icon={Package} items={productIntelligenceItems} />
+        <NavItemLink item={{ name: 'Product Intelligence', href: '/product-intelligence', icon: Package }} />
         <NavGroup name="Pricing Intelligence" icon={Tags} items={pricingIntelligenceItems} />
 
         <div className="space-y-1 pt-2">

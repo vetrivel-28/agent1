@@ -8,8 +8,7 @@ import { formatCurrency, formatNumber, cn } from '../utils/cn';
 import { getEngineErrorMessage } from '../utils/analysisStatus';
 import {
   AlertCircle, Loader2, DollarSign, TrendingUp, Crown,
-  Skull, Layers, Lightbulb, Info, Target, BarChart3, Tag,
-  ArrowRight, ShieldAlert, Zap
+  Skull, Layers, Lightbulb, Info, Target, BarChart3, ShieldAlert, Zap
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -97,11 +96,11 @@ function recommendationBadge(rec: string) {
     case 'Strong Concentration':
       return { variant: 'default' as const, className: 'bg-success/10 text-success hover:bg-success/20 border-success/20' };
     case 'Moderate Concentration':
-      return { variant: 'secondary' as const, className: 'bg-warning/10 text-warning hover:bg-warning/20 border-warning/20' };
+      return { variant: 'warning' as const, className: 'bg-warning/10 text-warning hover:bg-warning/20 border-warning/20' };
     case 'Low Priority':
       return { variant: 'outline' as const, className: 'text-muted-foreground' };
     case 'Avoid':
-      return { variant: 'destructive' as const, className: 'bg-danger/10 text-danger hover:bg-danger/20 border-danger/20' };
+      return { variant: 'danger' as const, className: 'bg-danger/10 text-danger hover:bg-danger/20 border-danger/20' };
     default:
       return { variant: 'outline' as const, className: 'text-muted-foreground' };
   }
@@ -261,8 +260,20 @@ export default function PriceElasticity() {
     return <UnavailableCard message="Could not reach the pricing analysis service." />;
   }
 
-  if (data.status === 'unavailable') {
-    const missing = (data.validation as { missing_columns?: string[] })?.missing_columns;
+  const payload = data?.data;
+  const results = payload?.results || {};
+
+  const hasPricingData = !!results && (
+    (Array.isArray(results.price_bands) && results.price_bands.length > 0) ||
+    (Array.isArray(results.price_buckets) && results.price_buckets.length > 0) ||
+    !!results.market_structure ||
+    !!results.pricing_summary ||
+    !!results.dominant_price_range ||
+    !!results.total_products_analyzed
+  );
+
+  if (!hasPricingData) {
+    const missing = (data as any)?.validation?.missing_columns;
     return (
       <UnavailableCard
         message={getEngineErrorMessage(data, 'Pricing analysis cannot be computed with the current dataset.')}
@@ -271,12 +282,7 @@ export default function PriceElasticity() {
     );
   }
 
-  if (data.status !== 'success') {
-    return <UnavailableCard message={getEngineErrorMessage(data)} />;
-  }
-
   const memoized = useMemo(() => {
-    const results = data.results || {};
     const kpis = results.kpis as Record<string, string | number | null | undefined> || {};
     const bands: PriceBand[] = results.price_buckets || [];
     const insights: Insight[] = results.insights || [];

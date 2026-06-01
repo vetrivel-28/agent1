@@ -150,303 +150,10 @@ _PHRASE_NORMALIZATIONS = {
     "handbags for women": "women handbag",
 }
 
-# Canonical business segments only — never derived from raw keyword phrases.
-_BUSINESS_SEGMENTS: Tuple[str, ...] = (
-    "Handbags",
-    "Tote Bags",
-    "Backpacks",
-    "Crossbody Bags",
-    "Travel Bags",
-    "Laptop Bags",
-    "Beach Bags",
-    "Diaper Bags",
-    "Lunch Bags",
-    "Gift Bags",
-    "Other",
-)
-_BUSINESS_SEGMENT_SET = frozenset(_BUSINESS_SEGMENTS)
 
-# Ordered most-specific first for substring matching on normalized phrases.
-_SEGMENT_PATTERNS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
-    ("Diaper Bags", (
-        "diaper bag", "diaper bags", "nappy bag", "baby bag diaper",
-    )),
-    ("Lunch Bags", (
-        "lunch bag", "lunch bags", "lunchbox bag", "insulated lunch bag",
-        "lunch tote", "meal bag",
-    )),
-    ("Gift Bags", (
-        "gift bag", "gift bags", "party favor bag", "favor bag",
-    )),
-    ("Beach Bags", (
-        "beach bag", "beach bags", "pool bag", "sand bag beach",
-        "bogg bag", "bogg bags",
-    )),
-    ("Laptop Bags", (
-        "laptop bag", "laptop bags", "computer bag", "laptop case",
-        "laptop backpack", "laptop messenger", "briefcase",
-    )),
-    ("Crossbody Bags", (
-        "crossbody bag", "crossbody bags", "cross body bag", "cross-body bag",
-        "crossbody purse", "sling bag",
-    )),
-    ("Travel Bags", (
-        "travel bag", "travel bags", "luggage", "carry on bag", "carry-on bag",
-        "weekender bag", "duffle bag", "duffel bag", "duffle", "duffel",
-        "overnight bag", "garment bag",
-    )),
-    ("Backpacks", (
-        "backpack", "backpacks", "back pack", "rucksack", "school backpack",
-        "hiking backpack", "daypack",
-    )),
-    ("Tote Bags", (
-        "tote bag", "tote bags", "shopping tote", "canvas tote", "market tote",
-    )),
-    ("Handbags", (
-        "handbag", "handbags", "women handbag", "purse", "purses", "clutch",
-        "satchel", "hobo bag", "shoulder bag", "evening bag", "bucket bag",
-        "bag purse",
-    )),
-)
-
-
-def _normalize_phrase(text: str) -> str:
-    if not isinstance(text, str) or not text.strip():
-        return ""
-    text = clean_text(text)
-    for phrase, replacement in _TRANSLATION_MAP.items():
-        text = text.replace(phrase, replacement)
-    for phrase, replacement in _PHRASE_NORMALIZATIONS.items():
-        text = text.replace(phrase, replacement)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
-
-
-def _normalized_tokens(keyword: str) -> List[str]:
-    normalized = _normalize_phrase(keyword)
-    tokens = tokenize_text(normalized)
-    return [_normalize_word(token) for token in tokens]
-
-
-_OTHER_SHARE_MAX = 20.0
-
-
-def _is_business_segment(name: str) -> bool:
-    return name in _BUSINESS_SEGMENT_SET and name != "Other"
-
-
-def _normalized_keyword_phrase(keyword: str) -> str:
-    """Full normalization pipeline for semantic matching."""
-    phrase = _normalize_phrase(keyword)
-    tokens = [_normalize_word(t) for t in tokenize_text(phrase)]
-    return " ".join(tokens)
-
-
-def _has_women_handbag_intent(phrase: str, tokens: List[str]) -> bool:
-    if "women handbag" in phrase or "woman handbag" in phrase:
-        return True
-    token_set = set(tokens)
-    has_woman = bool(token_set & {"woman", "women", "lady", "ladies", "female", "mujer"})
-    has_bag = bool(token_set & {"bag", "handbag", "purse", "clutch", "satchel", "bolso", "bolsa"})
-    return has_woman and has_bag
-
-
-def _has_bag_context(token_set: set) -> bool:
-    return bool(token_set & {
-        "bag", "bags", "handbag", "handbags", "purse", "purses", "tote",
-        "backpack", "backpacks", "clutch", "satchel", "bolso", "bolsa", "mochila",
-    })
-
-
-def _semantic_classify_keyword(keyword: str, pass_level: int = 1) -> str:
-    """
-    Map keyword to a canonical business segment (never a raw phrase label).
-    pass_level 1 = strict patterns, 2 = token heuristics, 3 = generic bag fallback.
-    """
-    phrase = _normalized_keyword_phrase(keyword)
-    tokens = phrase.split() if phrase else []
-    token_set = set(tokens)
-
-    if _has_women_handbag_intent(phrase, tokens):
-        return "Handbags"
-
-    for segment, patterns in _SEGMENT_PATTERNS:
-        for pattern in patterns:
-            if pattern in phrase:
-                return segment
-
-    if pass_level >= 2 and _has_bag_context(token_set):
-        if token_set & {"diaper", "nappy"}:
-            return "Diaper Bags"
-        if "lunch" in token_set:
-            return "Lunch Bags"
-        if token_set & {"gift", "favor", "favour"} and not _is_seasonal_keyword(keyword):
-            return "Gift Bags"
-        if token_set & {"beach", "pool", "sand"} or "bogg" in token_set:
-            return "Beach Bags"
-        if token_set & {"laptop", "computer", "briefcase", "messenger"}:
-            return "Laptop Bags"
-        if "crossbody" in phrase or token_set & {"crossbody", "sling"}:
-            return "Crossbody Bags"
-        if token_set & {"travel", "luggage", "weekender", "duffle", "duffel", "overnight"}:
-            return "Travel Bags"
-        if "backpack" in token_set or "mochila" in token_set or "rucksack" in token_set:
-            return "Backpacks"
-        if "tote" in token_set:
-            return "Tote Bags"
-        if token_set & {"handbag", "purse", "clutch", "satchel", "hobo", "shoulder"}:
-            return "Handbags"
-
-    if pass_level >= 3 and _has_bag_context(token_set):
-        return "Handbags"
-
-    return "Other"
-
-
-def _classify_keyword_records(
-    keyword_records: List[Tuple[str, List[str], float, float]],
-) -> List[str]:
-    """Classify all keywords; escalate passes until Other share <= 20% or pass 3 exhausted."""
-    labels = [_semantic_classify_keyword(kw, pass_level=1) for kw, _, _, _ in keyword_records]
-    for pass_level in (2, 3):
-        total_sv = sum(sv for _, _, sv, _ in keyword_records)
-        other_sv = sum(
-            sv for (_, _, sv, _), lab in zip(keyword_records, labels) if lab == "Other"
-        )
-        other_pct = (other_sv / total_sv * 100.0) if total_sv > 0 else 0.0
-        if other_pct <= _OTHER_SHARE_MAX:
-            break
-        labels = [
-            lab if lab != "Other" else _semantic_classify_keyword(kw, pass_level=pass_level)
-            for (kw, _, _, _), lab in zip(keyword_records, labels)
-        ]
-    return labels
-
-
-def _aggregate_semantic_segments(
-    keyword_records: List[Tuple[str, List[str], float, float]],
-    labels: List[str],
-    total_sv: float,
-    total_ks: float,
-) -> List[Dict[str, Any]]:
-    """Roll up classified keywords into business segment metrics."""
-    if not keyword_records or total_sv <= 0:
-        return []
-
-    buckets: Dict[str, Dict[str, float]] = {
-        name: {"total_sv": 0.0, "total_ks": 0.0, "count": 0.0}
-        for name in _BUSINESS_SEGMENTS
-    }
-
-    for (_kw, _tokens, sv, ks), label in zip(keyword_records, labels):
-        if label not in buckets:
-            label = "Other"
-        buckets[label]["total_sv"] += float(sv or 0)
-        buckets[label]["total_ks"] += float(ks or 0)
-        buckets[label]["count"] += 1
-
-    segment_list: List[Dict[str, Any]] = []
-    for name in _BUSINESS_SEGMENTS:
-        data = buckets[name]
-        count = int(data.get("count") or 0)
-        if count <= 0:
-            continue
-        band_sv = float(data.get("total_sv") or 0)
-        band_ks = float(data.get("total_ks") or 0)
-        demand_share = round((band_sv / total_sv) * 100.0, 2) if total_sv > 0 else 0.0
-        revenue_share = round((band_ks / total_ks) * 100.0, 2) if total_ks > 0 else 0.0
-        competition_index = round(count / max(demand_share, 0.01), 2)
-        segment_list.append({
-            "segment": name,
-            "demand_share": demand_share,
-            "keyword_count": count,
-            "revenue_share": revenue_share,
-            "total_search_volume": int(band_sv),
-            "demand_revenue_gap": round(revenue_share - demand_share, 2),
-            "competition_index": competition_index,
-        })
-
-    segment_list.sort(key=lambda x: x["demand_share"], reverse=True)
-    return _enrich_segment_metrics(segment_list)
-
-
-def _entry_difficulty_label(competition_index: float, peer_indices: List[float]) -> str:
-    """Relative entry difficulty from keyword density vs demand share."""
-    if not peer_indices:
-        return "Moderate"
-    sorted_idx = sorted(peer_indices)
-    n = len(sorted_idx)
-    low_cut = sorted_idx[max(0, n // 3 - 1)]
-    high_cut = sorted_idx[max(0, (2 * n) // 3 - 1)]
-    if competition_index <= low_cut:
-        return "Easy"
-    if competition_index <= high_cut:
-        return "Moderate"
-    return "Hard"
-
-
-def _enrich_segment_metrics(segment_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Add entry_difficulty and revenue_efficiency_ratio per segment."""
-    named = _named_segments(segment_list)
-    peer_indices = [float(s.get("competition_index") or 0) for s in named]
-    for seg in segment_list:
-        demand = max(float(seg.get("demand_share") or 0), 0.01)
-        revenue = float(seg.get("revenue_share") or 0)
-        seg["revenue_efficiency_ratio"] = round(revenue / demand, 2)
-        if str(seg.get("segment", "")).lower() == "other":
-            seg["entry_difficulty"] = "High"
-        else:
-            seg["entry_difficulty"] = _entry_difficulty_label(
-                float(seg.get("competition_index") or 0), peer_indices,
-            )
-    return segment_list
-
-
-def _revenue_efficiency_leader(segment_list: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Segment with strongest revenue capture relative to demand share."""
-    named = _named_segments(segment_list)
-    if not named:
-        return None
-    return max(
-        named,
-        key=lambda s: float(s.get("revenue_efficiency_ratio") or 0),
-    )
-
-
-def _named_segments(segment_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    return [s for s in segment_list if _is_business_segment(str(s.get("segment", "")))]
-
-
-def _top_named_segment(segment_list: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    named = _named_segments(segment_list)
-    if not named:
-        return None
-    return max(named, key=lambda s: float(s.get("demand_share") or 0))
-
-
-def _other_share_pct(segment_list: List[Dict[str, Any]]) -> float:
-    return sum(
-        float(s.get("demand_share") or 0)
-        for s in segment_list
-        if str(s.get("segment", "")).lower() == "other"
-    )
-
-
-def _prepare_keyword_records(
-    tmp: pd.DataFrame,
-    kw_col: str,
-) -> List[Tuple[str, List[str], float, float]]:
-    records: List[Tuple[str, List[str], float, float]] = []
-    for keyword, sv, ks in zip(
-        tmp[kw_col].astype(str),
-        tmp["_sv"].astype(float),
-        tmp["_ks"].fillna(0).astype(float),
-    ):
-        if _is_seasonal_keyword(keyword):
-            continue
-        records.append((keyword, _normalized_tokens(keyword), float(sv), float(ks)))
-    return records
-
+from collections import Counter
+from app.utils.column_mapper import find_column
+import pandas as pd
 
 def _extract_segments(
     magnet_df: pd.DataFrame,
@@ -455,42 +162,87 @@ def _extract_segments(
     kw_col: str,
     top_n_segments: int = 6,
     max_segments: int = 12,
+    blackbox_df: Optional[pd.DataFrame] = None
 ) -> Tuple[List[Dict[str, Any]], str]:
-    """Semantic business-segment clustering (no phrase-derived labels)."""
-    del top_n_segments, max_segments  # fixed canonical segment taxonomy
+    """Dynamic semantic clustering using root nouns from keywords."""
     tmp = magnet_df[[kw_col]].copy()
     sv_c, _ = clean_numeric_series(magnet_df[sv_col], sv_col)
     tmp["_sv"] = sv_c
     tmp = tmp.dropna(subset=["_sv"])
     tmp = tmp[tmp["_sv"] > 0]
-
+    
     if kw_sales_col:
         ks_c, _ = clean_numeric_series(magnet_df.loc[tmp.index, kw_sales_col], kw_sales_col)
         tmp["_ks"] = ks_c.fillna(0)
     else:
         tmp["_ks"] = 0.0
-
+        
     total_sv = float(tmp["_sv"].sum())
     total_ks = float(tmp["_ks"].sum())
-    if len(tmp) == 0 or total_sv <= 0:
+    
+    if total_sv <= 0 or len(tmp) == 0:
         return [], "empty"
+        
+    # Dynamic classification: Group by last word (root noun)
+    def get_root_noun(text: str) -> str:
+        words = clean_text(str(text)).split()
+        if not words:
+            return "Other"
+        w = _normalize_word(words[-1]).title()
+        if len(w) < 3:
+            return "Other"
+        return w + "s"
+        
+    tmp["_segment"] = tmp[kw_col].apply(get_root_noun)
+    
+    # Aggregate
+    agg = tmp.groupby("_segment").agg(
+        total_sv=("_sv", "sum"),
+        total_ks=("_ks", "sum"),
+        kw_count=("_segment", "count")
+    ).reset_index()
+    
+    # Filter small segments
+    agg = agg[agg["total_sv"] > 0]
+    agg = agg.sort_values("total_sv", ascending=False)
+    
+    # Keep top 8, group rest into "Other"
+    top_segs = agg.head(8)["_segment"].tolist()
+    tmp["_final_seg"] = tmp["_segment"].apply(lambda x: x if x in top_segs else "Other")
+    
+    final_agg = tmp.groupby("_final_seg").agg(
+        total_sv=("_sv", "sum"),
+        total_ks=("_ks", "sum"),
+        kw_count=("_final_seg", "count")
+    ).reset_index()
+    
+    segment_list = []
+    for _, row in final_agg.iterrows():
+        sv = float(row["total_sv"])
+        ks = float(row["total_ks"])
+        count = int(row["kw_count"])
+        seg = str(row["_final_seg"])
+        
+        demand_share = round((sv / total_sv) * 100.0, 2)
+        revenue_share = round((ks / total_ks) * 100.0, 2) if total_ks > 0 else 0.0
+        comp_index = round(count / max(demand_share, 0.01), 2)
+        
+        segment_list.append({
+            "segment": seg,
+            "demand_share": demand_share,
+            "keyword_count": count,
+            "revenue_share": revenue_share,
+            "total_search_volume": int(sv),
+            "demand_revenue_gap": round(revenue_share - demand_share, 2),
+            "competition_index": comp_index,
+        })
+        
+    segment_list.sort(key=lambda x: x["demand_share"], reverse=True)
+    segment_list = _enrich_segment_metrics(segment_list)
+    return segment_list, "dynamic_root_noun"
 
-    keyword_records = _prepare_keyword_records(tmp, kw_col)
-    if not keyword_records:
-        return [], "empty"
-
-    labels = _classify_keyword_records(keyword_records)
-    segment_list = _aggregate_semantic_segments(
-        keyword_records, labels, total_sv, total_ks,
-    )
-    method = "semantic_categories"
-    logger.info(
-        "Semantic segmentation: other_share=%.2f%%, segments=%s",
-        _other_share_pct(segment_list),
-        len(segment_list),
-    )
-    return segment_list, method
-
+def _is_business_segment(name: str) -> bool:
+    return name != "Other"
 
 def _fallback_segment_list(
     magnet_df: pd.DataFrame,
@@ -1095,7 +847,7 @@ def run(
     if magnet_df is not None and sv_col and kw_col:
         try:
             segment_list, segmentation_method = _extract_segments(
-                magnet_df, sv_col, kw_sales_col, kw_col, top_n_segments=6
+                magnet_df, sv_col, kw_sales_col, kw_col, top_n_segments=6, blackbox_df=blackbox_df
             )
         except Exception as exc:
             logger.exception("Demand segmentation failed, using fallback buckets: %s", exc)

@@ -104,6 +104,9 @@ def run(
     else:
         comp_df["_vol"] = 0.0
 
+    # SORT BY VOLUME DESCENDING AND TAKE TOP 100
+    comp_df = comp_df.sort_values("_vol", ascending=False).head(100)
+
     comp_keywords: List[Dict] = []
     for _, row in comp_df.iterrows():
         kw = str(row[kw_col]).strip()
@@ -324,7 +327,7 @@ def run(
         ),
         "results": {
             "complement_keywords": comp_keywords,
-            "complement_products": complement_products[:top_n],
+            "complement_products": [{**p, "reason": f"Matched because keyword '{p.get('keyword', 'N/A')}' is classified as Complement and overlaps with title. Synergy Score: {p.get('synergy_score', 0)}"} for p in complement_products[:5]],
             "ecosystem_clusters": ecosystem_clusters[:top_n],
             "cross_sell_opportunities": cross_sell_opportunities[:top_n],
             "ecosystem_strength": ecosystem_strength,
