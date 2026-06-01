@@ -247,40 +247,8 @@ export default function PriceElasticity() {
     queryFn: () => api.getPriceElasticity(6),
   });
 
-  if (isLoading) {
-    return (
-      <div className="flex h-[80vh] items-center justify-center flex-col gap-3 theme-elasticity">
-        <Loader2 className="w-8 h-8 animate-spin text-primary" />
-        <p className="text-sm text-muted-foreground font-mono uppercase tracking-widest">Synthesizing Price Economics...</p>
-      </div>
-    );
-  }
-
-  if (isError || !data) {
-    return <UnavailableCard message="Could not reach the pricing analysis service." />;
-  }
-
   const payload = data?.data;
   const results = payload?.results || {};
-
-  const hasPricingData = !!results && (
-    (Array.isArray(results.price_bands) && results.price_bands.length > 0) ||
-    (Array.isArray(results.price_buckets) && results.price_buckets.length > 0) ||
-    !!results.market_structure ||
-    !!results.pricing_summary ||
-    !!results.dominant_price_range ||
-    !!results.total_products_analyzed
-  );
-
-  if (!hasPricingData) {
-    const missing = (data as any)?.validation?.missing_columns;
-    return (
-      <UnavailableCard
-        message={getEngineErrorMessage(data, 'Pricing analysis cannot be computed with the current dataset.')}
-        missing={missing}
-      />
-    );
-  }
 
   const memoized = useMemo(() => {
     const kpis = results.kpis as Record<string, string | number | null | undefined> || {};
@@ -328,6 +296,38 @@ export default function PriceElasticity() {
       chartBands, matrixData, showCompetition
     };
   }, [data]);
+
+  if (isLoading) {
+    return (
+      <div className="flex h-[80vh] items-center justify-center flex-col gap-3 theme-elasticity">
+        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+        <p className="text-sm text-muted-foreground font-mono uppercase tracking-widest">Synthesizing Price Economics...</p>
+      </div>
+    );
+  }
+
+  if (isError || !data) {
+    return <UnavailableCard message="Could not reach the pricing analysis service." />;
+  }
+
+  const hasPricingData = !!results && (
+    (Array.isArray(results.price_bands) && results.price_bands.length > 0) ||
+    (Array.isArray(results.price_buckets) && results.price_buckets.length > 0) ||
+    !!results.market_structure ||
+    !!results.pricing_summary ||
+    !!results.dominant_price_range ||
+    !!results.total_products_analyzed
+  );
+
+  if (!hasPricingData) {
+    const missing = (data as any)?.validation?.missing_columns;
+    return (
+      <UnavailableCard
+        message={getEngineErrorMessage(data, 'Pricing analysis cannot be computed with the current dataset.')}
+        missing={missing}
+      />
+    );
+  }
 
   const {
     kpis, bands, insights, positioning, categoryOverview,

@@ -69,6 +69,16 @@ from app.validators.dataset_validator import validate_csv_bytes
 
 
 def sanitize_payload(obj):
+    import numpy as np
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        val = float(obj)
+        if math.isnan(val) or math.isinf(val):
+            return 0.0
+        return val
+    if isinstance(obj, np.bool_):
+        return bool(obj)
     if isinstance(obj, float):
         if math.isnan(obj) or math.isinf(obj):
             return 0.0
@@ -673,6 +683,16 @@ def analysis_snapshot():
     return format_response({"status": "success", **snap})
 
 
+@router.get(
+    "/processing-status",
+    summary="Background processing status",
+    description="Returns the current state of background engine processing.",
+)
+def processing_status():
+    status = analysis_cache.get_status()
+    return format_response({"status": "success", **status})
+
+
 
 @router.post(
     "/product-intelligence",
@@ -774,14 +794,21 @@ def finance_intelligence(top_n: int = 10):
     blackbox_df = registry.get_blackbox()
     if is_empty_dataframe(magnet_df) and is_empty_dataframe(blackbox_df):
         return _datasets_not_loaded("Finance Intelligence", "magnet and/or blackbox")
-    demand_score = None
-    if not (is_empty_dataframe(magnet_df) and is_empty_dataframe(blackbox_df)):
-        demand_res = demand_engine.run(magnet_df, blackbox_df, top_n=top_n)
-        if demand_res.get("status") == "success":
-            demand_score = demand_res.get("results", {}).get("overall_demand_score")
     cached = analysis_cache.get_engine("finance")
     if cached:
         return format_response(cached)
+    demand_score = None
+    # Try to get demand score from cache first to avoid re-running demand engine
+    demand_cached = analysis_cache.get_engine("demand")
+    if demand_cached and demand_cached.get("status") == "success":
+        demand_score = (
+            demand_cached.get("results", {}).get("market_demand_index")
+            or demand_cached.get("results", {}).get("overall_demand_score")
+        )
+    elif not (is_empty_dataframe(magnet_df) and is_empty_dataframe(blackbox_df)):
+        demand_res = demand_engine.run(magnet_df, blackbox_df, top_n=top_n)
+        if demand_res.get("status") == "success":
+            demand_score = demand_res.get("results", {}).get("overall_demand_score")
     result = run_finance_intelligence(magnet_df, blackbox_df, demand_score=demand_score)
     logger.info(
         f"Finance Intelligence complete — status={result['status']}, "

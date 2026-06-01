@@ -244,6 +244,67 @@ def _extract_segments(
 def _is_business_segment(name: str) -> bool:
     return name != "Other"
 
+
+def _named_segments(segment_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Return only named business segments (exclude 'Other' catch-all)."""
+    return [s for s in segment_list if _is_business_segment(str(s.get("segment", "")))]
+
+
+def _top_named_segment(segment_list: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Return the highest demand_share segment that is a named business segment."""
+    named = _named_segments(segment_list)
+    if not named:
+        return None
+    return max(named, key=lambda s: float(s.get("demand_share") or 0))
+
+
+def _enrich_segment_metrics(segment_list: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Add derived metrics to each segment:
+    - revenue_efficiency_ratio: revenue_share / demand_share (>1 = monetizes well)
+    - entry_difficulty: qualitative label based on competition_index
+    """
+    for seg in segment_list:
+        demand = float(seg.get("demand_share") or 0)
+        revenue = float(seg.get("revenue_share") or 0)
+        comp_idx = float(seg.get("competition_index") or 0)
+
+        # Revenue efficiency: how well demand converts to revenue
+        if demand > 0:
+            seg["revenue_efficiency_ratio"] = round(revenue / demand, 3)
+        else:
+            seg["revenue_efficiency_ratio"] = 0.0
+
+        # Entry difficulty based on competition index
+        if comp_idx >= 50:
+            seg["entry_difficulty"] = "High"
+        elif comp_idx >= 20:
+            seg["entry_difficulty"] = "Moderate"
+        else:
+            seg["entry_difficulty"] = "Low"
+
+    return segment_list
+
+
+def _revenue_efficiency_leader(segment_list: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Return the named segment with the highest revenue_efficiency_ratio."""
+    named = _named_segments(segment_list)
+    if not named:
+        return None
+    candidates = [s for s in named if float(s.get("revenue_efficiency_ratio") or 0) > 0]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda s: float(s.get("revenue_efficiency_ratio") or 0))
+
+
+def _other_share_pct(segment_list: List[Dict[str, Any]]) -> float:
+    """Return the demand_share of the 'Other' catch-all segment, or 0 if absent."""
+    for seg in segment_list:
+        if str(seg.get("segment", "")).strip() == "Other":
+            return float(seg.get("demand_share") or 0)
+    return 0.0
+
+
 def _fallback_segment_list(
     magnet_df: pd.DataFrame,
     sv_col: str,

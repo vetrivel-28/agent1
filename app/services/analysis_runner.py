@@ -1,5 +1,9 @@
 """
 Run all intelligence engines and cache results for single source of truth.
+
+Engines run in parallel via ThreadPoolExecutor. Results are cached
+incrementally as each engine completes, so the frontend can start
+displaying data before the full run finishes.
 """
 from __future__ import annotations
 
@@ -33,15 +37,16 @@ DEFAULT_TOP_N = 10
 
 
 def run_all_engines(top_n: int = DEFAULT_TOP_N) -> Dict[str, Any]:
-    """Execute all engines; return engine outputs keyed by module name."""
+    """Execute all engines; cache results incrementally as they complete."""
     magnet_df = registry.get_magnet()
     blackbox_df = registry.get_blackbox()
     kc_df = registry.get_keyword_classification()
 
     engines: Dict[str, Any] = {}
 
+    # Build the list of futures to determine total count
     futures = {}
-    with concurrent.futures.ThreadPoolExecutor() as executor:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
         if not is_empty_dataframe(blackbox_df) or not is_empty_dataframe(magnet_df):
             futures["demand"] = executor.submit(demand_engine.run, magnet_df, blackbox_df, top_n)
 
@@ -62,24 +67,39 @@ def run_all_engines(top_n: int = DEFAULT_TOP_N) -> Dict[str, Any]:
             futures["substitute"] = executor.submit(substitute_engine.run, kc_df, blackbox_df, top_n)
             futures["complement"] = executor.submit(complement_engine.run, kc_df, blackbox_df, top_n)
             futures["bundle"] = executor.submit(bundle_opportunity_engine.run, kc_df, blackbox_df, top_n)
-            
-        for name, future in futures.items():
+
+        # Signal processing start with total engine count
+        # +1 for finance which runs after demand completes
+        analysis_cache.set_processing(len(futures) + 1)
+
+        # Process results as they complete (incremental caching)
+        for future in concurrent.futures.as_completed(futures.values()):
+            # Find the name for this future
+            name = next(n for n, f in futures.items() if f is future)
             try:
-                engines[name] = future.result()
+                result = future.result()
+                engines[name] = result
+                # Cache immediately so frontend can access it
+                analysis_cache.set_engine(name, result)
+                logger.info(f"Engine '{name}' completed and cached")
             except Exception as exc:
                 logger.exception(f"{name} engine failed")
-                engines[name] = {
+                error_result = {
                     "status": "error",
                     "message": f"{name} engine failed: {str(exc)}",
                     "results": {},
                     "processing_time_seconds": 0.0,
                 }
+                engines[name] = error_result
+                analysis_cache.set_engine(name, error_result)
 
+    # Finance depends on demand score — runs after parallel batch
     demand_score = (
         engines.get("demand", {}).get("results", {}).get("market_demand_index")
         or engines.get("demand", {}).get("results", {}).get("overall_demand_score")
     )
     engines["finance"] = run_finance_intelligence(magnet_df, blackbox_df, demand_score=demand_score)
+    analysis_cache.set_engine("finance", engines["finance"])
 
     snapshot = {
         "top_n": top_n,
@@ -88,7 +108,3 @@ def run_all_engines(top_n: int = DEFAULT_TOP_N) -> Dict[str, Any]:
     analysis_cache.set_snapshot(snapshot)
     logger.info("Full analysis run complete: %s engines", len(engines))
     return snapshot
-
-
-def get_cached_engine(name: str) -> Optional[Dict[str, Any]]:
-    return analysis_cache.get_engine(name)

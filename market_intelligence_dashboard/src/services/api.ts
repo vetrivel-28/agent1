@@ -109,6 +109,11 @@ export const api = {
     return response.data;
   },
 
+  getProcessingStatus: async () => {
+    const response = await apiClient.get('/processing-status');
+    return response.data;
+  },
+
   downloadMarketReportPdf: async (topN = 10) => {
     const response = await apiClient.get(`/market-report/pdf?top_n=${topN}`, {
       responseType: 'blob',

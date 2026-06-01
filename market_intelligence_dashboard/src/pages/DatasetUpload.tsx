@@ -37,8 +37,10 @@ export default function DatasetUpload() {
       });
       queryClient.invalidateQueries();
       
-      // Navigate to overview immediately
-      navigate('/overview');
+      // Show success message for a few seconds, then navigate
+      setTimeout(() => {
+        navigate('/overview');
+      }, 2500);
       
       // Reset files on success after a short delay
       setTimeout(() => {

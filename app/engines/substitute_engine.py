@@ -120,6 +120,10 @@ def run(
                 "search_volume": _sv(row.get("_vol", 0)),
             })
 
+    # Limit to top 100 keywords by search volume for performance
+    sub_keywords.sort(key=lambda x: x["search_volume"] or 0, reverse=True)
+    sub_keywords = sub_keywords[:100]
+
     logger.info(f"Substitute keywords extracted: {len(sub_keywords)}")
 
     # -----------------------------------------------------------------------
@@ -177,6 +181,16 @@ def run(
         # Fall back to full scan with lower threshold
         candidate_bb = bb.copy()
         logger.info("No token pre-filter matches — falling back to full scan")
+
+    # Limit candidates for performance (top 500 by revenue or first 500)
+    if len(candidate_bb) > 500:
+        if rev_col and rev_col in candidate_bb.columns:
+            rev_clean, _ = clean_numeric_series(candidate_bb[rev_col], rev_col)
+            candidate_bb["_rev_sort"] = rev_clean
+            candidate_bb = candidate_bb.nlargest(500, "_rev_sort")
+        else:
+            candidate_bb = candidate_bb.head(500)
+        logger.info(f"Candidates capped at 500 for performance")
 
     # -----------------------------------------------------------------------
     # Score each candidate product against each substitute keyword

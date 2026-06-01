@@ -82,7 +82,7 @@ export default function ComplementIntelligence() {
                   
                   <div className="mt-3 p-3 bg-muted/30 rounded-md text-sm border border-border/50">
                     <span className="font-semibold text-foreground mr-1">Why?</span> 
-                    {item.reason || 'This product frequently accompanies your market's main items. The high complement strength indicates strong potential for cross-selling and ecosystem synergy.'}
+                    {item.reason || "This product frequently accompanies your market's main items. The high complement strength indicates strong potential for cross-selling and ecosystem synergy."}
                   </div>
                 </div>
                 

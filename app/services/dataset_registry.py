@@ -37,7 +37,7 @@ class DatasetRegistry:
         self._blackbox = df.copy()
         
         sample_title = ""
-        title_col, _ = find_column(self._blackbox, ["Title", "Product Title"])
+        title_col = find_column(self._blackbox, ["Title", "Product Title"])
         if title_col and len(self._blackbox) > 0:
             sample_title = str(self._blackbox[title_col].iloc[0])
 
@@ -53,7 +53,7 @@ class DatasetRegistry:
         self._magnet = df.copy()
         
         sample_kw = ""
-        kw_col, _ = find_column(self._magnet, ["Keyword Phrase", "Keyword"])
+        kw_col = find_column(self._magnet, ["Keyword Phrase", "Keyword"])
         if kw_col and len(self._magnet) > 0:
             sample_kw = str(self._magnet[kw_col].iloc[0])
 

@@ -38,7 +38,7 @@ const queryClient = new QueryClient({
 function RootRedirect() {
   const { data, isLoading } = useQuery({
     queryKey: ['status'],
-    queryFn: () => fetch('/api/v1/status').then(res => res.json()),
+    queryFn: () => import('./services/api').then(m => m.api.getStatus()),
   });
 
   if (isLoading) return <div className="flex h-screen w-full items-center justify-center"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div>;

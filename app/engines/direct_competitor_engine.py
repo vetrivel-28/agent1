@@ -310,74 +310,79 @@ def run(
         competition_density[f"{cat}/{subcat}"] = cluster_size
 
     # -----------------------------------------------------------------------
-    # 6. Find direct competitors for each product
+    # 6. Find direct competitors for each product (vectorized approach)
     # -----------------------------------------------------------------------
     product_competitors: List[Dict[str, Any]] = []
 
-    for idx, (ref_idx, ref_product) in enumerate(df_valid.iterrows()):
-        ref_asin = str(ref_product[asin_col])
-        ref_cat = str(ref_product[category_col])
-        ref_subcat = str(ref_product[subcategory_col])
-        ref_price = float(ref_product["_price_clean"])
+    # Vectorized: within each (cat, subcat) group, use numpy broadcasting
+    # to compute price similarity for all pairs at once — O(n) per group
+    # instead of O(n²) across the entire dataset.
+    MAX_PRODUCTS_FOR_PAIRWISE = 200  # Limit pairwise to top products per cluster
 
-        # Find all competitors in same category/subcategory with similar price
-        competitors_list: List[Tuple[float, pd.Series]] = []
+    for (cat, subcat), group in df_valid.groupby(
+        [category_col, subcategory_col], as_index=False
+    ):
+        if len(group) < 2:
+            continue
 
-        for comp_idx, comp_product in df_valid.iterrows():
-            if ref_asin == str(comp_product[asin_col]):
-                continue  # Skip self
+        # Limit cluster size for pairwise comparison
+        grp = group.head(MAX_PRODUCTS_FOR_PAIRWISE)
+        prices = grp["_price_clean"].values
+        asins = grp[asin_col].astype(str).values
+        titles = grp[title_col].astype(str).values if title_col else np.full(len(grp), "N/A")
+        brands = grp[brand_col].astype(str).values if brand_col else np.full(len(grp), "N/A")
 
-            comp_cat = str(comp_product[category_col])
-            comp_subcat = str(comp_product[subcategory_col])
-            comp_price = float(comp_product["_price_clean"])
+        # Vectorized price difference matrix: |price_i - price_j| / price_i * 100
+        price_matrix = np.abs(prices[:, None] - prices[None, :])
+        with np.errstate(divide='ignore', invalid='ignore'):
+            pct_diff_matrix = np.where(prices[:, None] > 0, price_matrix / prices[:, None] * 100.0, 100.0)
 
-            # Check category/subcategory match
-            cat_match = ref_cat == comp_cat
-            subcat_match = ref_subcat == comp_subcat
+        # Boolean mask: within price tolerance
+        within_tolerance = pct_diff_matrix <= price_tolerance_pct
 
-            if not (cat_match and subcat_match):
-                continue  # Not in same category/subcategory
+        # Similarity score: category(40) + subcategory(35) always match within group
+        # Price component: max(0, (20 - pct_diff) / 20 * 25)
+        price_score_matrix = np.maximum(0.0, (20.0 - pct_diff_matrix) / 20.0 * 25.0)
+        sim_matrix = np.where(within_tolerance, 75.0 + price_score_matrix, 0.0)
 
-            # Check price similarity
-            price_sim = _is_price_similar(ref_price, comp_price, price_tolerance_pct)
+        # Zero out diagonal (self-comparison)
+        np.fill_diagonal(sim_matrix, 0.0)
 
-            if not price_sim:
-                continue  # Price too different
+        # For each product, get top_n competitors by score
+        for i in range(len(grp)):
+            scores = sim_matrix[i]
+            nonzero_mask = scores > 0
+            if not nonzero_mask.any():
+                continue
 
-            # Calculate similarity score
-            price_diff_pct = abs((comp_price - ref_price) / ref_price * 100.0)
-            sim_score = _calculate_similarity_score(
-                cat_match, subcat_match, price_sim, price_diff_pct
-            )
+            # Get top_n indices by score
+            nonzero_indices = np.where(nonzero_mask)[0]
+            if len(nonzero_indices) > top_n:
+                top_indices = nonzero_indices[np.argsort(scores[nonzero_indices])[-top_n:][::-1]]
+            else:
+                top_indices = nonzero_indices[np.argsort(scores[nonzero_indices])[::-1]]
 
-            competitors_list.append((sim_score, comp_product))
+            top_competitors_for_ref = []
+            for j in top_indices:
+                comp_entry = {
+                    "asin": asins[j],
+                    "title": titles[j][:100],
+                    "brand": brands[j],
+                    "price": _format_score(prices[j]),
+                    "category": str(cat),
+                    "subcategory": str(subcat),
+                    "similarity_score": _format_score(scores[j]),
+                    "reason": f"Direct market competition identified via category overlap and price similarity. Score: {_format_score(scores[j])}",
+                }
+                top_competitors_for_ref.append(comp_entry)
 
-        # Sort by similarity score (descending)
-        competitors_list.sort(key=lambda x: x[0], reverse=True)
-
-        # Collect top competitors for this reference product
-        top_competitors_for_ref: List[Dict[str, Any]] = []
-        for sim_score, comp_product in competitors_list[:top_n]:
-            comp_entry = {
-                "asin": str(comp_product[asin_col]),
-                "title": str(comp_product[title_col])[:100] if title_col else "N/A",
-                "brand": str(comp_product[brand_col]) if brand_col else "N/A",
-                "price": _format_score(comp_product["_price_clean"]),
-                "category": str(comp_product[category_col]),
-                "subcategory": str(comp_product[subcategory_col]),
-                "similarity_score": _format_score(sim_score),
-            }
-            top_competitors_for_ref.append(comp_entry)
-
-        if top_competitors_for_ref:
-            product_entry = {
-                "reference_asin": ref_asin,
-                "reference_title": str(ref_product[title_col])[:100] if title_col else "N/A",
-                "reference_price": _format_score(ref_price),
+            product_competitors.append({
+                "reference_asin": asins[i],
+                "reference_title": titles[i][:100],
+                "reference_price": _format_score(prices[i]),
                 "competitor_count": len(top_competitors_for_ref),
-                "top_competitors": top_competitors_for_ref,
-            }
-            product_entry["top_competitors"] = [{**c, "reason": f"Direct market competition identified via category overlap and price similarity. Score: {c.get('similarity_score', 0)}"} for c in product_entry["top_competitors"][:5]]; product_competitors.append(product_entry)
+                "top_competitors": top_competitors_for_ref[:5],
+            })
 
     # -----------------------------------------------------------------------
     # 7. Price positioning analysis

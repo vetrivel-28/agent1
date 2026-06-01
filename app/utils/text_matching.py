@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import re
 import string
-from typing import List, Optional, Tuple
+from functools import lru_cache
+from typing import FrozenSet, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # Stopwords — common English words that add no matching signal
@@ -49,6 +50,11 @@ def clean_text(text: str) -> str:
     """
     if not isinstance(text, str) or not text.strip():
         return ""
+    return _clean_text_cached(text)
+
+
+@lru_cache(maxsize=8192)
+def _clean_text_cached(text: str) -> str:
     # Lowercase
     t = text.lower()
     # Remove punctuation except hyphens (keep "100%" → "100", "t-shirt" → "t shirt")
@@ -68,11 +74,16 @@ def tokenize_text(text: str, remove_stopwords: bool = True) -> List[str]:
     cleaned = clean_text(text)
     if not cleaned:
         return []
+    return list(_tokenize_cached(cleaned, remove_stopwords))
+
+
+@lru_cache(maxsize=8192)
+def _tokenize_cached(cleaned: str, remove_stopwords: bool = True) -> tuple:
     tokens = cleaned.split()
     tokens = [t for t in tokens if len(t) >= 2]
     if remove_stopwords:
         tokens = [t for t in tokens if t not in _STOPWORDS]
-    return tokens
+    return tuple(tokens)
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +140,7 @@ def keyword_overlap_score(a: str, b: str) -> float:
     return round((intersection / union) * 100.0, 2)
 
 
+@lru_cache(maxsize=16384)
 def combined_similarity(a: str, b: str, fuzzy_weight: float = 0.4, overlap_weight: float = 0.6) -> float:
     """
     Weighted combination of fuzzy_match_score and keyword_overlap_score.

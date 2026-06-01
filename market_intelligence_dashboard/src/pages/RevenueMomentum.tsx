@@ -18,29 +18,6 @@ export default function RevenueMomentum() {
     queryFn: () => api.getRevenueMomentum(50),
   });
 
-  if (isLoading) {
-    return (
-      <div className="flex h-[80vh] items-center justify-center flex-col gap-3 theme-revenue">
-        <Loader2 className="w-8 h-8 animate-spin text-primary" />
-        <p className="text-sm text-muted-foreground font-mono uppercase tracking-widest">Calculating Momentum Matrix...</p>
-      </div>
-    );
-  }
-
-  if (isError || !isEngineOk(data)) {
-    return (
-      <Card className="border-danger/50 bg-danger/5 mt-10 theme-revenue">
-        <CardContent className="p-8 flex flex-col items-center text-center">
-          <AlertCircle className="w-12 h-12 text-danger mb-4" />
-          <h2 className="text-xl font-bold text-danger mb-2 font-mono">GROWTH VELOCITY UNAVAILABLE</h2>
-          <p className="text-danger/80 max-w-lg">
-            {getEngineErrorMessage(data, 'Requires BlackBox with revenue, sales, review, and rank data.')}
-          </p>
-        </CardContent>
-      </Card>
-    );
-  }
-
   const payload = data?.data;
   const results = payload?.results || {};
 
@@ -144,6 +121,29 @@ export default function RevenueMomentum() {
       averageMarketMomentum, highestMomentumBrand, topTenBrands
     };
   }, [results]);
+
+  if (isLoading) {
+    return (
+      <div className="flex h-[80vh] items-center justify-center flex-col gap-3 theme-revenue">
+        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+        <p className="text-sm text-muted-foreground font-mono uppercase tracking-widest">Calculating Momentum Matrix...</p>
+      </div>
+    );
+  }
+
+  if (isError || !isEngineOk(data)) {
+    return (
+      <Card className="border-danger/50 bg-danger/5 mt-10 theme-revenue">
+        <CardContent className="p-8 flex flex-col items-center text-center">
+          <AlertCircle className="w-12 h-12 text-danger mb-4" />
+          <h2 className="text-xl font-bold text-danger mb-2 font-mono">GROWTH VELOCITY UNAVAILABLE</h2>
+          <p className="text-danger/80 max-w-lg">
+            {getEngineErrorMessage(data, 'Requires BlackBox with revenue, sales, review, and rank data.')}
+          </p>
+        </CardContent>
+      </Card>
+    );
+  }
 
   const {
     marketLeaders, emerging, incumbents, weak,
