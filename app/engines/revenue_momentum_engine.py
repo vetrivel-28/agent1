@@ -16,6 +16,7 @@ import pandas as pd
 
 from app.utils.column_mapper import find_column
 from app.utils.logger import get_logger
+from app.services.llm_service import generate_quadrant_insight
 
 logger = get_logger("revenue_momentum_engine")
 
@@ -32,10 +33,10 @@ _PRICE_TREND_CANDIDATES = ["Price Trend (90 days) (%)", "price trend (90 days) (
 _NUMERIC_CLEAN_RE = re.compile(r"[^\d\.\-]")
 
 _CLASSIFICATION_RULE = (
-    "Market Leader: Revenue Percentile >= 50 and Sales Percentile >= 50; "
-    "Emerging Brand: Revenue Percentile < 50 and Sales Percentile >= 50; "
-    "Premium Brand: Revenue Percentile >= 50 and Sales Percentile < 50; "
-    "Niche Player: Revenue Percentile < 50 and Sales Percentile < 50."
+    "Dominant Leader: Revenue Percentile >= 50 and Sales Percentile >= 50; "
+    "Growth Challenger: Revenue Percentile < 50 and Sales Percentile >= 50; "
+    "Revenue Heavyweight: Revenue Percentile >= 50 and Sales Percentile < 50; "
+    "Long Tail Player: Revenue Percentile < 50 and Sales Percentile < 50."
 )
 
 _WEIGHTS = {
@@ -96,24 +97,15 @@ def _safe_minmax(series: pd.Series, invert: bool = False) -> pd.Series:
 
 def _classify(revenue_percentile: float, sales_percentile: float) -> str:
     if revenue_percentile >= 50 and sales_percentile >= 50:
-        return "Market Leader"
+        return "Dominant Leader"
     if revenue_percentile < 50 and sales_percentile >= 50:
-        return "Emerging Brand"
+        return "Growth Challenger"
     if revenue_percentile >= 50 and sales_percentile < 50:
-        return "Premium Brand"
-    return "Niche Player"
+        return "Revenue Heavyweight"
+    return "Long Tail Player"
 
 
-def _rule_strategy(label: str, brands: List[Dict[str, Any]]) -> str:
-    if not brands:
-        return "No brands in this segment from uploaded dataset."
-    if label == "Market Leaders":
-        return "Avoid direct price war unless there is clear price weakness. Attack long-tail segments. Differentiate by niche, quality, bundle, use case, design, or customer pain point. Study their primary engine and build against the weak component. Use listing/PPC/content strategy to capture underserved demand."
-    if label == "Emerging Brands":
-        return "Monitor fast movers. Identify what component drives their momentum. Defend before they become leaders. Copy only data-supported tactics. Differentiate early."
-    if label == "Premium Brands":
-        return "Use innovation and updated positioning. Target stagnant products. Exploit slow sales trend or weak BSR momentum. Offer better value or improved listing content."
-    return "Identify weak patterns. Avoid low momentum positioning. Look for whitespace if demand exists but competitors underperform."
+
 
 
 def _build_evidence(
@@ -196,10 +188,40 @@ def _segment_block(
     items: List[Dict[str, Any]],
     evidence_rows: List[Dict[str, Any]],
     classification_rule: str,
+    total_market_revenue: float = 0.0,
+    top_5_share: float = 0.0,
 ) -> Dict[str, Any]:
     singular = " ".join(name.split()[:-1]) if name.endswith("s") else name
     total_revenue = sum(item.get("parent_revenue", 0.0) for item in items)
     total_products = sum(item.get("product_count", 0) for item in items)
+    
+    # Generate LLM inputs
+    llm_inputs = {
+        'quadrant_name': name,
+        'brand_count': len(items),
+        'top_brands': [i.get("brand") for i in items[:3]],
+        'top_brands_data': [
+            {
+                "brand": i.get("brand"),
+                "revenue_share": round(i.get("revenue_share", 0.0), 2),
+                "revenue_percentile": round(i.get("revenue_percentile", 0.0), 1),
+                "sales_percentile": round(i.get("sales_percentile", 0.0), 1),
+                "momentum_score": round(i.get("momentum_score", 0.0), 1),
+                "primary_engine": i.get("primary_engine", "Unknown")
+            }
+            for i in items[:5]
+        ],
+        'market_share_distribution': f"{sum(i.get('revenue_share', 0) for i in items):.1f}%",
+        'revenue_percentiles': f"{min((i.get('revenue_percentile', 0) for i in items), default=0):.1f} - {max((i.get('revenue_percentile', 0) for i in items), default=0):.1f}",
+        'sales_percentiles': f"{min((i.get('sales_percentile', 0) for i in items), default=0):.1f} - {max((i.get('sales_percentile', 0) for i in items), default=0):.1f}",
+        'momentum_scores': f"{min((i.get('momentum_score', 0) for i in items), default=0):.1f} - {max((i.get('momentum_score', 0) for i in items), default=0):.1f}",
+        'growth_drivers': list(set(i.get("primary_engine", "") for i in items[:5])),
+        'category_revenue': total_market_revenue,
+        'revenue_concentration': top_5_share,
+    }
+    
+    llm_insight = generate_quadrant_insight(llm_inputs) if items else "No brands in this segment."
+
     return {
         "count": len(items),
         "total_revenue": total_revenue,
@@ -216,9 +238,7 @@ def _segment_block(
             final_value=len(items),
             classification_rule=classification_rule,
         ),
-        "tinyllama_strategy": None,
-        "rule_based_strategy": _rule_strategy(name, items),
-        "tinyllama_status": "TinyLlama insight unavailable, showing rule-based insight.",
+        "ai_insight": llm_insight,
     }
 
 
@@ -383,11 +403,13 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
         
     brand_agg["momentum_score"] = (weighted_sum / weights_used.replace({0.0: np.nan})).fillna(0.0).clip(0.0, 100.0)
     
-    brand_agg["revenue_percentile"] = brand_agg["parent_revenue"].rank(pct=True, method="max") * 100.0
+    # Use average-rank percentile so large tie groups (e.g., many zeros)
+    # do not incorrectly push all rows above the 50th percentile.
+    brand_agg["revenue_percentile"] = brand_agg["parent_revenue"].rank(pct=True, method="average") * 100.0
     if "parent_sales" in brand_agg.columns:
-        brand_agg["sales_percentile"] = brand_agg["parent_sales"].rank(pct=True, method="max") * 100.0
+        brand_agg["sales_percentile"] = brand_agg["parent_sales"].rank(pct=True, method="average") * 100.0
     else:
-        brand_agg["sales_percentile"] = brand_agg["product_count"].rank(pct=True, method="max") * 100.0
+        brand_agg["sales_percentile"] = brand_agg["product_count"].rank(pct=True, method="average") * 100.0
 
     brand_agg["classification"] = brand_agg.apply(lambda r: _classify(float(r["revenue_percentile"]), float(r["sales_percentile"])), axis=1)
 
@@ -438,12 +460,19 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
             "revenue_efficiency_score": float(row["revenue_efficiency_score"]) if pd.notna(row["revenue_efficiency_score"]) else None,
         }
         
-        primary_engine = "Sales Trend"
+        primary_engine = "Sales Velocity"
         max_val = -1
         for k, v in comps.items():
             if v is not None and v > max_val:
                 max_val = v
-                primary_engine = k.replace("_score", "").replace("_", " ").title()
+                engine_map = {
+                    "sales_trend_score": "Sales Velocity",
+                    "revenue_trend_score": "Revenue Concentration",
+                    "sales_velocity_score": "Sales Velocity",
+                    "bsr_momentum_score": "BSR Momentum",
+                    "revenue_efficiency_score": "Revenue Efficiency",
+                }
+                primary_engine = engine_map.get(k, "Sales Velocity")
                 
         # Generate calculation string
         calc_str = ""
@@ -474,6 +503,7 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
             "product_count": int(row["product_count"]),
             "revenue_percentile": round(float(row["revenue_percentile"]), 1),
             "sales_percentile": round(float(row["sales_percentile"]), 1),
+            "market_power_score": round((0.7 * float(row["revenue_percentile"])) + (0.3 * float(row["sales_percentile"])), 2),
             "revenue_strength": round(float(row["revenue_strength"]), 4),
             "momentum_score": round(float(row["momentum_score"]), 1),
             "sales_trend_score": comps["sales_trend_score"],
@@ -486,10 +516,63 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
             "evidence": ledger_evidence,
         })
 
-    market_leaders = [r for r in momentum_ledger if r["classification"] == "Market Leader"]
-    emerging_brands = [r for r in momentum_ledger if r["classification"] == "Emerging Brand"]
-    premium_brands = [r for r in momentum_ledger if r["classification"] == "Premium Brand"]
-    niche_players = [r for r in momentum_ledger if r["classification"] == "Niche Player"]
+    # Sort primarily by market share (revenue_share), secondarily by momentum score.
+    momentum_ledger = sorted(
+        momentum_ledger,
+        key=lambda r: (-float(r.get("revenue_share", 0.0)), -float(r.get("momentum_score", 0.0)), str(r.get("brand", ""))),
+    )
+    for i, row in enumerate(momentum_ledger, start=1):
+        row["row_number"] = i
+
+    market_leaders = [r for r in momentum_ledger if r["classification"] == "Dominant Leader"]
+    emerging_brands = [r for r in momentum_ledger if r["classification"] == "Growth Challenger"]
+    premium_brands = [r for r in momentum_ledger if r["classification"] == "Revenue Heavyweight"]
+    niche_players = [r for r in momentum_ledger if r["classification"] == "Long Tail Player"]
+
+    quadrant_counts = {
+        "market_leaders": len(market_leaders),
+        "emerging_brands": len(emerging_brands),
+        "premium_brands": len(premium_brands),
+        "niche_players": len(niche_players),
+    }
+    quadrant_sum = sum(quadrant_counts.values())
+    total_brands = len(momentum_ledger)
+
+    classification_audit_all = [
+        {
+            "brand": r["brand"],
+            "revenue": r["parent_revenue"],
+            "sales": r["parent_sales"] if r["parent_sales"] is not None else r["product_count"],
+            "revenue_percentile": r["revenue_percentile"],
+            "sales_percentile": r["sales_percentile"],
+            "assigned_quadrant": r["classification"],
+        }
+        for r in momentum_ledger
+    ]
+    classification_audit_first_20 = classification_audit_all[:20]
+
+    revenue_pct_min = min((r["revenue_percentile"] for r in momentum_ledger), default=0.0)
+    revenue_pct_max = max((r["revenue_percentile"] for r in momentum_ledger), default=0.0)
+    sales_pct_min = min((r["sales_percentile"] for r in momentum_ledger), default=0.0)
+    sales_pct_max = max((r["sales_percentile"] for r in momentum_ledger), default=0.0)
+    low_revenue_tie_count = int((brand_agg["parent_revenue"] == brand_agg["parent_revenue"].min()).sum()) if not brand_agg.empty else 0
+    low_sales_tie_count = int((brand_agg["parent_sales"] == brand_agg["parent_sales"].min()).sum()) if ("parent_sales" in brand_agg.columns and not brand_agg.empty) else 0
+    classification_bug_analysis = {
+        "percentile_calc_method": "average",
+        "revenue_percentile_range": {"min": round(float(revenue_pct_min), 4), "max": round(float(revenue_pct_max), 4)},
+        "sales_percentile_range": {"min": round(float(sales_pct_min), 4), "max": round(float(sales_pct_max), 4)},
+        "revenue_percentile_always_100": bool(revenue_pct_min == 100.0 and revenue_pct_max == 100.0),
+        "sales_percentile_always_100": bool(sales_pct_min == 100.0 and sales_pct_max == 100.0),
+        "fallback_assigning_market_leader": False,
+        "brands_removed_before_classification": max(0, len(brand_agg) - len(momentum_ledger)),
+        "low_revenue_tie_count": low_revenue_tie_count,
+        "low_sales_tie_count": low_sales_tie_count,
+        "root_cause_if_all_leaders": (
+            "Large tie groups at low values with rank(method='max') can push minimum percentile above 50."
+            if len(market_leaders) == len(momentum_ledger)
+            else "Not all brands are Dominant Leader after percentile fix."
+        ),
+    }
 
     leader = market_leaders[0] if market_leaders else (momentum_ledger[0] if momentum_ledger else None)
     competitive_threats: List[Dict[str, Any]] = []
@@ -523,10 +606,10 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
     }
 
     metrics_block = {
-        "market_leaders": _segment_block("Market Leaders", market_leaders, [x["evidence"]["source_rows"][0] for x in market_leaders if x["evidence"]["source_rows"]], _CLASSIFICATION_RULE),
-        "emerging_brands": _segment_block("Emerging Brands", emerging_brands, [x["evidence"]["source_rows"][0] for x in emerging_brands if x["evidence"]["source_rows"]], _CLASSIFICATION_RULE),
-        "premium_brands": _segment_block("Premium Brands", premium_brands, [x["evidence"]["source_rows"][0] for x in premium_brands if x["evidence"]["source_rows"]], _CLASSIFICATION_RULE),
-        "niche_players": _segment_block("Niche Players", niche_players, [x["evidence"]["source_rows"][0] for x in niche_players if x["evidence"]["source_rows"]], _CLASSIFICATION_RULE),
+        "market_leaders": _segment_block("Dominant Leaders", market_leaders, [x["evidence"]["source_rows"][0] for x in market_leaders if x["evidence"]["source_rows"]], _CLASSIFICATION_RULE, total_market_revenue, top5_share),
+        "emerging_brands": _segment_block("Growth Challengers", emerging_brands, [x["evidence"]["source_rows"][0] for x in emerging_brands if x["evidence"]["source_rows"]], _CLASSIFICATION_RULE, total_market_revenue, top5_share),
+        "premium_brands": _segment_block("Revenue Heavyweights", premium_brands, [x["evidence"]["source_rows"][0] for x in premium_brands if x["evidence"]["source_rows"]], _CLASSIFICATION_RULE, total_market_revenue, top5_share),
+        "niche_players": _segment_block("Long Tail Players", niche_players, [x["evidence"]["source_rows"][0] for x in niche_players if x["evidence"]["source_rows"]], _CLASSIFICATION_RULE, total_market_revenue, top5_share),
     }
 
     trend_chart = {
@@ -552,16 +635,31 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
                 "opportunity_alerts": opportunity_alerts,
                 "executive_questions": executive_questions,
                 "momentum_ledger": momentum_ledger,
-                "classification_rules": {"rule_text": _CLASSIFICATION_RULE, "thresholds": {"revenue_strength_high": 70, "momentum_high": 70}},
+                "classification_rules": {"rule_text": _CLASSIFICATION_RULE, "thresholds": {"revenue_percentile_cutoff": 50, "sales_percentile_cutoff": 50}},
+                "quadrant_audit": {
+                    "counts": quadrant_counts,
+                    "counts_by_label": {
+                        "Dominant Leaders": len(market_leaders),
+                        "Growth Challengers": len(emerging_brands),
+                        "Revenue Heavyweights": len(premium_brands),
+                        "Long Tail Players": len(niche_players),
+                    },
+                    "quadrant_sum": quadrant_sum,
+                    "total_brands": total_brands,
+                    "sum_matches_total": quadrant_sum == total_brands,
+                    "classification_inputs_all_brands": classification_audit_all,
+                    "classification_inputs_first_20": classification_audit_first_20,
+                    "bug_analysis": classification_bug_analysis,
+                },
                 "classification_primary_engine": {
                     "kept": True,
-                    "description": "Primary classification engine uses Revenue Strength (from Parent Level Revenue) and Momentum Score thresholds.",
+                    "description": "Primary classification engine uses Revenue Percentile and Sales Percentile thresholds derived from Parent Level Revenue and Parent Level Sales.",
                     "evidence": _build_evidence(
                         metric_name="Classification Primary Engine",
                         formula=_CLASSIFICATION_RULE,
                         source_columns=[c for c in [rev_col, sales_trend_col, sales_col, bsr_col] if c],
                         source_rows=[r["evidence"]["source_rows"][0] for r in momentum_ledger if r["evidence"]["source_rows"]][:20],
-                        calculation_steps=["Compute revenue strength from Parent Level Revenue", "Compute momentum score from weighted components", "Apply rule thresholds"],
+                        calculation_steps=["Compute brand-level Parent Level Revenue and Parent Level Sales", "Compute revenue and sales percentiles", "Apply quadrant rule thresholds (50/50 cutoffs)"],
                         intermediate_values={"weights": _WEIGHTS},
                         final_value="Classification labels assigned",
                         classification_rule=_CLASSIFICATION_RULE,

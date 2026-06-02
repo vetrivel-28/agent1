@@ -1,37 +1,17 @@
-/**
- * EvidenceDrawer Component
- * 
- * Slide-out panel showing complete evidence for a metric.
- * Displays source rows, calculation formula, and aggregation details.
- */
-
 import React, { useState } from 'react';
-import { X, ChevronDown, ChevronUp, Copy, Check } from 'lucide-react';
+import { X, ChevronDown, ChevronUp } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
 export interface MetricEvidence {
   metric_name: string;
-  metric_value: any;
   source_dataset: string;
-  rows_matched: number;
   source_rows?: Array<{
     row_index: number;
     values: Record<string, any>;
   }>;
-  aggregation_formula?: {
-    method: string;
-    formula_text: string;
-    final_value: number;
-  };
-  source_columns?: Array<{
-    column_name: string;
-    dataset: string;
-    rows_used: number;
-    non_null_count: number;
-  }>;
-  filters_applied?: string[];
+  calculation_steps?: string[];
+  classification_rule?: string;
   time_computed?: string;
-  confidence_score?: number;
 }
 
 interface EvidenceDrawerProps {
@@ -39,45 +19,24 @@ interface EvidenceDrawerProps {
   onClose: () => void;
 }
 
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  
-  return (
-    <button
-      onClick={() => {
-        navigator.clipboard.writeText(text);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      }}
-      className="p-1 hover:bg-gray-200 rounded"
-      title="Copy to clipboard"
-    >
-      {copied ? (
-        <Check className="w-4 h-4 text-green-600" />
-      ) : (
-        <Copy className="w-4 h-4 text-gray-600" />
-      )}
-    </button>
-  );
-}
-
-function SourceRowsSection({ rows }: { rows?: Array<any> }) {
+function SourceRowsSection({ evidence }: { evidence: MetricEvidence }) {
   const [expanded, setExpanded] = useState(false);
+  const rows = evidence.source_rows;
   
   if (!rows || rows.length === 0) {
-    return null;
+    return <div className="text-sm text-gray-500">No source rows available.</div>;
   }
   
-  const displayRows = expanded ? rows : rows.slice(0, 5);
+  const displayRows = expanded ? rows : rows.slice(0, 10);
   
   return (
-    <div className="border-t pt-4">
+    <div className="pt-2">
       <button
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center justify-between p-2 hover:bg-gray-50 rounded"
       >
         <h3 className="font-semibold text-sm">
-          Source Rows ({rows.length} total)
+          Source Rows ({rows.length} Total)
         </h3>
         {expanded ? (
           <ChevronUp className="w-4 h-4" />
@@ -86,95 +45,44 @@ function SourceRowsSection({ rows }: { rows?: Array<any> }) {
         )}
       </button>
       
-      <div className="mt-2 space-y-2 max-h-96 overflow-y-auto">
-        {displayRows.map((row, idx) => (
-          <div key={idx} className="bg-gray-50 p-2 rounded text-xs border border-gray-200">
-            <div className="font-mono font-bold text-gray-700">
-              Row #{row.row_index}
-            </div>
-            <div className="mt-1 text-gray-600">
-              {Object.entries(row.values || {}).map(([key, value]) => (
-                <div key={key} className="truncate">
-                  <span className="font-medium">{key}:</span>{' '}
-                  <span className="text-gray-700">{String(value).slice(0, 50)}</span>
+      <div className="mt-2 space-y-3 max-h-[70vh] overflow-y-auto pb-6">
+        {displayRows.map((row, idx) => {
+          const v = row.values || {};
+          return (
+            <div key={idx} className="bg-gray-50 p-3 rounded text-xs border border-gray-200">
+              <div className="grid grid-cols-2 gap-2 text-gray-600">
+                <div><span className="font-medium text-gray-900">Dataset:</span> {evidence.source_dataset || 'blackbox'}</div>
+                <div><span className="font-medium text-gray-900">Row Number:</span> {row.row_index}</div>
+                <div><span className="font-medium text-gray-900">Brand:</span> {v.brand || v.Brand || 'N/A'}</div>
+                <div><span className="font-medium text-gray-900">ASIN:</span> {v.asin || v.ASIN || 'N/A'}</div>
+                <div><span className="font-medium text-gray-900">Revenue:</span> {v.parent_level_revenue || v.parent_revenue || v.revenue || v['Parent Level Revenue'] || 'N/A'}</div>
+                <div><span className="font-medium text-gray-900">Sales:</span> {v.parent_level_sales || v.parent_sales || v.sales || v['Parent Level Sales'] || 'N/A'}</div>
+                <div><span className="font-medium text-gray-900">BSR:</span> {v.bsr || v.BSR || 'N/A'}</div>
+                
+                <div className="col-span-2 mt-1 border-t pt-2">
+                  <span className="font-medium text-gray-900 block mb-1">Fields used in calculation:</span>
+                  <div className="flex flex-wrap gap-1">
+                    {Object.entries(v).map(([key, val]) => (
+                       <span key={key} className="bg-white border px-1.5 py-0.5 rounded text-[10px] text-gray-500 truncate max-w-[150px]">
+                         {key}: {String(val).slice(0, 30)}
+                       </span>
+                    ))}
+                  </div>
                 </div>
-              ))}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
       
-      {rows.length > 5 && !expanded && (
+      {rows.length > 10 && !expanded && (
         <button
           onClick={() => setExpanded(true)}
-          className="mt-2 text-xs text-blue-600 hover:underline"
+          className="mt-2 text-xs text-blue-600 hover:underline px-2"
         >
           Show all {rows.length} rows
         </button>
       )}
-    </div>
-  );
-}
-
-function CalculationSection({ formula }: { formula?: any }) {
-  if (!formula) {
-    return null;
-  }
-  
-  return (
-    <div className="border-t pt-4">
-      <h3 className="font-semibold text-sm mb-3">Calculation Formula</h3>
-      
-      <div className="bg-blue-50 border border-blue-200 rounded p-3 space-y-2">
-        <div>
-          <label className="text-xs font-medium text-gray-600">Method:</label>
-          <div className="text-sm font-mono text-gray-900">
-            {formula.method || 'unknown'}
-          </div>
-        </div>
-        
-        <div>
-          <label className="text-xs font-medium text-gray-600">Formula:</label>
-          <div className="text-sm font-mono text-gray-900 break-words bg-white p-2 rounded border border-blue-100">
-            {formula.formula_text}
-          </div>
-          <CopyButton text={formula.formula_text} />
-        </div>
-        
-        <div>
-          <label className="text-xs font-medium text-gray-600">Result:</label>
-          <div className="text-lg font-bold text-blue-900">
-            {formula.final_value}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ColumnsSection({ columns }: { columns?: Array<any> }) {
-  if (!columns || columns.length === 0) {
-    return null;
-  }
-  
-  return (
-    <div className="border-t pt-4">
-      <h3 className="font-semibold text-sm mb-3">Source Columns</h3>
-      
-      <div className="space-y-2">
-        {columns.map((col, idx) => (
-          <div key={idx} className="bg-gray-50 p-2 rounded text-xs border border-gray-200">
-            <div className="font-medium text-gray-900">{col.column_name}</div>
-            <div className="text-gray-600 text-xs mt-1">
-              <div>Dataset: {col.dataset}</div>
-              <div>Rows used: {col.rows_used}</div>
-              {col.non_null_count !== undefined && (
-                <div>Non-null: {col.non_null_count}</div>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
     </div>
   );
 }
@@ -186,7 +94,6 @@ export function EvidenceDrawer({ evidence, onClose }: EvidenceDrawerProps) {
   
   return (
     <AnimatePresence>
-      {/* Backdrop */}
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
@@ -195,21 +102,19 @@ export function EvidenceDrawer({ evidence, onClose }: EvidenceDrawerProps) {
         className="fixed inset-0 bg-black/30 z-40"
       />
       
-      {/* Drawer */}
       <motion.div
         initial={{ x: '100%' }}
         animate={{ x: 0 }}
         exit={{ x: '100%' }}
         transition={{ type: 'spring', damping: 30, stiffness: 300 }}
-        className="fixed right-0 top-0 bottom-0 w-96 bg-white shadow-2xl z-50 overflow-y-auto"
+        className="fixed right-0 top-0 bottom-0 w-[450px] bg-white shadow-2xl z-50 overflow-y-auto"
       >
-        {/* Header */}
-        <div className="sticky top-0 bg-white border-b p-4 flex items-center justify-between">
+        <div className="sticky top-0 bg-white border-b p-4 flex items-center justify-between z-10">
           <div>
             <h2 className="font-bold text-lg text-gray-900">
-              {evidence.metric_name}
+              {evidence.metric_name || 'Calculation Audit'}
             </h2>
-            <p className="text-xs text-gray-500">Evidence & Audit Trail</p>
+            <p className="text-xs text-gray-500">Evidence Audit Trail</p>
           </div>
           <button
             onClick={onClose}
@@ -220,88 +125,8 @@ export function EvidenceDrawer({ evidence, onClose }: EvidenceDrawerProps) {
           </button>
         </div>
         
-        {/* Content */}
-        <div className="p-4 space-y-4">
-          
-          {/* Metric Value */}
-          <div className="bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded p-4">
-            <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">
-              Metric Value
-            </label>
-            <div className="text-2xl font-bold text-gray-900 mt-2 break-words">
-              {typeof evidence.metric_value === 'number'
-                ? evidence.metric_value.toLocaleString()
-                : evidence.metric_value}
-            </div>
-          </div>
-          
-          {/* Summary Stats */}
-          <div className="grid grid-cols-2 gap-3">
-            <div className="bg-gray-50 p-3 rounded border border-gray-200">
-              <label className="text-xs font-medium text-gray-600">Dataset</label>
-              <div className="font-mono text-sm text-gray-900">
-                {evidence.source_dataset}
-              </div>
-            </div>
-            
-            <div className="bg-gray-50 p-3 rounded border border-gray-200">
-              <label className="text-xs font-medium text-gray-600">Rows Matched</label>
-              <div className="font-bold text-sm text-gray-900">
-                {evidence.rows_matched}
-              </div>
-            </div>
-          </div>
-          
-          {/* Confidence */}
-          {evidence.confidence_score !== undefined && (
-            <div className="bg-gray-50 p-3 rounded border border-gray-200">
-              <label className="text-xs font-medium text-gray-600">Confidence</label>
-              <div className="mt-1 flex items-center gap-2">
-                <div className="flex-1 bg-gray-200 rounded-full h-2">
-                  <div
-                    className="bg-green-500 h-2 rounded-full"
-                    style={{ width: `${evidence.confidence_score * 100}%` }}
-                  />
-                </div>
-                <span className="text-sm font-bold text-gray-900">
-                  {Math.round(evidence.confidence_score * 100)}%
-                </span>
-              </div>
-            </div>
-          )}
-          
-          {/* Filters */}
-          {evidence.filters_applied && evidence.filters_applied.length > 0 && (
-            <div className="bg-amber-50 border border-amber-200 p-3 rounded">
-              <label className="text-xs font-medium text-amber-900 uppercase">
-                Filters Applied
-              </label>
-              <ul className="mt-2 space-y-1">
-                {evidence.filters_applied.map((filter, idx) => (
-                  <li key={idx} className="text-sm text-amber-800 flex items-center">
-                    <span className="mr-2">•</span>
-                    {filter}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          
-          {/* Calculation Formula */}
-          <CalculationSection formula={evidence.aggregation_formula} />
-          
-          {/* Source Columns */}
-          <ColumnsSection columns={evidence.source_columns} />
-          
-          {/* Source Rows */}
-          <SourceRowsSection rows={evidence.source_rows} />
-          
-          {/* Timestamp */}
-          {evidence.time_computed && (
-            <div className="text-xs text-gray-500 border-t pt-3">
-              Computed: {new Date(evidence.time_computed).toLocaleString()}
-            </div>
-          )}
+        <div className="p-4">
+          <SourceRowsSection evidence={evidence} />
         </div>
       </motion.div>
     </AnimatePresence>
