@@ -79,6 +79,11 @@ export const api = {
     return response.data;
   },
 
+  getRevenueOpportunitySegmentKeywords: async (segment: string) => {
+    const response = await apiClient.get(`/revenue-opportunity/segments/${encodeURIComponent(segment)}/keywords`);
+    return response.data;
+  },
+
   getDirectCompetitors: async (topN = 15, priceTolerancePct = 17.5) => {
     const response = await apiClient.post(`/direct-competitors?top_n=${topN}&price_tolerance_pct=${priceTolerancePct}`);
     return response.data;
@@ -114,8 +119,8 @@ export const api = {
     return response.data;
   },
 
-  downloadMarketReportPdf: async (topN = 10) => {
-    const response = await apiClient.get(`/market-report/pdf?top_n=${topN}`, {
+  downloadMarketReportPdf: async (topN = 10, reportMode = 'executive', includeCharts = true) => {
+    const response = await apiClient.get(`/market-report/pdf?top_n=${topN}&report_mode=${reportMode}&include_charts=${includeCharts}`, {
       responseType: 'blob',
     });
     return response.data;

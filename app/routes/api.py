@@ -498,6 +498,30 @@ def whitespace_opportunities(top_n: int = 15):
     return format_response(result)
 
 
+@router.get(
+    "/revenue-opportunity/segments/{segment_name}/keywords",
+    summary="Revenue Opportunity Segment Keywords",
+    description=(
+        "Returns unique normalized keywords assigned to a revenue opportunity segment. "
+        "Duplicates are removed and the same segment classification logic as the chart is used."
+    ),
+)
+def revenue_opportunity_segment_keywords(segment_name: str):
+    logger.info(f"Revenue Opportunity keywords requested for segment={segment_name}")
+    magnet_df = registry.get_magnet()
+    if is_empty_dataframe(magnet_df):
+        return {
+            "success": False,
+            "segment": segment_name,
+            "raw_row_count": 0,
+            "duplicate_removed_count": 0,
+            "keyword_count": 0,
+            "keywords": [],
+            "message": "Magnet keyword dataset not uploaded or is empty.",
+        }
+    return whitespace_engine.get_revenue_segment_keywords(magnet_df, segment_name)
+
+
 @router.post(
     "/direct-competitors",
     response_model=StandardResponse,
@@ -886,14 +910,14 @@ def market_report(top_n: int = 10):
     summary="Download Market Report PDF",
     description="Generates a deterministic PDF report from current engine outputs.",
 )
-def market_report_pdf(top_n: int = 10):
-    logger.info(f"Market Report PDF requested (top_n={top_n})")
+def market_report_pdf(top_n: int = 10, report_mode: str = "executive", include_charts: bool = True):
+    logger.info(f"Market Report PDF requested (top_n={top_n}, report_mode={report_mode}, include_charts={include_charts})")
     report = _build_report_from_snapshot(top_n=top_n)
     if not report.get("success"):
         return report
     if not report.get("data") or not report["data"].get("results"):
         return report
-    pdf_path = export_market_report_pdf(report["data"])
+    pdf_path = export_market_report_pdf(report["data"], report_mode=report_mode, include_charts=include_charts)
     return FileResponse(
         path=pdf_path,
         media_type="application/pdf",

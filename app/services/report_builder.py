@@ -17,6 +17,8 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, List, Optional
 
+import pandas as pd
+
 from app.utils.logger import get_logger
 
 logger = get_logger("report_builder")
@@ -65,6 +67,45 @@ def _launch_recommendation_from_score(score: float, quadrant: str = "") -> str:
     if score >= 45:
         return "Pilot launch with tight capital controls."
     return "Hold entry — strengthen fundamentals first."
+
+
+def _match_expected_columns(columns: List[str], expected_columns: List[str]) -> List[str]:
+    normalized = [str(c).lower() for c in columns]
+    return [expected for expected in expected_columns if any(expected.lower() in col for col in normalized)]
+
+
+def _dataset_diagnostics(df: Any, expected_columns: List[str], dataset_label: str) -> Dict[str, Any]:
+    if df is None:
+        return {
+            "dataset_name": dataset_label,
+            "available": False,
+            "row_count": 0,
+            "column_count": 0,
+            "detected_type": dataset_label,
+            "key_columns_found": [],
+            "missing_expected_columns": expected_columns,
+            "duplicate_rows_removed": 0,
+            "blank_rows_removed": 0,
+        }
+
+    columns = list(df.columns) if hasattr(df, "columns") else []
+    row_count = len(df)
+    duplicate_rows_removed = max(0, row_count - len(df.drop_duplicates())) if hasattr(df, "drop_duplicates") else 0
+    blank_rows_removed = int(df.isna().all(axis=1).sum()) if hasattr(df, "isna") else 0
+    key_columns_found = _match_expected_columns(columns, expected_columns)
+    missing_expected_columns = [c for c in expected_columns if c not in key_columns_found]
+
+    return {
+        "dataset_name": dataset_label,
+        "available": True,
+        "row_count": row_count,
+        "column_count": len(columns),
+        "detected_type": dataset_label,
+        "key_columns_found": key_columns_found,
+        "missing_expected_columns": missing_expected_columns,
+        "duplicate_rows_removed": duplicate_rows_removed,
+        "blank_rows_removed": blank_rows_removed,
+    }
 
 
 def build_report(
@@ -337,6 +378,27 @@ def build_report(
         attractiveness_matrix.get("quadrant", ""),
     )
 
+    expected_blackbox_columns = [
+        "Title", "Brand", "Category", "Price", "Sales", "Revenue", "BSR",
+        "Review Count", "Rating", "Sales Trend", "Price Trend",
+    ]
+    expected_magnet_columns = [
+        "Keyword", "Search Volume", "Search Volume Trend", "Keyword Sales",
+        "Title Density", "Conversion Rate", "Click Share", "Competition", "Revenue",
+    ]
+    blackbox_diagnostics = _dataset_diagnostics(blackbox_df, expected_blackbox_columns, "Blackbox")
+    magnet_diagnostics = _dataset_diagnostics(magnet_df, expected_magnet_columns, "Magnet")
+    datasets_loaded = []
+    if blackbox_df is not None and not getattr(blackbox_df, 'empty', True):
+        datasets_loaded.append('blackbox')
+    if magnet_df is not None and not getattr(magnet_df, 'empty', True):
+        datasets_loaded.append('magnet')
+    dataset_row_counts = {
+        "keyword_rows": len(magnet_df) if magnet_df is not None else 0,
+        "product_rows": len(blackbox_df) if blackbox_df is not None else 0,
+        "brand_count": total_brands,
+    }
+
     # -----------------------------------------------------------------------
     # Rule-based verdict
     # -----------------------------------------------------------------------
@@ -389,6 +451,35 @@ def build_report(
                 "high" if composite_score >= 70 else "medium" if composite_score >= 45 else "low"
             ),
         },
+        "dataset_diagnostics": {
+            "datasets_loaded": datasets_loaded,
+            "blackbox": blackbox_diagnostics,
+            "magnet": magnet_diagnostics,
+            "keyword_rows": dataset_row_counts["keyword_rows"],
+            "product_rows": dataset_row_counts["product_rows"],
+        },
+        "report_metadata": {
+            "final_market_score": composite_score,
+            "market_direction": market_direction,
+            "launch_recommendation": launch_recommendation,
+            "datasets_loaded": datasets_loaded,
+            "brand_count": total_brands,
+            "keyword_rows": dataset_row_counts["keyword_rows"],
+            "product_rows": dataset_row_counts["product_rows"],
+        },
+        "keyword_conversion_intelligence": siei_result.get("results", {}) if siei_result else {},
+        "revenue_opportunity_by_segment": whitespace_result.get("results", {}) if whitespace_result else {},
+        "sales_momentum_intelligence": sales_result.get("results", {}) if sales_result else {},
+        "revenue_momentum_intelligence": revenue_result.get("results", {}) if revenue_result else {},
+        "market_structure": hhi_result.get("results", {}) if hhi_result else {},
+        "product_intelligence": {
+            "direct_competitors": direct_comp_result.get("results", {}) if direct_comp_result else {},
+            "substitute_intelligence": substitute_result.get("results", {}) if substitute_result else {},
+            "complement_intelligence": complement_result.get("results", {}) if complement_result else {},
+            "bundle_opportunities": bundle_result.get("results", {}) if bundle_result else {},
+        },
+        "price_elasticity": price_elasticity_result.get("results", {}) if price_elasticity_result else {},
+        "demand_velocity": demand_vel_result.get("results", {}) if demand_vel_result else {},
         "demand_analysis": {
             "demand_score": round(demand_score, 2),
             "top_demand_keywords": top_demand_keywords[:top_n],
@@ -704,6 +795,11 @@ def _build_markdown(
     ]
 
     return "\n".join(lines)
+
+
+def build_full_market_report_data(*args: Any, **kwargs: Any) -> Dict[str, Any]:
+    """Alias for build_report to support unified report data builder usage."""
+    return build_report(*args, **kwargs)
 
 
 # ---------------------------------------------------------------------------

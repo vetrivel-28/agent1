@@ -47,14 +47,21 @@ def _finance_health_classification(score: float) -> str:
     return "Unattractive"
 
 
-def _metric_health_value(metric: Dict[str, Any], invert: bool = False) -> Optional[float]:
-    if metric.get("status") != "success":
-        return None
-    raw = metric.get("score")
-    if raw is None:
-        return None
-    value = float(raw)
-    return clamp_score(100.0 - value) if invert else clamp_score(value)
+def _extract_entry_metrics(entry_result: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Extract entry difficulty and cost index from the new entry_metrics structure.
+    Returns a normalized dict for use in health calculations.
+    """
+    if entry_result.get("status") != "success":
+        return {"entry_difficulty": None, "entry_cost_index": None}
+    
+    entry_difficulty = entry_result.get("entry_difficulty", {})
+    entry_cost_index = entry_result.get("entry_cost_index", {})
+    
+    return {
+        "entry_difficulty": entry_difficulty.get("score") if entry_difficulty else None,
+        "entry_cost_index": entry_cost_index.get("score") if entry_cost_index else None,
+    }
 
 
 def _narrative_health_phrase(health_class: str) -> str:
@@ -76,7 +83,7 @@ def _build_market_economics_narrative(
     pvs: Dict[str, Any],
     mcr: Dict[str, Any],
     ces: Dict[str, Any],
-    eci: Dict[str, Any],
+    entry_metrics: Dict[str, Any],
 ) -> str:
     parts: List[str] = []
     parts.append(
@@ -94,11 +101,19 @@ def _build_market_economics_narrative(
             f"Price positioning potential appears {str(pvs.get('classification', '')).lower()} "
             f"({float(pvs.get('score', 0)):.0f}/100; strongest band: {pvs.get('best_price_band', 'N/A')})."
         )
-    if eci.get("status") == "success":
-        parts.append(
-            f"Entry difficulty is {str(eci.get('classification', '')).lower()} "
-            f"({float(eci.get('score', 0)):.0f}/100)."
-        )
+    if entry_metrics.get("status") == "success":
+        ed = entry_metrics.get("entry_difficulty", {})
+        eci = entry_metrics.get("entry_cost_index", {})
+        if ed:
+            parts.append(
+                f"Entry difficulty is {str(ed.get('classification', '')).lower()} "
+                f"({float(ed.get('score', 0)):.0f}/100)."
+            )
+        if eci:
+            parts.append(
+                f"Entry cost index is {str(eci.get('classification', '')).lower()} "
+                f"({float(eci.get('score', 0)):.0f}/100)."
+            )
     return " ".join(parts)
 
 
@@ -125,23 +140,34 @@ def run(
     pvs = safe_compute(compute_premium_viability, blackbox_df)
     mcr = safe_compute(compute_margin_compression, blackbox_df)
     ces = safe_compute(compute_capital_efficiency, blackbox_df)
-    eci = safe_compute(compute_entry_cost, magnet_df)
+    entry_metrics = safe_compute(compute_entry_cost, magnet_df, blackbox_df)
+    
+    # Extract entry difficulty and cost index from new structure
+    entry_values = _extract_entry_metrics(entry_metrics)
+    entry_difficulty = entry_values["entry_difficulty"]
+    entry_cost_index = entry_values["entry_cost_index"]
 
-    health_components = {
-        "api_health": _metric_health_value(api, invert=True),
-        "pvs": _metric_health_value(pvs),
-        "mcr_health": _metric_health_value(mcr, invert=True),
-        "ces": _metric_health_value(ces),
-        "eci_health": _metric_health_value(eci, invert=True),
-    }
+    # Calculate health components (note: entry_difficulty and entry_cost_index are not inverted,
+    # they represent difficulty/cost directly)
+    health_components = {}
+    if api.get("status") == "success":
+        health_components["api_health"] = clamp_score(100.0 - float(api.get("score", 0)))
+    if pvs.get("status") == "success":
+        health_components["pvs"] = clamp_score(float(pvs.get("score", 0)))
+    if mcr.get("status") == "success":
+        health_components["mcr_health"] = clamp_score(100.0 - float(mcr.get("score", 0)))
+    if ces.get("status") == "success":
+        health_components["ces"] = clamp_score(float(ces.get("score", 0)))
+    if entry_difficulty is not None:
+        # Entry difficulty: higher = harder = lower health
+        health_components["eci_health"] = clamp_score(100.0 - entry_difficulty)
 
     weighted_sum = 0.0
     weight_total = 0.0
-    for key, base_weight in _FINANCE_HEALTH_WEIGHTS.items():
-        value = health_components.get(key)
-        if value is not None:
-            weighted_sum += base_weight * value
-            weight_total += base_weight
+    for key in ["api_health", "pvs", "mcr_health", "ces", "eci_health"]:
+        if key in health_components:
+            weighted_sum += _FINANCE_HEALTH_WEIGHTS.get(key, 0) * health_components[key]
+            weight_total += _FINANCE_HEALTH_WEIGHTS.get(key, 0)
 
     if weight_total > 0:
         finance_health = clamp_score(weighted_sum / weight_total)
@@ -164,7 +190,8 @@ def run(
         "finance_health_score": finance_health,
         "economic_attractiveness": health_class,
         "capital_requirement": api.get("capital_requirement", "Not Available"),
-        "entry_difficulty": eci.get("classification", "Not Available"),
+        "entry_difficulty": entry_metrics.get("entry_difficulty", {}).get("classification", "Not Available") if entry_metrics.get("status") == "success" else "Not Available",
+        "entry_cost_index": entry_metrics.get("entry_cost_index", {}).get("classification", "Not Available") if entry_metrics.get("status") == "success" else "Not Available",
         "pricing_power": pvs.get("classification", "Not Available"),
         "price_war_risk": mcr.get("risk", mcr.get("classification", "Not Available")),
     }
@@ -174,11 +201,12 @@ def run(
         {"dimension": "Premium Viability", "score": pvs.get("score") or 0.0},
         {"dimension": "Margin Compression", "score": mcr.get("score") or 0.0},
         {"dimension": "Capital Efficiency", "score": ces.get("score") or 0.0},
-        {"dimension": "Entry Cost", "score": eci.get("score") or 0.0},
+        {"dimension": "Entry Difficulty", "score": entry_difficulty or 0.0},
+        {"dimension": "Entry Cost Index", "score": entry_cost_index or 0.0},
     ]
 
     narrative = _build_market_economics_narrative(
-        finance_health, health_class, api, pvs, mcr, ces, eci
+        finance_health, health_class, api, pvs, mcr, ces, entry_metrics
     )
 
     attractiveness_matrix: Dict[str, Any] = {}
@@ -201,7 +229,7 @@ def run(
         economic_verdict = "Entry assessment unavailable — upload required datasets."
 
     columns_used: List[str] = []
-    for block in (api, pvs, mcr, ces, eci):
+    for block in (api, pvs, mcr, ces, entry_metrics):
         columns_used.extend(block.get("columns_used", []))
     columns_used = list(dict.fromkeys(columns_used))
 
@@ -212,7 +240,7 @@ def run(
         datasets_used.append("blackbox")
 
     metrics_ok = sum(
-        1 for m in (api, pvs, mcr, ces, eci) if m.get("status") == "success"
+        1 for m in (api, pvs, mcr, ces, entry_metrics) if m.get("status") == "success"
     )
 
     elapsed = round(time.time() - t0, 3)
@@ -229,8 +257,10 @@ def run(
         "columns_used": columns_used,
         "formula_used": (
             "FinanceHealth = 0.25*API_Health + 0.20*PVS + 0.25*MCR_Health + "
-            "0.15*CES + 0.15*ECI_Health; API/MCR/ECI inverted (100-score); "
-            "unavailable metrics excluded with weight re-normalization"
+            "0.15*CES + 0.15*EntryDifficulty_Health; "
+            "API/MCR/EntryDifficulty inverted (100-score); "
+            "unavailable metrics excluded with weight re-normalization; "
+            "Entry metrics use percentile-based normalization (5th–95th clip)"
         ),
         "results": {
             "finance_health": {
@@ -243,7 +273,7 @@ def run(
             "premium_viability": pvs,
             "margin_compression": mcr,
             "capital_efficiency": ces,
-            "entry_cost": eci,
+            "entry_metrics": entry_metrics,
             "radar_chart": radar,
             "economic_risk_gauge": economic_risk,
             "economic_verdict": economic_verdict,
@@ -256,6 +286,7 @@ def run(
         },
         "processing_time_seconds": elapsed,
     }
+
     logger.info(
         "Finance Intelligence complete: health=%s, metrics_ok=%s, elapsed=%ss",
         finance_health,

@@ -11,6 +11,44 @@ from app.utils.normalization import min_max_normalize
 from app.utils.numeric_cleaner import clean_numeric_series
 
 
+def percentile_clip_and_scale(
+    series: pd.Series,
+    lower_pct: float = 5.0,
+    upper_pct: float = 95.0,
+    invert: bool = False,
+) -> pd.Series:
+    """
+    Percentile-based normalization with winsorization:
+    1. Extract valid numeric values
+    2. Clip to 5th–95th percentile bounds
+    3. Min-max scale to 0–100
+    4. Optionally invert (100 - value)
+    """
+    numeric = pd.to_numeric(series, errors="coerce").dropna()
+    if numeric.empty:
+        return pd.Series([np.nan] * len(series), index=series.index)
+    
+    lower_bound = numeric.quantile(lower_pct / 100.0)
+    upper_bound = numeric.quantile(upper_pct / 100.0)
+    
+    # Clip values to bounds
+    clipped = numeric.clip(lower=lower_bound, upper=upper_bound)
+    
+    # Min-max scale
+    if clipped.min() == clipped.max():
+        scaled = pd.Series(50.0, index=clipped.index)
+    else:
+        scaled = (clipped - clipped.min()) / (clipped.max() - clipped.min()) * 100.0
+    
+    if invert:
+        scaled = 100.0 - scaled
+    
+    # Expand back to original index with NaN for missing values
+    result = pd.Series(np.nan, index=series.index, dtype=float)
+    result.loc[numeric.index] = scaled.values
+    return result
+
+
 def safe_divide(
     numerator: pd.Series | float,
     denominator: pd.Series | float,
@@ -47,6 +85,23 @@ def clamp_score(value: float) -> float:
     return round(float(np.clip(value, 0.0, 100.0)), 2)
 
 
+def classify_pressure_level(score: float) -> str:
+    """
+    Classify pressure/difficulty based on percentile thresholds:
+    - 0–25: Low observed pressure
+    - 26–50: Moderate pressure
+    - 51–75: High pressure
+    - 76–100: Severe pressure
+    """
+    if score <= 25:
+        return "Low observed pressure"
+    if score <= 50:
+        return "Moderate pressure"
+    if score <= 75:
+        return "High pressure"
+    return "Severe pressure"
+
+
 def classify_low_medium_high(score: float) -> str:
     if score <= 33:
         return "Low"
@@ -56,7 +111,7 @@ def classify_low_medium_high(score: float) -> str:
 
 
 def capital_requirement_from_pressure(classification: str) -> str:
-    mapping = {"Low": "Light", "Medium": "Moderate", "Heavy": "Heavy"}
+    mapping = {"Low": "Light", "Medium": "Moderate", "High": "Heavy"}
     return mapping.get(classification, "Moderate")
 
 

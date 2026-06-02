@@ -14,6 +14,8 @@ const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
 export default function MarketReport() {
   const [pdfLoading, setPdfLoading] = useState(false);
   const [pdfError, setPdfError] = useState('');
+  const [exportMode, setExportMode] = useState<'executive' | 'detailed'>('executive');
+  const [includeCharts, setIncludeCharts] = useState(true);
 
   const { data, isLoading } = useQuery({
     queryKey: ['market-report'],
@@ -52,7 +54,7 @@ export default function MarketReport() {
     setPdfLoading(true);
     setPdfError('');
     try {
-      const blob = await api.downloadMarketReportPdf(50);
+      const blob = await api.downloadMarketReportPdf(50, exportMode, includeCharts);
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -86,6 +88,34 @@ export default function MarketReport() {
           <span>GENERATED: {new Date().toLocaleDateString()}</span>
           <span>•</span>
           <span>STATUS: FINAL</span>
+        </div>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2 items-end">
+        <div className="rounded-3xl border border-border/60 bg-background p-5 shadow-sm">
+          <label className="block text-sm font-medium text-foreground mb-2">PDF Export Mode</label>
+          <select
+            className="w-full rounded-xl border border-border bg-card px-4 py-3 text-sm"
+            value={exportMode}
+            onChange={(event) => setExportMode(event.target.value as 'executive' | 'detailed')}
+          >
+            <option value="executive">Executive (top 5 rows, concise)</option>
+            <option value="detailed">Detailed (expanded tables)</option>
+          </select>
+        </div>
+
+        <div className="rounded-3xl border border-border/60 bg-background p-5 shadow-sm flex items-center justify-between gap-4">
+          <div>
+            <p className="text-sm font-medium text-foreground">Include charts</p>
+            <p className="text-xs text-muted-foreground">Toggle chart visuals in the exported PDF.</p>
+          </div>
+          <button
+            className={`rounded-full px-4 py-2 text-sm font-semibold ${includeCharts ? 'bg-primary text-white' : 'border border-border text-foreground bg-card'}`}
+            type="button"
+            onClick={() => setIncludeCharts((current) => !current)}
+          >
+            {includeCharts ? 'On' : 'Off'}
+          </button>
         </div>
       </div>
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 import tempfile
 import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, letter
@@ -21,68 +21,203 @@ def _header_footer(canvas, doc):
     canvas.drawRightString(doc.width + doc.leftMargin, doc.bottomMargin - 30, f"Page {doc.page}")
     canvas.restoreState()
 
-def _table_from_records(records: List[Dict[str, Any]], title: str, max_rows: int = 15) -> List[Any]:
+def _format_value(value: Any) -> str:
+    if value is None:
+        return "N/A"
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, int):
+        return f"{value:,}"
+    if isinstance(value, float):
+        return f"{value:,.2f}"
+    return str(value)
+
+
+def _build_bar_string(value: float, max_value: float, width: int = 18) -> str:
+    if not isinstance(value, (int, float)) or max_value <= 0:
+        return ""
+    fill = int(round(min(1.0, max(0.0, float(value) / float(max_value))) * width))
+    return "█" * fill + "░" * (width - fill)
+
+REPORT_MODE_EXECUTIVE = "executive"
+REPORT_MODE_DETAILED = "detailed"
+MAX_TABLE_ROWS_EXECUTIVE = 5
+MAX_TABLE_ROWS_DETAILED = 25
+
+
+def _safe_cell_value(value: Any, max_length: int = 55) -> str:
+    if value is None:
+        return "N/A"
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, (int, float)):
+        return _format_value(value)
+    if isinstance(value, str):
+        text = value.replace("\n", " ").strip()
+        return text if len(text) <= max_length else text[: max_length - 3] + "..."
+    if isinstance(value, dict):
+        keys = list(value.keys())[:3]
+        items = [f"{k}:{_safe_cell_value(value[k], max_length=15)}" for k in keys]
+        return ", ".join(items) if items else "Object"
+    if isinstance(value, list):
+        if not value:
+            return "None"
+        if all(isinstance(item, dict) for item in value):
+            return f"{len(value)} items"
+        return ", ".join(_safe_cell_value(item, max_length=15) for item in value[:3])
+    return str(value)[:max_length]
+
+
+def _limit_table_rows(records: List[Dict[str, Any]], max_rows: int = MAX_TABLE_ROWS_EXECUTIVE) -> tuple[List[Dict[str, Any]], int]:
+    return records[:max_rows], len(records)
+
+
+def _section_unavailable(title: str, reason: str, styles: Any) -> List[Any]:
+    elems: List[Any] = []
+    elems.append(Paragraph(f"<b>{title}</b>", styles["Heading4"]))
+    unavailable_style = ParagraphStyle(
+        'MissingData',
+        parent=styles['BodyText'],
+        backColor=colors.HexColor("#fee2e2"),
+        textColor=colors.HexColor("#b91c1c"),
+        borderColor=colors.HexColor("#fecaca"),
+        borderWidth=1,
+        borderPadding=8,
+        leading=14,
+        spaceAfter=12,
+    )
+    elems.append(Paragraph(reason, unavailable_style))
+    elems.append(Spacer(1, 12))
+    return elems
+
+
+def _table_from_records(
+    records: List[Dict[str, Any]],
+    title: str,
+    max_rows: int = MAX_TABLE_ROWS_EXECUTIVE,
+    max_columns: int = 6,
+    total_rows: Optional[int] = None,
+) -> List[Any]:
     elems: List[Any] = []
     styles = getSampleStyleSheet()
-    
-    # Title styling
     title_style = ParagraphStyle(
         'TableTitle',
         parent=styles['Heading3'],
         fontSize=12,
         textColor=colors.HexColor("#1e293b"),
-        spaceAfter=8
+        spaceAfter=6,
     )
     elems.append(Paragraph(f"<b>{title}</b>", title_style))
-    
+
     if not records:
-        elems.append(Paragraph("No data available for this section.", styles["BodyText"]))
-        elems.append(Spacer(1, 15))
+        elems.append(Paragraph("No rows were returned for this section.", styles["BodyText"]))
+        elems.append(Spacer(1, 12))
         return elems
-        
-    cols = list(records[0].keys())[:6]
+
+    total = total_rows if total_rows is not None else len(records)
+    display_rows = min(max_rows, len(records))
+    if total > display_rows:
+        elems.append(Paragraph(
+            f"Top {display_rows} of {total} shown.",
+            ParagraphStyle('TableFootnote', parent=styles['BodyText'], fontSize=9, textColor=colors.HexColor("#475569")),
+        ))
+        elems.append(Spacer(1, 4))
+
+    cols = list(records[0].keys())[:max_columns]
     data = [cols]
-    
-    for row in records[:max_rows]:
-        row_data = []
-        for c in cols:
-            val = row.get(c, "")
-            if isinstance(val, float):
-                val = f"{val:.2f}"
-            row_data.append(str(val)[:40])
+
+    for row in records[:display_rows]:
+        row_data = [_safe_cell_value(row.get(c, "")) for c in cols]
         data.append(row_data)
-        
-    table = Table(data, repeatRows=1)
-    table.setStyle(
-        TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#3b82f6")),
-            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-            ("ALIGN", (0, 0), (-1, 0), "CENTER"),
-            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-            ("FONTSIZE", (0, 0), (-1, 0), 10),
-            ("BOTTOMPADDING", (0, 0), (-1, 0), 8),
-            ("TOPPADDING", (0, 0), (-1, 0), 8),
-            
-            # Row styling
-            ("BACKGROUND", (0, 1), (-1, -1), colors.white),
-            ("TEXTCOLOR", (0, 1), (-1, -1), colors.HexColor("#334155")),
-            ("ALIGN", (0, 1), (-1, -1), "LEFT"),
-            ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
-            ("FONTSIZE", (0, 1), (-1, -1), 9),
-            ("BOTTOMPADDING", (0, 1), (-1, -1), 6),
-            ("TOPPADDING", (0, 1), (-1, -1), 6),
-            
-            # Alternating row colors
-            *([("BACKGROUND", (0, i), (-1, i), colors.HexColor("#f8fafc")) for i in range(2, len(data), 2)]),
-            
-            # Grid
-            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ])
-    )
+
+    table = Table(data, repeatRows=1, hAlign='LEFT')
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#4338ca")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("ALIGN", (0, 0), (-1, 0), "CENTER"),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, 0), 9),
+        ("BOTTOMPADDING", (0, 0), (-1, 0), 8),
+        ("TOPPADDING", (0, 0), (-1, 0), 8),
+        ("BACKGROUND", (0, 1), (-1, -1), colors.white),
+        ("TEXTCOLOR", (0, 1), (-1, -1), colors.HexColor("#334155")),
+        ("ALIGN", (0, 1), (-1, -1), "LEFT"),
+        ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
+        ("FONTSIZE", (0, 1), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 1), (-1, -1), 6),
+        ("TOPPADDING", (0, 1), (-1, -1), 6),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ]))
     elems.append(table)
-    elems.append(Spacer(1, 20))
+    elems.append(Spacer(1, 16))
     return elems
+
+
+def _table_from_kpi_pairs(pairs: List[tuple[str, Any, str]], title: str) -> List[Any]:
+    records = [{"KPI": name, "Value": _safe_cell_value(value), "Notes": note} for name, value, note in pairs]
+    return _table_from_records(records, title, max_rows=len(records), max_columns=3)
+
+
+def _bar_chart_table(records: List[Dict[str, Any]], label_key: str, value_key: str, title: str, max_rows: int = MAX_TABLE_ROWS_EXECUTIVE) -> List[Any]:
+    if not records or not any(label_key in r for r in records) or not any(value_key in r for r in records):
+        styles = getSampleStyleSheet()
+        return [Paragraph(f"<b>{title}</b>", styles["Heading4"]), Paragraph("No chart data available.", styles["BodyText"]), Spacer(1, 12)]
+    values = [float(r.get(value_key) or 0) for r in records if r.get(value_key) is not None]
+    max_value = max(values) if values else 0.0
+    chart_records = []
+    for row in records[:max_rows]:
+        chart_records.append({
+            label_key: str(row.get(label_key, ""))[:45],
+            "Value": _safe_cell_value(row.get(value_key)),
+            "Trend": _build_bar_string(float(row.get(value_key) or 0), max_value),
+        })
+    return _table_from_records(chart_records, title, max_rows=max_rows, max_columns=3)
+
+
+def _insight_box(lines: List[str], background: colors.HexColor = colors.HexColor("#eff6ff")) -> List[Any]:
+    styles = getSampleStyleSheet()
+    box_style = ParagraphStyle(
+        'InsightBox',
+        parent=styles['BodyText'],
+        backColor=background,
+        borderColor=colors.HexColor("#93c5fd"),
+        borderWidth=1,
+        borderPadding=8,
+        leftIndent=0,
+        rightIndent=0,
+        leading=14,
+    )
+    text = "<br/>".join(lines)
+    table = Table([[Paragraph(text, box_style)]], colWidths=[450])
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), background),
+        ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#93c5fd")),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+        ("TOPPADDING", (0, 0), (-1, -1), 10),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+    ]))
+    return [table, Spacer(1, 12)]
+
+
+def _missing_section_reason(section_name: str, source_data: Dict[str, Any]) -> str:
+    if not source_data:
+        return f"{section_name} unavailable because no engine results were generated."
+    missing = source_data.get("validation", {}).get("missing_columns") or source_data.get("missing_columns")
+    if missing:
+        return f"{section_name} unavailable because required columns are missing: {missing}. Found: {source_data.get('columns_used', [])}."
+    return f"{section_name} unavailable because the data source is empty or did not return a structured result."
+
+
+def _text_block(lines: List[str], styles: Any) -> List[Any]:
+    elems: List[Any] = []
+    for line in lines:
+        elems.append(Paragraph(line, styles["BodyText"]))
+        elems.append(Spacer(1, 6))
+    elems.append(Spacer(1, 12))
+    return elems
+
 
 def _score_card(title: str, value: Any, description: str = "") -> List[Any]:
     styles = getSampleStyleSheet()
@@ -117,349 +252,283 @@ def _section_header(title: str, number: str = "") -> List[Any]:
     elems.append(Paragraph(f"<b>{header_text}</b>", style))
     return elems
 
-def export_market_report_pdf(report: Dict[str, Any]) -> str:
+def export_market_report_pdf(
+    report: Dict[str, Any],
+    report_mode: str = REPORT_MODE_EXECUTIVE,
+    max_rows: Optional[int] = None,
+    include_charts: bool = True,
+    include_appendix: Optional[bool] = None,
+) -> str:
     fd, output_path = tempfile.mkstemp(prefix="market_report_", suffix=".pdf")
     os.close(fd)
-    
+
+    if max_rows is None:
+        max_rows = MAX_TABLE_ROWS_EXECUTIVE if report_mode == REPORT_MODE_EXECUTIVE else MAX_TABLE_ROWS_DETAILED
+    if include_appendix is None:
+        include_appendix = report_mode == REPORT_MODE_DETAILED
+
     doc = SimpleDocTemplate(
-        output_path, 
-        pagesize=letter, 
-        leftMargin=50, 
-        rightMargin=50, 
-        topMargin=50, 
-        bottomMargin=50
+        output_path,
+        pagesize=letter,
+        leftMargin=50,
+        rightMargin=50,
+        topMargin=50,
+        bottomMargin=50,
     )
-    
+
     styles = getSampleStyleSheet()
     elems: List[Any] = []
-    
     results = report.get("results", {})
-    
-    # Extract data securely
-    exec_summary = results.get("executive_summary", {})
+
+    executive = results.get("executive_summary", {})
     market_health = results.get("market_health", {})
     demand = results.get("demand_analysis", {})
-    brand = results.get("brand_momentum", {})
-    revenue = results.get("revenue_analysis", {})
-    bsr = results.get("bsr_efficiency_analysis", {})
-    opportunities = results.get("opportunity_signals", {}).get("signals", [])
-    risks = results.get("risk_signals", {}).get("signals", [])
-    final_verdict = results.get("final_market_verdict", {}).get("verdict", "")
-    
-    siei = results.get("siei", {})
-    whitespace = results.get("whitespace", {})
-    direct_competitors = results.get("direct_competitors", {})
-    price_elasticity = results.get("price_elasticity", {})
-    hhi = results.get("hhi", {})
     demand_velocity = results.get("demand_velocity", {})
-    substitute = results.get("substitute_intelligence", {})
-    complement = results.get("complement_intelligence", {})
-    bundle = results.get("bundle_opportunities", {})
+    siei = results.get("siei", {}) or results.get("keyword_conversion_intelligence", {})
+    whitespace = results.get("whitespace", {}) or results.get("revenue_opportunity_by_segment", {})
+    brand = results.get("brand_momentum", {}) or results.get("sales_momentum_intelligence", {})
+    revenue = results.get("revenue_analysis", {}) or results.get("revenue_momentum_intelligence", {})
+    bsr = results.get("bsr_efficiency_analysis", {})
+    hhi = results.get("hhi", {}) or results.get("market_structure", {})
+    direct_competitors = results.get("direct_competitors", {}) or results.get("product_intelligence", {}).get("direct_competitors", {})
+    substitute = results.get("substitute_intelligence", {}) or results.get("product_intelligence", {}).get("substitute_intelligence", {})
+    complement = results.get("complement_intelligence", {}) or results.get("product_intelligence", {}).get("complement_intelligence", {})
+    bundle = results.get("bundle_opportunities", {}) or results.get("product_intelligence", {}).get("bundle_opportunities", {})
+    price_elasticity = results.get("price_elasticity", {})
     finance = results.get("finance_intelligence", {})
-    attractiveness_matrix = results.get("economic_attractiveness_matrix", {})
-    if not attractiveness_matrix:
-        attractiveness_matrix = finance.get("economic_attractiveness_matrix", {})
-    final_verdict_full = results.get("final_market_verdict", {})
+    risks = results.get("risk_signals", {}).get("signals", [])
+    opportunities = results.get("opportunity_signals", {}).get("signals", [])
+    final_verdict = results.get("final_market_verdict", {})
+    dataset_diag = results.get("dataset_diagnostics", {})
+    metadata = results.get("report_metadata", {})
 
-    # ==========================================
-    # 1. COVER PAGE
-    # ==========================================
-    title_style = ParagraphStyle(
-        'MainTitle',
-        parent=styles['Title'],
-        fontSize=32,
-        textColor=colors.HexColor("#0f172a"),
-        spaceAfter=20,
-        alignment=TA_CENTER
-    )
-    
-    subtitle_style = ParagraphStyle(
-        'SubTitle',
-        parent=styles['Normal'],
-        fontSize=14,
-        textColor=colors.HexColor("#64748b"),
-        spaceAfter=50,
-        alignment=TA_CENTER
-    )
-    
-    elems.append(Spacer(1, 100))
-    elems.append(Paragraph("<b>Market Intelligence Report</b>", title_style))
-    elems.append(Paragraph("Comprehensive Analysis & Strategic Insights", subtitle_style))
-    
-    elems.append(Spacer(1, 40))
-    
-    # Highlight Metrics Box
-    cover_data = [
-        ["Generated Date", datetime.datetime.now().strftime("%B %d, %Y")],
-        ["Composite Score", f"{exec_summary.get('composite_market_health_score', 0)} / 100"],
-        ["Market Direction", str(market_health.get('market_direction', 'N/A')).title()],
-        ["Analyzed Brands", str(results.get("market_overview", {}).get("total_brands_analysed", "N/A"))]
+    elems.append(Spacer(1, 80))
+    elems.append(Paragraph("<b>Market Intelligence Report</b>", ParagraphStyle('MainTitle', parent=styles['Title'], fontSize=30, textColor=colors.HexColor("#0f172a"), spaceAfter=18, alignment=TA_CENTER)))
+    elems.append(Paragraph("Data-driven executive brief for strategic market decisions.", ParagraphStyle('SubTitle', parent=styles['Normal'], fontSize=13, textColor=colors.HexColor("#475569"), alignment=TA_CENTER)))
+    elems.append(Spacer(1, 24))
+
+    cover_rows = [
+        ["Generated Date", datetime.datetime.now().strftime("%B %d, %Y %H:%M")],
+        ["Datasets Loaded", ", ".join(dataset_diag.get("datasets_loaded", [])) or "None"],
+        ["Keyword Rows", _format_value(metadata.get("keyword_rows"))],
+        ["Product Rows", _format_value(metadata.get("product_rows"))],
+        ["Brands", _format_value(metadata.get("brand_count"))],
+        ["Final Market Score", _format_value(metadata.get("final_market_score"))],
+        ["Market Direction", str(metadata.get("market_direction", "N/A")).title()],
     ]
-    
-    cover_table = Table(cover_data, colWidths=[200, 200])
+    cover_table = Table(cover_rows, colWidths=[170, 260])
     cover_table.setStyle(TableStyle([
-        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
-        ('FONTNAME', (0,0), (0,-1), 'Helvetica-Bold'),
-        ('TEXTCOLOR', (0,0), (-1,-1), colors.HexColor("#334155")),
-        ('BACKGROUND', (0,0), (-1,-1), colors.HexColor("#f1f5f9")),
-        ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#cbd5e1")),
-        ('PADDING', (0,0), (-1,-1), 12),
+        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#f8fafc')),
+        ('TEXTCOLOR', (0, 0), (-1, -1), colors.HexColor('#0f172a')),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#cbd5e1')),
+        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+        ('FONTSIZE', (0, 0), (-1, -1), 10),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 8),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
     ]))
     elems.append(cover_table)
-    
     elems.append(PageBreak())
 
-    # ==========================================
-    # 2. EXECUTIVE SUMMARY
-    # ==========================================
     elems.extend(_section_header("Executive Summary", "2"))
-    market_econ = exec_summary.get("market_economics", "")
-    if market_econ:
-        elems.append(Paragraph("<b>Market Economics</b>", styles["Heading4"]))
-        elems.append(Paragraph(market_econ, styles["BodyText"]))
-        elems.append(Spacer(1, 12))
-
-    summary_data = [
-        [
-            Paragraph("<b>Demand Score</b>", styles['Normal']), 
-            Paragraph(f"{demand.get('demand_score', 0)}", styles['Normal']),
-            Paragraph("<b>Sales Momentum</b>", styles['Normal']),
-            Paragraph(f"{brand.get('sales_momentum_score', 0)}", styles['Normal'])
-        ],
-        [
-            Paragraph("<b>Revenue Momentum</b>", styles['Normal']), 
-            Paragraph(f"{revenue.get('revenue_momentum_score', 0)}", styles['Normal']),
-            Paragraph("<b>BSR Efficiency</b>", styles['Normal']),
-            Paragraph(f"{bsr.get('bsr_efficiency_score', 0)}", styles['Normal'])
-        ],
-        [
-            Paragraph("<b>Whitespace Score</b>", styles['Normal']), 
-            Paragraph(f"{whitespace.get('overall_whitespace_score', 0)}", styles['Normal']),
-            Paragraph("<b>Ecosystem Strength</b>", styles['Normal']),
-            Paragraph(f"{bundle.get('ecosystem_strength', 0)}", styles['Normal'])
-        ],
-        [
-            Paragraph("<b>Finance Health</b>", styles['Normal']),
-            Paragraph(f"{finance.get('finance_health_score', results.get('engine_scores', {}).get('finance_health', 0))}", styles['Normal']),
-            Paragraph("<b>Final Market Score</b>", styles['Normal']),
-            Paragraph(f"{exec_summary.get('final_market_score', exec_summary.get('composite_market_health_score', 0))}", styles['Normal'])
-        ],
+    exec_kpis = [
+        ("Final Market Score", metadata.get("final_market_score", "N/A"), "Composite intelligence score."),
+        ("Market Direction", metadata.get("market_direction", "N/A"), "Derived from demand and momentum signals."),
+        ("Demand Strength", demand.get("demand_score", "N/A"), "Search demand and interest levels."),
+        ("Finance Health", finance.get("finance_health_score", "N/A"), "Economic attractiveness for launch."),
     ]
-    
-    summary_table = Table(summary_data)
-    summary_table.setStyle(TableStyle([
-        ('BACKGROUND', (0,0), (-1,-1), colors.HexColor("#f8fafc")),
-        ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor("#e2e8f0")),
-        ('PADDING', (0,0), (-1,-1), 10),
-        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-    ]))
-    elems.append(summary_table)
-    elems.append(Spacer(1, 20))
-
-    # ==========================================
-    # 3. DEMAND ANALYSIS
-    # ==========================================
-    elems.extend(_section_header("Demand Analysis", "3"))
-    elems.append(Paragraph(f"<b>Demand Direction:</b> {market_health.get('demand_direction_signal', 'N/A')}", styles["BodyText"]))
-    elems.append(Spacer(1, 10))
-    elems.extend(_table_from_records(demand.get("top_demand_keywords", []), "Top Demand Keywords"))
-    
-    if demand_velocity:
-        elems.append(Paragraph(f"<b>Velocity Score:</b> {demand_velocity.get('velocity_score', 0)}/100", styles["BodyText"]))
-        elems.append(Spacer(1, 10))
-        elems.extend(_table_from_records(demand_velocity.get("strongest_growth_signals", []), "Strongest Velocity Signals"))
-
-    if whitespace:
-        elems.extend(_table_from_records(whitespace.get("top_opportunities", []), "Whitespace SEO Opportunities"))
-
-    # ==========================================
-    # 4. SALES ANALYSIS
-    # ==========================================
-    elems.extend(_section_header("Sales Analysis", "4"))
-    elems.append(Paragraph(f"<b>Sales Direction:</b> {market_health.get('sales_direction', 'N/A')}", styles["BodyText"]))
-    elems.append(Spacer(1, 10))
-    elems.extend(_table_from_records(brand.get("fastest_growing_brands", []), "Fastest Growing Brands (Momentum)"))
-    elems.extend(_table_from_records(brand.get("declining_brands", []), "Declining Brands"))
-
-    # ==========================================
-    # 5. REVENUE ANALYSIS
-    # ==========================================
-    elems.extend(_section_header("Revenue Analysis", "5"))
-    total_rev = revenue.get('total_market_revenue', 0)
-    elems.append(Paragraph(f"<b>Total Analyzed Market Revenue:</b> ${total_rev:,.2f}", styles["BodyText"]))
-    elems.append(Spacer(1, 10))
-    elems.extend(_table_from_records(revenue.get("top_revenue_brands", []), "Top Revenue Growth Brands"))
-
-    # ==========================================
-    # 6. BSR EFFICIENCY
-    # ==========================================
-    elems.extend(_section_header("BSR Efficiency", "6"))
-    elems.extend(_table_from_records(bsr.get("most_efficient_products", []), "Most Efficient Products (High Revenue, Poor Rank)"))
-    elems.extend(_table_from_records(bsr.get("least_efficient_products", []), "Least Efficient Products (High Rank, Poor Revenue)"))
-
-    # ==========================================
-    # 7. SEARCH INTELLIGENCE
-    # ==========================================
-    elems.extend(_section_header("Search Intelligence", "7"))
-    if siei:
-        elems.extend(_table_from_records(siei.get("highest_efficiency_keywords", []), "High Intent Efficiency (SIEI)"))
-        
-    if substitute:
-        elems.extend(_table_from_records(substitute.get("substitute_products", []), "Top Substitute Threats"))
-
-    # ==========================================
-    # 8. MARKET STRUCTURE
-    # ==========================================
-    elems.extend(_section_header("Market Structure", "8"))
-    if hhi:
-        elems.append(Paragraph(f"<b>HHI Score:</b> {hhi.get('hhi_score', 0)} ({hhi.get('market_structure_type', 'N/A')})", styles["BodyText"]))
-        elems.append(Spacer(1, 10))
-        elems.extend(_table_from_records(hhi.get("top_brands_by_market_share", []), "Market Share Concentration"))
-
-    if direct_competitors:
-        elems.append(Paragraph(f"<b>Average Similarity:</b> {direct_competitors.get('average_similarity', 0)}/100", styles["BodyText"]))
-        elems.extend(_table_from_records(direct_competitors.get("similarity_rankings", []), "Direct Competitors"))
-
-    if price_elasticity:
-        elems.extend(_table_from_records(price_elasticity.get("buckets", []), "Price Elasticity & Demand Buckets"))
-        if price_elasticity.get("dead_zones"):
-            elems.append(Paragraph("<b>Identified Price Dead Zones:</b>", styles["Heading4"]))
-            for dz in price_elasticity.get("dead_zones", []):
-                elems.append(Paragraph(f"- {dz}", styles["BodyText"]))
-            elems.append(Spacer(1, 10))
-
-    # ==========================================
-    # 9. ECOSYSTEM INTELLIGENCE
-    # ==========================================
-    elems.extend(_section_header("Ecosystem Intelligence", "9"))
-    if complement:
-        elems.extend(_table_from_records(complement.get("complement_products", []), "Top Complementary Products"))
-    if bundle:
-        elems.extend(_table_from_records(bundle.get("bundle_opportunities", []), "High Potential Bundle Opportunities"))
-
-    # ==========================================
-    # 10. FINANCE INTELLIGENCE
-    # ==========================================
-    elems.extend(_section_header("Finance Intelligence", "10"))
-    if finance:
-        elems.extend(_score_card(
-            "Finance Health Score",
-            f"{finance.get('finance_health_score', 0)} / 100",
-            finance.get("economic_attractiveness", ""),
-        ))
-        api = finance.get("advertising_pressure", {})
-        pvs = finance.get("premium_viability", {})
-        mcr = finance.get("margin_compression", {})
-        ces = finance.get("capital_efficiency", {})
-        eci = finance.get("entry_cost", {})
-        finance_kpis = [
-            ("Advertising Pressure", api.get("score"), api.get("classification")),
-            ("Premium Viability", pvs.get("score"), pvs.get("classification")),
-            ("Margin Compression Risk", mcr.get("score"), mcr.get("risk")),
-            ("Capital Efficiency", ces.get("score"), ces.get("classification")),
-            ("Entry Cost Index", eci.get("score"), eci.get("classification")),
-        ]
-        kpi_rows = [["Metric", "Score", "Classification"]]
-        for name, score, label in finance_kpis:
-            kpi_rows.append([
-                name,
-                str(score) if score is not None else "N/A",
-                str(label or "N/A"),
-            ])
-        kpi_table = Table(kpi_rows, colWidths=[180, 80, 160])
-        kpi_table.setStyle(TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1e40af")),
-            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
-            ("FONTSIZE", (0, 0), (-1, -1), 9),
-            ("PADDING", (0, 0), (-1, -1), 8),
-        ]))
-        elems.append(kpi_table)
-        elems.append(Spacer(1, 12))
-        heatmap = pvs.get("price_elasticity_heatmap", [])
-        if heatmap:
-            elems.extend(_table_from_records(heatmap, "Premium Viability — Price Band Heatmap"))
-        if attractiveness_matrix:
-            matrix_rows = [
-                ["Dimension", "Value"],
-                ["Finance Health (X)", str(attractiveness_matrix.get("finance_health", "N/A"))],
-                ["Demand Strength (Y)", str(attractiveness_matrix.get("demand_strength", "N/A"))],
-                ["Quadrant", str(attractiveness_matrix.get("quadrant", "N/A"))],
-                ["Recommendation", str(attractiveness_matrix.get("launch_recommendation", "N/A"))],
-            ]
-            matrix_table = Table(matrix_rows, colWidths=[160, 300])
-            matrix_table.setStyle(TableStyle([
-                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0f172a")),
-                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#e2e8f0")),
-                ("FONTSIZE", (0, 0), (-1, -1), 9),
-                ("PADDING", (0, 0), (-1, -1), 8),
-            ]))
-            elems.append(Paragraph("<b>Market Attractiveness Matrix</b>", styles["Heading4"]))
-            elems.append(matrix_table)
-            elems.append(Spacer(1, 12))
-        verdict_text = finance.get("economic_verdict", "")
-        if verdict_text:
-            elems.append(Paragraph(f"<b>Market Entry Verdict:</b> {verdict_text}", styles["BodyText"]))
-            elems.append(Spacer(1, 10))
-    else:
-        elems.append(Paragraph("Finance Intelligence data not available.", styles["BodyText"]))
-
+    elems.extend(_table_from_kpi_pairs(exec_kpis, "Executive KPI Summary"))
+    insight_lines: List[str] = []
+    if executive.get("market_economics"):
+        insight_lines.append(executive.get("market_economics"))
+    insight_lines.extend(opportunities[:2])
+    insight_lines.extend(risks[:2])
+    if not insight_lines:
+        insight_lines = ["Insight data is not available for this dataset."]
+    elems.extend(_insight_box(insight_lines, colors.HexColor("#eef2ff")))
     elems.append(PageBreak())
 
-    # ==========================================
-    # 11. OPPORTUNITY ANALYSIS
-    # ==========================================
-    elems.extend(_section_header("Opportunity Analysis", "11"))
-    if opportunities:
-        for opp in opportunities:
-            elems.append(Paragraph(f"• {opp}", styles["BodyText"]))
-            elems.append(Spacer(1, 5))
+    elems.extend(_section_header("Dataset Diagnostics", "3"))
+    if dataset_diag:
+        diag_rows = [
+            ["Dataset", "Available", "Rows", "Columns", "Missing Expected", "Duplicates", "Blank Rows"],
+            [
+                dataset_diag.get("blackbox", {}).get("dataset_name", "Blackbox"),
+                str(dataset_diag.get("blackbox", {}).get("available", False)),
+                _format_value(dataset_diag.get("blackbox", {}).get("row_count")),
+                _format_value(dataset_diag.get("blackbox", {}).get("column_count")),
+                ", ".join(dataset_diag.get("blackbox", {}).get("missing_expected_columns", [])) or "None",
+                _format_value(dataset_diag.get("blackbox", {}).get("duplicate_rows_removed")),
+                _format_value(dataset_diag.get("blackbox", {}).get("blank_rows_removed")),
+            ],
+            [
+                dataset_diag.get("magnet", {}).get("dataset_name", "Magnet"),
+                str(dataset_diag.get("magnet", {}).get("available", False)),
+                _format_value(dataset_diag.get("magnet", {}).get("row_count")),
+                _format_value(dataset_diag.get("magnet", {}).get("column_count")),
+                ", ".join(dataset_diag.get("magnet", {}).get("missing_expected_columns", [])) or "None",
+                _format_value(dataset_diag.get("magnet", {}).get("duplicate_rows_removed")),
+                _format_value(dataset_diag.get("magnet", {}).get("blank_rows_removed")),
+            ],
+        ]
+        elems.append(Table(diag_rows, colWidths=[100, 55, 50, 55, 150, 55, 55], style=TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#0f172a')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#cbd5e1')),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ])))
     else:
-        elems.append(Paragraph("No specific data-driven opportunities detected.", styles["BodyText"]))
-    elems.append(Spacer(1, 15))
+        elems.extend(_section_unavailable("Dataset Diagnostics", "Dataset diagnostics unavailable because the report data did not include the expected diagnostics section.", styles))
+    elems.append(PageBreak())
 
-    # ==========================================
-    # 12. RISK ANALYSIS
-    # ==========================================
-    elems.extend(_section_header("Risk Analysis", "12"))
+    elems.extend(_section_header("Demand Intelligence", "4"))
+    if demand.get("top_demand_keywords"):
+        elems.extend(_text_block([
+            f"Demand Score: {_format_value(demand.get('demand_score'))}",
+            f"Demand Trend: {demand.get('demand_trend', 'N/A')}",
+        ], styles))
+        if include_charts:
+            elems.extend(_bar_chart_table(demand.get("top_demand_keywords", []), "keyword", "search_volume", "Top Demand Keywords", max_rows=max_rows))
+        elems.extend(_table_from_records(demand.get("top_demand_keywords", []), "Top Demand Keywords", max_rows=max_rows, total_rows=len(demand.get("top_demand_keywords", []))))
+        elems.extend(_insight_box([
+            "Demand is concentrated in the top-performing search terms.",
+            "Prioritize the highest-volume keywords for launch and creative testing.",
+        ], colors.HexColor("#dcfce7")))
+    else:
+        elems.extend(_section_unavailable("Demand Intelligence", _missing_section_reason("Demand Intelligence", demand), styles))
+    elems.append(PageBreak())
+
+    elems.extend(_section_header("Conversion Intelligence", "5"))
+    if siei:
+        elems.extend(_table_from_kpi_pairs([
+            ("High Intent", siei.get("high_intent_count"), "High-conversion keyword volume."),
+            ("Friction", siei.get("friction_count"), "Demand with conversion drag."),
+            ("Hidden Gems", siei.get("hidden_gems_count", len(siei.get("hidden_gems", []))), "Untapped keywords."),
+            ("Low Priority", siei.get("low_priority_count", len(siei.get("low_priority_keywords", []))), "Keywords to deprioritize."),
+        ], "Conversion KPI Summary"))
+        if include_charts and siei.get("top_conversion_opportunities"):
+            elems.extend(_bar_chart_table(siei.get("top_conversion_opportunities", []), "keyword", "conversion_score", "Top Conversion Opportunities", max_rows=max_rows))
+        elems.extend(_table_from_records(siei.get("demand_winners", []), "Demand Winners", max_rows=max_rows, total_rows=len(siei.get("demand_winners", []))))
+        elems.extend(_table_from_records(siei.get("friction_keywords", []), "Conversion Leaks", max_rows=max_rows, total_rows=len(siei.get("friction_keywords", []))))
+        if siei.get("hidden_gems"):
+            elems.extend(_table_from_records(siei.get("hidden_gems", []), "Hidden Gems", max_rows=max_rows, total_rows=len(siei.get("hidden_gems", []))))
+    else:
+        elems.extend(_section_unavailable("Conversion Intelligence", _missing_section_reason("Conversion Intelligence", siei), styles))
+    elems.append(PageBreak())
+
+    elems.extend(_section_header("Revenue Opportunity & Sales Momentum", "6"))
+    if whitespace or brand:
+        if whitespace:
+            elems.extend(_text_block([
+                f"Opportunity score: {_format_value(whitespace.get('overall_whitespace_score'))}",
+                f"Estimated revenue pool: ${_format_value(whitespace.get('revenue_opportunity_pool'))}",
+            ], styles))
+            if include_charts:
+                elems.extend(_bar_chart_table(whitespace.get("top_entry_segments", []), "segment", "opportunity_revenue", "Top Opportunity Segments", max_rows=max_rows))
+            elems.extend(_table_from_records(whitespace.get("top_entry_segments", []), "Opportunity Segments", max_rows=max_rows, total_rows=len(whitespace.get("top_entry_segments", []))))
+        if brand:
+            elems.extend(_text_block([
+                f"Fastest growing brands: {len(brand.get('fastest_growing_brands', []))}",
+                f"Declining brands: {len(brand.get('declining_brands', []))}",
+            ], styles))
+            elems.extend(_table_from_records(brand.get("fastest_growing_brands", []), "Top Growth Brands", max_rows=max_rows, total_rows=len(brand.get("fastest_growing_brands", []))))
+            elems.extend(_table_from_records(brand.get("declining_brands", []), "Declining Brands", max_rows=max_rows, total_rows=len(brand.get("declining_brands", []))))
+    else:
+        elems.extend(_section_unavailable("Revenue Opportunity & Sales Momentum", "Revenue opportunity and sales momentum data unavailable.", styles))
+    elems.append(PageBreak())
+
+    elems.extend(_section_header("Market Structure & Product Intelligence", "7"))
+    if revenue or hhi or direct_competitors or substitute or complement or bundle:
+        if revenue:
+            elems.extend(_text_block([
+                f"Revenue momentum score: {_format_value(revenue.get('revenue_momentum_score'))}",
+                f"Total market revenue: ${_format_value(revenue.get('total_market_revenue'))}",
+            ], styles))
+            if include_charts:
+                elems.extend(_bar_chart_table(revenue.get("top_revenue_brands", []), "brand", "revenue_share", "Top Revenue Brands", max_rows=max_rows))
+            elems.extend(_table_from_records(revenue.get("top_revenue_brands", []), "Top Revenue Brands", max_rows=max_rows, total_rows=len(revenue.get("top_revenue_brands", []))))
+        if hhi:
+            elems.extend(_table_from_records(hhi.get("top_brands_by_market_share", []), "Market Share Concentration", max_rows=max_rows, total_rows=len(hhi.get("top_brands_by_market_share", []))))
+            elems.extend(_insight_box([
+                f"HHI Score: {_format_value(hhi.get('hhi_score'))}",
+                f"Structure: {hhi.get('market_structure_type', 'N/A')}",
+                "Highly concentrated markets require differentiated entry strategies.",
+            ], colors.HexColor("#e0f2fe")))
+        if direct_competitors:
+            elems.extend(_table_from_records(direct_competitors.get("direct_competitors", []), "Direct Competitors", max_rows=max_rows, total_rows=len(direct_competitors.get("direct_competitors", []))))
+        if substitute:
+            elems.extend(_table_from_records(substitute.get("substitute_products", []), "Substitute Threats", max_rows=max_rows, total_rows=len(substitute.get("substitute_products", []))))
+        if complement:
+            elems.extend(_table_from_records(complement.get("complement_products", []), "Complement Products", max_rows=max_rows, total_rows=len(complement.get("complement_products", []))))
+        if bundle:
+            elems.extend(_table_from_records(bundle.get("bundle_opportunities", []), "Bundle Opportunities", max_rows=max_rows, total_rows=len(bundle.get("bundle_opportunities", []))))
+    else:
+        elems.extend(_section_unavailable("Market Structure & Product Intelligence", "No product or market structure data available.", styles))
+    elems.append(PageBreak())
+
+    elems.extend(_section_header("Price Elasticity & Finance", "8"))
+    if price_elasticity or finance:
+        if price_elasticity:
+            elems.extend(_text_block([
+                "Price band revenue share = band revenue / total revenue × 100.",
+                "Competition density reflects the number of offerings per price bucket.",
+            ], styles))
+            elems.extend(_table_from_records(price_elasticity.get("buckets", []), "Price Elasticity Buckets", max_rows=max_rows, total_rows=len(price_elasticity.get("buckets", []))))
+        if finance:
+            elems.extend(_table_from_kpi_pairs([
+                ("Finance Health", finance.get("finance_health_score"), "Overall finance attractiveness."),
+                ("Ad Pressure", finance.get("advertising_pressure", {}).get("score"), "Advertising competition."),
+                ("Premium Viability", finance.get("premium_viability", {}).get("score"), "Premium pricing strength."),
+                ("Margin Risk", finance.get("margin_compression", {}).get("risk"), "Margin pressure classification."),
+                ("Capital Efficiency", finance.get("capital_efficiency", {}).get("score"), "Deployment efficiency."),
+            ], "Finance Intelligence"))
+            if finance.get("economic_attractiveness_matrix"):
+                elems.extend(_table_from_records([finance.get("economic_attractiveness_matrix")], "Attractiveness Matrix", max_rows=1, total_rows=1))
+    else:
+        elems.extend(_section_unavailable("Price Elasticity & Finance", "Pricing and finance intelligence data unavailable.", styles))
+    elems.append(PageBreak())
+
+    elems.extend(_section_header("Risk & Recommendation", "9"))
     if risks:
-        for risk in risks:
-            elems.append(Paragraph(f"• {risk}", styles["BodyText"]))
-            elems.append(Spacer(1, 5))
+        risk_rows = [{"Risk": _safe_cell_value(item, 80)} for item in risks[:max_rows]]
+        elems.extend(_table_from_records(risk_rows, "Top Risks", max_rows=max_rows, total_rows=len(risks)))
     else:
-        elems.append(Paragraph("No critical risks detected.", styles["BodyText"]))
-    elems.append(Spacer(1, 15))
+        elems.extend(_section_unavailable("Risk Signals", "No risk signal data returned.", styles))
 
-    # ==========================================
-    # 13. FINAL MARKET VERDICT
-    # ==========================================
-    elems.extend(_section_header("Final Market Verdict", "13"))
-    verdict_style = ParagraphStyle(
-        'Verdict',
-        parent=styles['Normal'],
-        fontSize=14,
-        leading=20,
-        textColor=colors.HexColor("#1e293b"),
-        fontName="Helvetica-Bold",
-        backColor=colors.HexColor("#f0fdf4"),
-        borderPadding=15,
-        borderColor=colors.HexColor("#bbf7d0"),
-        borderWidth=1,
-        borderRadius=8
-    )
-    elems.append(Paragraph(final_verdict, verdict_style))
-    if final_verdict_full.get("market_rating"):
-        elems.append(Spacer(1, 8))
-        elems.append(Paragraph(
-            f"<b>Market Rating:</b> {final_verdict_full.get('market_rating')} | "
-            f"<b>Launch:</b> {final_verdict_full.get('launch_recommendation', '')}",
-            styles["BodyText"],
-        ))
-    if final_verdict_full.get("finance_contribution"):
-        elems.append(Paragraph(final_verdict_full["finance_contribution"], styles["BodyText"]))
-    if final_verdict_full.get("economic_risk"):
-        elems.append(Paragraph(final_verdict_full["economic_risk"], styles["BodyText"]))
+    recommendations: List[str] = []
+    if final_verdict.get("launch_recommendation"):
+        recommendations.append(f"Launch recommendation: {final_verdict.get('launch_recommendation')}")
+    if final_verdict.get("market_rating"):
+        recommendations.append(f"Market rating: {final_verdict.get('market_rating')}")
+    if final_verdict.get("verdict"):
+        recommendations.append(final_verdict.get("verdict"))
+    if opportunities:
+        recommendations.extend([f"- {item}" for item in opportunities[:max_rows]])
+    if recommendations:
+        elems.extend(_insight_box(recommendations, colors.HexColor("#ecfdf5")))
+    else:
+        elems.extend(_section_unavailable("Strategic Recommendations", "No strategic recommendations were generated.", styles))
+
+    if include_appendix:
+        elems.append(PageBreak())
+        elems.extend(_section_header("Appendix", "10"))
+        if siei.get("all_keywords"):
+            elems.extend(_table_from_records(siei.get("all_keywords", []), "Extended Keyword Conversion Table", max_rows=max_rows, total_rows=len(siei.get("all_keywords", []))))
+        if whitespace.get("entry_segments"):
+            appendix_rows = [
+                {
+                    "segment": seg.get("segment"),
+                    "keyword_count": _format_value(seg.get("keyword_count")),
+                    "opportunity_revenue": _format_value(seg.get("opportunity_revenue")),
+                }
+                for seg in whitespace.get("entry_segments", [])[:max_rows]
+            ]
+            elems.extend(_table_from_records(appendix_rows, "Segment Keyword Drilldown Summary", max_rows=max_rows, total_rows=len(whitespace.get("entry_segments", []))))
+
+    elems.append(Spacer(1, 10))
+    elems.append(Paragraph(f"Report generated on {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", styles["BodyText"]))
 
     doc.build(elems, onFirstPage=_header_footer, onLaterPages=_header_footer)
     return output_path

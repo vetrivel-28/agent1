@@ -1,12 +1,13 @@
+import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../services/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/Card';
 import { DataTable, type Column } from '../components/tables/DataTable';
-import { formatNumber, cn } from '../utils/cn';
+import { formatCurrency, formatNumber, cn } from '../utils/cn';
 import { isEngineOk, getEngineErrorMessage } from '../utils/analysisStatus';
 import {
   AlertCircle, Loader2, Target, Zap, TrendingUp,
-  DollarSign, Lightbulb, Info, Layers,
+  DollarSign, Lightbulb, Info, Layers, X,
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -22,6 +23,17 @@ type WhitespaceKeyword = {
   whitespace_score?: number;
   opportunity_label?: string;
   opportunity_driver?: string;
+};
+
+type SegmentKeyword = {
+  keyword: string;
+  search_volume?: number;
+  click_share?: number | null;
+  conversion_share?: number | null;
+  keyword_sales?: number;
+  efficiency_score?: number;
+  classification?: string;
+  source?: string;
 };
 
 type EntrySegment = {
@@ -140,17 +152,35 @@ function SegmentRevenueTip({ active, payload }: { active?: boolean; payload?: Ar
   const d = payload[0].payload;
   return (
     <div className="bg-card border border-border rounded-lg p-3 shadow-lg text-sm space-y-1">
-      <p className="font-semibold">{d.segment}</p>
-      <p className="text-muted-foreground">Revenue: <span className="text-foreground font-medium">{formatNumber(Math.round(d.opportunity_revenue))}</span></p>
-      <p className="text-muted-foreground">Keywords: {d.keyword_count} · Score: {d.avg_opportunity_score}/100</p>
+      <p className="font-semibold">Segment: {d.segment}</p>
+      <p className="text-muted-foreground">Revenue Opportunity: <span className="text-foreground font-medium">{formatCurrency(Math.round(d.opportunity_revenue))}</span></p>
+      <p className="text-muted-foreground">Unique Keywords: {d.keyword_count}</p>
+      <p className="text-muted-foreground">Score: {d.avg_opportunity_score}/100</p>
+      <p className="text-sm text-muted-foreground/80">Click to view included keywords</p>
     </div>
   );
 }
 
 export default function WhitespaceOpportunities() {
+  const [selectedSegment, setSelectedSegment] = useState<string | null>(null);
   const { data: whitespaceData, isLoading, isError } = useQuery({
     queryKey: ['whitespace-opportunities'],
     queryFn: () => api.getWhitespaceOpportunities(20),
+  });
+
+  const {
+    data: segmentKeywordDetails,
+    isLoading: isSegmentLoading,
+    isError: isSegmentError,
+    refetch: refetchSegmentKeywords,
+  } = useQuery({
+    queryKey: ['revenue-opportunity-segment-keywords', selectedSegment],
+    queryFn: async () => {
+      if (!selectedSegment) return null;
+      return api.getRevenueOpportunitySegmentKeywords(selectedSegment);
+    },
+    enabled: Boolean(selectedSegment),
+    keepPreviousData: true,
   });
 
   if (isLoading) {
@@ -206,6 +236,56 @@ export default function WhitespaceOpportunities() {
   const revenueKpiHighlight = revenueSignal > 0
     ? `Represents ${revenuePctCategory}% of measurable category keyword sales`
     : undefined;
+
+  const segmentKeywords: SegmentKeyword[] = (segmentKeywordDetails?.keywords || []) as SegmentKeyword[];
+  const segmentKeywordCount = segmentKeywordDetails?.keyword_count ?? 0;
+  const segmentRawRowCount = segmentKeywordDetails?.raw_row_count ?? 0;
+  const segmentDuplicateRemovedCount = segmentKeywordDetails?.duplicate_removed_count ?? 0;
+  const segmentModalTitle = selectedSegment ? `Keywords in ${selectedSegment}` : '';
+
+  const handleSegmentClick = (segment: string) => {
+    setSelectedSegment(segment);
+  };
+
+  const handleCloseSegmentModal = () => {
+    setSelectedSegment(null);
+  };
+
+  const exportSegmentKeywordsCsv = () => {
+    if (!segmentKeywordDetails || !segmentKeywords.length) return;
+    const header = [
+      'Keyword',
+      'Search Volume',
+      'Click Share',
+      'Conversion Share',
+      'Keyword Sales',
+      'Efficiency Score',
+      'Classification / Opportunity Type',
+      'Source Dataset',
+    ];
+    const rows = segmentKeywords.map((kw) => [
+      kw.keyword,
+      kw.search_volume ?? '',
+      kw.click_share != null ? kw.click_share.toString() : '',
+      kw.conversion_share != null ? kw.conversion_share.toString() : '',
+      kw.keyword_sales ?? '',
+      kw.efficiency_score != null ? kw.efficiency_score.toString() : '',
+      kw.classification ?? '',
+      kw.source ?? '',
+    ]);
+    const csvContent = [header, ...rows]
+      .map((row) => row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(','))
+      .join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `${selectedSegment?.replace(/\s+/g, '_').toLowerCase()}_keywords.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
 
   const topEntryColumns: Column<TopEntrySegment>[] = [
     { header: 'Segment', accessorKey: 'segment', cell: (row) => <span className="font-semibold text-sm">{row.segment}</span> },
@@ -273,10 +353,15 @@ export default function WhitespaceOpportunities() {
     },
   ];
 
-  const keywordColumns: Column<WhitespaceKeyword>[] = [
+  const keywordColumns: Column<WhitespaceKeyword | SegmentKeyword>[] = [
     { header: 'Keyword', accessorKey: 'keyword', cell: (row) => <span className="font-medium text-sm">{row.keyword || '—'}</span> },
     { header: 'Search Volume', accessorKey: 'search_volume', cell: (row) => <span className="font-mono text-sm">{formatNumber(row.search_volume ?? 0)}</span> },
+    { header: 'Click Share', accessorKey: 'click_share', cell: (row) => <span className="font-mono text-sm">{row.click_share != null ? `${row.click_share.toFixed(1)}%` : '—'}</span> },
+    { header: 'Conversion Share', accessorKey: 'conversion_share', cell: (row) => <span className="font-mono text-sm">{row.conversion_share != null ? `${row.conversion_share.toFixed(1)}%` : '—'}</span> },
     { header: 'Keyword Sales', accessorKey: 'keyword_sales', cell: (row) => <span className="font-mono text-sm">{formatNumber(row.keyword_sales ?? 0)}</span> },
+    { header: 'Efficiency Score', accessorKey: 'efficiency_score', cell: (row) => <span className="font-mono text-sm">{row.efficiency_score != null ? row.efficiency_score.toFixed(1) : '—'}</span> },
+    { header: 'Classification / Opportunity Type', accessorKey: 'classification', cell: (row) => <span className="text-sm text-muted-foreground">{row.classification ?? '—'}</span> },
+    { header: 'Source Dataset', accessorKey: 'source', cell: (row) => <span className="text-sm text-muted-foreground">{row.source ?? 'Magnet'}</span> },
     {
       header: 'Title Density',
       accessorKey: 'title_density',
@@ -419,7 +504,18 @@ export default function WhitespaceOpportunities() {
                   <XAxis dataKey="segment" stroke="hsl(var(--muted-foreground))" fontSize={10} angle={-32} textAnchor="end" height={80} interval={0} />
                   <YAxis stroke="hsl(var(--muted-foreground))" fontSize={11} tickFormatter={(v) => formatNumber(v)} axisLine={false} tickLine={false} />
                   <Tooltip content={<SegmentRevenueTip />} />
-                  <Bar dataKey="opportunity_revenue" fill="#f59e0b" radius={[4, 4, 0, 0]} maxBarSize={48} />
+                  <Bar
+                    dataKey="opportunity_revenue"
+                    fill="#f59e0b"
+                    radius={[4, 4, 0, 0]}
+                    maxBarSize={48}
+                    cursor="pointer"
+                    onClick={(event) => {
+                      if (event && 'payload' in event && event.payload?.segment) {
+                        handleSegmentClick(event.payload.segment);
+                      }
+                    }}
+                  />
                 </BarChart>
               </ResponsiveContainer>
             </CardContent>
@@ -458,6 +554,85 @@ export default function WhitespaceOpportunities() {
           <DataTable columns={keywordColumns} data={wsKeywords} pageSize={10} />
         </CardContent>
       </Card>
+
+      {selectedSegment && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/40 p-4 md:p-8">
+          <div className="mx-auto max-w-6xl rounded-3xl bg-background shadow-2xl border border-border overflow-hidden">
+            <div className="flex items-start justify-between gap-4 border-b border-border p-6">
+              <div>
+                <h2 className="text-xl font-semibold">{segmentModalTitle}</h2>
+                <p className="text-sm text-muted-foreground mt-1">
+                  {segmentKeywordCount.toLocaleString()} unique keywords counted in this segment
+                </p>
+              </div>
+              <button
+                type="button"
+                className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-muted text-muted-foreground hover:bg-muted/80"
+                onClick={handleCloseSegmentModal}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="border-b border-border p-6 space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Keyword count is calculated as the number of unique normalized keyword phrases assigned to this segment. Duplicates and blank keywords are removed before counting.
+              </p>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="rounded-xl border border-border bg-card p-4">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wide">Raw rows before dedupe</p>
+                  <p className="mt-2 text-lg font-semibold">{segmentRawRowCount.toLocaleString()}</p>
+                </div>
+                <div className="rounded-xl border border-border bg-card p-4">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wide">Unique keywords after dedupe</p>
+                  <p className="mt-2 text-lg font-semibold">{segmentKeywordCount.toLocaleString()}</p>
+                </div>
+                <div className="rounded-xl border border-border bg-card p-4">
+                  <p className="text-xs text-muted-foreground uppercase tracking-wide">Duplicate rows removed</p>
+                  <p className="mt-2 text-lg font-semibold">{segmentDuplicateRemovedCount.toLocaleString()}</p>
+                </div>
+              </div>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div className="text-sm text-muted-foreground">
+                  {segmentKeywordDetails?.success === false
+                    ? 'Unable to load keywords for this segment.'
+                    : 'Search and sort the table to inspect the keywords counted in the selected segment.'}
+                </div>
+                <button
+                  type="button"
+                  className="inline-flex items-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                  onClick={exportSegmentKeywordsCsv}
+                  disabled={!segmentKeywords.length}
+                >
+                  Export CSV
+                </button>
+              </div>
+            </div>
+            <div className="p-6">
+              {isSegmentLoading ? (
+                <div className="flex h-48 items-center justify-center text-muted-foreground">
+                  Loading keywords...
+                </div>
+              ) : (
+                <DataTable
+                  columns={[
+                    { header: 'Keyword', accessorKey: 'keyword', cell: (row) => <span className="font-medium text-sm">{row.keyword}</span> },
+                    { header: 'Search Volume', accessorKey: 'search_volume', cell: (row) => <span className="font-mono text-sm">{formatNumber(row.search_volume ?? 0)}</span> },
+                    { header: 'Click Share', accessorKey: 'click_share', cell: (row) => <span className="font-mono text-sm">{row.click_share != null ? `${row.click_share.toFixed(1)}%` : '—'}</span> },
+                    { header: 'Conversion Share', accessorKey: 'conversion_share', cell: (row) => <span className="font-mono text-sm">{row.conversion_share != null ? `${row.conversion_share.toFixed(1)}%` : '—'}</span> },
+                    { header: 'Keyword Sales', accessorKey: 'keyword_sales', cell: (row) => <span className="font-mono text-sm">{formatNumber(row.keyword_sales ?? 0)}</span> },
+                    { header: 'Efficiency Score', accessorKey: 'efficiency_score', cell: (row) => <span className="font-mono text-sm">{row.efficiency_score != null ? row.efficiency_score.toFixed(1) : '—'}</span> },
+                    { header: 'Classification / Opportunity Type', accessorKey: 'classification', cell: (row) => <span className="text-sm text-muted-foreground">{row.classification ?? '—'}</span> },
+                    { header: 'Source Dataset', accessorKey: 'source', cell: (row) => <span className="text-sm text-muted-foreground">{row.source ?? 'Magnet'}</span> },
+                  ]}
+                  data={segmentKeywords}
+                  pageSize={15}
+                  searchable={true}
+                />
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
     </motion.div>
   );

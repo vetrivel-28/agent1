@@ -22,6 +22,7 @@ Numeric cleaning is applied before every normalisation step.
 """
 from __future__ import annotations
 
+import re
 import time
 from typing import Any, Dict, List, Optional
 
@@ -58,6 +59,147 @@ _TREND_CANDIDATES = [
 _IQ_CANDIDATES = [
     "Cerebro IQ Score", "cerebro iq score", "IQ Score", "iq score", "IQ",
 ]
+_CLICK_SHARE_CANDIDATES = [
+    "ABA Total Click Share", "ABA Total Click Share (%)", "Click Share", "click share"
+]
+_CONV_SHARE_CANDIDATES = [
+    "ABA Total Conv. Share", "ABA Total Conversion Share", "Conversion Share", "conversion share"
+]
+
+_SEGMENT_COLUMN_CANDIDATES = [
+    "Segment", "segment",
+    "Category", "category",
+    "Theme", "theme",
+    "Classification", "classification",
+    "Product Theme", "product theme",
+    "Keyword Category", "keyword category",
+]
+
+_PRICE_CANDIDATES = [
+    "Estimated Price", "ASP", "Average Selling Price", "avg selling price",
+    "Price", "price", "List Price", "list price",
+]
+
+_REVENUE_CANDIDATES = [
+    "Keyword Revenue", "keyword revenue", "Revenue", "revenue",
+    "Estimated Revenue", "estimated revenue",
+]
+
+_STOP_SEGMENT_WORDS = {
+    "for", "and", "the", "with", "in", "of", "a", "an", "to", "on", "at", "by",
+    "from", "or", "as", "is", "it", "be", "are", "was", "were", "has", "have",
+    "women", "womens", "men", "mens", "large", "small", "new", "best", "top",
+    "good", "great", "thin", "thick", "pack", "set", "lot", "sale", "buy",
+}
+
+
+def _normalize_keyword_text(keyword: Any) -> Optional[str]:
+    if keyword is None or pd.isna(keyword):
+        return None
+    normalized = re.sub(r"\s+", " ", str(keyword).strip()).lower()
+    return normalized if normalized != "" else None
+
+
+def _build_keyword_classification_map(kc_df: Optional[pd.DataFrame]) -> Dict[str, str]:
+    if kc_df is None or kc_df.empty:
+        return {}
+    kw_col = find_column(kc_df, _KEYWORD_CANDIDATES)
+    class_col = find_column(kc_df, [
+        "classification", "Classification",
+        "category", "Category",
+        "segment", "Segment",
+        "theme", "Theme",
+    ])
+    if not kw_col or not class_col:
+        return {}
+
+    mapping: Dict[str, str] = {}
+    for _, row in kc_df[[kw_col, class_col]].iterrows():
+        normalized = _normalize_keyword_text(row.get(kw_col))
+        label = str(row.get(class_col, "")).strip()
+        if normalized and label:
+            if normalized not in mapping:
+                mapping[normalized] = label
+    return mapping
+
+
+def _assign_dynamic_segment(keyword: str) -> str:
+    normalized = _normalize_keyword_text(keyword)
+    if not normalized:
+        return "General Search Terms"
+    tokens = [
+        re.sub(r"[^a-z0-9]+", "", token)
+        for token in normalized.split()
+        if token and token not in _STOP_SEGMENT_WORDS
+    ]
+    tokens = [token for token in tokens if len(token) > 2]
+    if tokens:
+        root = max(tokens, key=len)
+        return f"{root.title()} Segment"
+    return "General Search Terms"
+
+
+def _compute_conversion_efficiency_score(
+    click_share: Optional[float],
+    conversion_share: Optional[float],
+) -> Optional[float]:
+    if click_share is None or conversion_share is None:
+        return None
+    if click_share <= 0:
+        return None
+    score = (conversion_share / click_share) * 100.0
+    return float(np.clip(score, 0.0, 100.0))
+
+
+def _keyword_revenue_value(row: Dict[str, Any]) -> float:
+    sales = float(row.get("_sales_clean", 0) or 0)
+    price = float(row.get("_price_clean", 0) or 0)
+    revenue = float(row.get("_revenue_clean", 0) or 0)
+    if sales > 0 and price > 0:
+        return round(sales * price, 2)
+    if revenue > 0:
+        return round(revenue, 2)
+    if sales > 0:
+        return round(sales, 2)
+    return 0.0
+
+
+def _build_segment_keyword_record(row: Dict[str, Any], keyword_col: str) -> Dict[str, Any]:
+    normalized_keyword = _normalize_keyword_text(row.get(keyword_col)) or ""
+    click_share = float(row.get("_click_clean")) if pd.notna(row.get("_click_clean")) else None
+    conversion_share = float(row.get("_conv_clean")) if pd.notna(row.get("_conv_clean")) else None
+    return {
+        "keyword": str(row[keyword_col]).strip() if keyword_col and row.get(keyword_col) is not None else "",
+        "normalized_keyword": normalized_keyword,
+        "search_volume": int(row.get("_vol_clean", 0)) if pd.notna(row.get("_vol_clean")) else 0,
+        "click_share": click_share,
+        "conversion_share": conversion_share,
+        "keyword_sales": int(row.get("_sales_clean", 0)) if pd.notna(row.get("_sales_clean")) else 0,
+        "conversion_efficiency_score": _compute_conversion_efficiency_score(click_share, conversion_share),
+        "opportunity_score": _format_score(float(row.get("_opp_score", 0))) if row.get("_opp_score") is not None else None,
+        "classification": str(row.get("_opp_label", "")) if row.get("_opp_label") is not None else "",
+        "source_dataset": "Magnet",
+        "title_density": float(row.get("_density_clean")) if pd.notna(row.get("_density_clean")) else None,
+    }
+
+
+def _dedupe_keyword_rows(rows: List[Dict[str, Any]], keyword_col: str) -> List[Dict[str, Any]]:
+    seen: set[str] = set()
+    ordered: List[Dict[str, Any]] = []
+    sorted_rows = sorted(
+        rows,
+        key=lambda r: (
+            -float(r.get("_opp_score", 0) or 0),
+            -float(r.get("_sales_clean", 0) or 0),
+        ),
+    )
+    for row in sorted_rows:
+        normalized = _normalize_keyword_text(row.get(keyword_col))
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        ordered.append(row)
+    return ordered
 
 
 def _classify_opportunity(score: float) -> str:
@@ -151,6 +293,7 @@ def _percentile_rank(series: pd.Series) -> pd.Series:
 def run(
     magnet_df: Optional[pd.DataFrame],
     blackbox_df: Optional[pd.DataFrame],
+    keyword_classification_df: Optional[pd.DataFrame] = None,
     top_n: int = 15,
 ) -> Dict[str, Any]:
     t0 = time.time()
@@ -188,12 +331,23 @@ def run(
             return clean
         return pd.Series(0.0, index=df.index)
 
+    click_share_col = find_column(df, _CLICK_SHARE_CANDIDATES)
+    conv_share_col = find_column(df, _CONV_SHARE_CANDIDATES)
+    price_col = find_column(df, _PRICE_CANDIDATES)
+    revenue_col = find_column(df, _REVENUE_CANDIDATES)
+
     df["_vol_clean"]     = process_col(search_vol_col)
     df["_density_clean"] = process_col(title_density_col)
     df["_sales_clean"]   = process_col(sales_col)
     df["_comp_clean"]    = process_col(comp_col)
     df["_trend_clean"]   = process_col(trend_col)
     df["_iq_clean"]      = process_col(iq_col)
+    df["_click_clean"]   = process_col(click_share_col)
+    df["_conv_clean"]    = process_col(conv_share_col)
+    df["_price_clean"]   = process_col(price_col)
+    df["_revenue_clean"] = process_col(revenue_col)
+
+    classification_map = _build_keyword_classification_map(keyword_classification_df)
 
     df_valid = df.dropna(subset=["_vol_clean"]).copy()
     rows_before  = len(df)
@@ -362,7 +516,7 @@ def run(
 
     df_high_extreme = df_valid.loc[high_extreme_mask] if high_extreme_mask.any() else df_sorted.head(0)
     entry_segments, best_entry_cluster, segments_reliable = _build_entry_segments(
-        df_high_extreme, keyword_col
+        df_high_extreme, keyword_col, classification_map
     )
     top_entry_segments = _build_top_entry_segments_analysis(entry_segments)
 
@@ -528,15 +682,34 @@ def _recommended_action(priority: str) -> str:
 def _build_entry_segments(
     df_opp: pd.DataFrame,
     keyword_col: Optional[str],
+    classification_map: Optional[Dict[str, str]] = None,
     min_cluster_size: int = 3,
 ) -> tuple:
     """Aggregate high/extreme opportunity keywords into entry segments."""
     if df_opp.empty or not keyword_col or keyword_col not in df_opp.columns:
         return [], None, False
 
+    segment_col = find_column(df_opp, _SEGMENT_COLUMN_CANDIDATES)
+    classification_map = classification_map or {}
+
     buckets: Dict[str, List[Dict[str, Any]]] = {}
-    for row in df_opp.to_dict('records'):
-        label = _assign_entry_segment(str(row[keyword_col]))
+    for row in df_opp.to_dict("records"):
+        normalized_keyword = _normalize_keyword_text(row.get(keyword_col))
+        if not normalized_keyword:
+            continue
+
+        label = None
+        if segment_col and row.get(segment_col) is not None:
+            label_value = str(row.get(segment_col)).strip()
+            if label_value:
+                label = label_value
+
+        if not label and normalized_keyword in classification_map:
+            label = classification_map[normalized_keyword]
+
+        if not label:
+            label = _assign_dynamic_segment(str(row[keyword_col]))
+
         buckets.setdefault(label, []).append(row)
 
     merged: Dict[str, List[Dict[str, Any]]] = {}
@@ -551,25 +724,35 @@ def _build_entry_segments(
 
     segments: List[Dict[str, Any]] = []
     for label, rows in merged.items():
-        sales = [float(r["_sales_clean"]) if pd.notna(r["_sales_clean"]) else 0.0 for r in rows]
-        weighted = [
-            float(r["_sales_clean"] if pd.notna(r["_sales_clean"]) else 0.0)
-            * float(r["_opp_score"]) / 100.0
-            for r in rows
-        ]
-        rev = round(sum(weighted), 2)
-        mean_vol = float(np.mean([float(r["_vol_clean"]) for r in rows]))
-        mean_comp = float(np.mean([float(r["_comp_pct"]) for r in rows]))
-        drivers = [str(r["_opp_driver"]) for r in rows]
+        unique_rows = _dedupe_keyword_rows(rows, keyword_col)
+        raw_row_count = len(rows)
+        keyword_records = [_build_segment_keyword_record(row, keyword_col) for row in unique_rows]
+        keyword_count = len(keyword_records)
+
+        revenue = round(sum(_keyword_revenue_value(row) for row in unique_rows), 2)
+        mean_vol = float(np.mean([float(r["_vol_clean"]) for r in unique_rows])) if unique_rows else 0.0
+        mean_comp = float(np.mean([float(r["_comp_pct"]) for r in unique_rows])) if unique_rows else 0.0
+        drivers = [str(r["_opp_driver"]) for r in unique_rows]
         primary_driver = max(set(drivers), key=drivers.count) if drivers else "—"
+        avg_opportunity_score = (
+            round(float(np.mean([_format_score(float(r.get("_opp_score", 0) or 0)) for r in unique_rows])), 2)
+            if unique_rows else None
+        )
+
         segments.append({
             "segment": label,
-            "keyword_count": len(rows),
-            "opportunity_revenue": rev,
-            "revenue_represented": rev,
+            "opportunity_keywords": keyword_count,
+            "keyword_count": keyword_count,
+            "unique_keywords_after_dedupe": keyword_count,
+            "raw_rows_before_dedupe": raw_row_count,
+            "duplicate_rows_removed": raw_row_count - keyword_count,
+            "opportunity_revenue": revenue,
+            "revenue_represented": revenue,
             "mean_search_volume": mean_vol,
             "mean_competition_pct": mean_comp,
             "primary_driver": primary_driver,
+            "keywords": keyword_records,
+            "avg_opportunity_score": avg_opportunity_score,
         })
 
     if len(segments) >= 2:
@@ -585,17 +768,49 @@ def _build_entry_segments(
         for seg, spread in zip(segments, spread_scores):
             seg["avg_opportunity_score"] = round(float(spread), 2)
     elif len(segments) == 1:
-        segments[0]["avg_opportunity_score"] = 75.0
+        if segments[0]["avg_opportunity_score"] is None:
+            segments[0]["avg_opportunity_score"] = 75.0
+
+    for seg in segments:
+        keyword_length = len(seg.get("keywords", []))
+        if seg.get("opportunity_keywords") != keyword_length:
+            logger.error(
+                "Segment '%s' opportunity_keywords mismatch: %s vs actual keywords %s",
+                seg.get("segment"),
+                seg.get("opportunity_keywords"),
+                keyword_length,
+            )
+            seg["opportunity_keywords"] = keyword_length
+        if seg.get("keyword_count") != keyword_length:
+            seg["keyword_count"] = keyword_length
+        if seg.get("unique_keywords_after_dedupe") != keyword_length:
+            seg["unique_keywords_after_dedupe"] = keyword_length
+        expected_dupes = seg.get("raw_rows_before_dedupe", 0) - keyword_length
+        if seg.get("duplicate_rows_removed") != expected_dupes:
+            logger.error(
+                "Segment '%s' duplicate_removed_count recalculated: %s -> %s",
+                seg.get("segment"),
+                seg.get("duplicate_rows_removed"),
+                expected_dupes,
+            )
+            seg["duplicate_rows_removed"] = expected_dupes
 
     segments.sort(
-        key=lambda s: (s["opportunity_revenue"], s["avg_opportunity_score"], s["keyword_count"]),
+        key=lambda s: (
+            s["opportunity_revenue"],
+            s.get("avg_opportunity_score") or 0,
+            s["keyword_count"],
+        ),
         reverse=True,
     )
     max_revenue = segments[0]["opportunity_revenue"] if segments else 0.0
     for rank, seg in enumerate(segments, start=1):
         seg["rank"] = rank
         priority = _recommended_priority(
-            rank, seg["avg_opportunity_score"], seg["opportunity_revenue"], max_revenue
+            rank,
+            float(seg.get("avg_opportunity_score") if seg.get("avg_opportunity_score") is not None else 0.0),
+            seg["opportunity_revenue"],
+            max_revenue,
         )
         seg["recommended_priority"] = priority
         seg["competitive_intensity"] = _competitive_intensity_label(
@@ -610,6 +825,129 @@ def _build_entry_segments(
         and any(s["keyword_count"] >= min_cluster_size for s in segments[1:3])
     )
     return segments, best, reliable
+
+
+def get_revenue_segment_keywords(
+    magnet_df: Optional[pd.DataFrame],
+    segment_name: str,
+) -> Dict[str, Any]:
+    if magnet_df is None or magnet_df.empty:
+        return {
+            "success": False,
+            "segment": segment_name,
+            "raw_row_count": 0,
+            "duplicate_removed_count": 0,
+            "keyword_count": 0,
+            "keywords": [],
+        }
+
+    keyword_col = find_column(magnet_df, _KEYWORD_CANDIDATES)
+    if not keyword_col:
+        return {
+            "success": False,
+            "segment": segment_name,
+            "raw_row_count": 0,
+            "duplicate_removed_count": 0,
+            "keyword_count": 0,
+            "keywords": [],
+        }
+
+    search_vol_col = find_column(magnet_df, _SEARCH_VOL_CANDIDATES)
+    title_density_col = find_column(magnet_df, _TITLE_DENSITY_CANDIDATES)
+    sales_col = find_column(magnet_df, _SALES_CANDIDATES)
+    comp_col = find_column(magnet_df, _COMP_CANDIDATES)
+    trend_col = find_column(magnet_df, _TREND_CANDIDATES)
+    iq_col = find_column(magnet_df, _IQ_CANDIDATES)
+    click_share_col = find_column(magnet_df, _CLICK_SHARE_CANDIDATES)
+    conv_share_col = find_column(magnet_df, _CONV_SHARE_CANDIDATES)
+
+    df = magnet_df.copy()
+
+    def process_col(col_name: Optional[str]) -> pd.Series:
+        if col_name:
+            clean, _ = clean_numeric_series(df[col_name], col_name)
+            return clean
+        return pd.Series(0.0, index=df.index)
+
+    df["_vol_clean"] = process_col(search_vol_col)
+    df["_density_clean"] = process_col(title_density_col)
+    df["_sales_clean"] = process_col(sales_col)
+    df["_comp_clean"] = process_col(comp_col)
+    df["_trend_clean"] = process_col(trend_col)
+    df["_iq_clean"] = process_col(iq_col)
+    df["_click_clean"] = process_col(click_share_col)
+    df["_conv_clean"] = process_col(conv_share_col)
+
+    df_valid = df.dropna(subset=["_vol_clean"]).copy()
+    if df_valid.empty:
+        return {
+            "success": False,
+            "segment": segment_name,
+            "raw_row_count": 0,
+            "duplicate_removed_count": 0,
+            "keyword_count": 0,
+            "keywords": [],
+        }
+
+    sales_series = df_valid["_sales_clean"].fillna(0)
+    df_valid["_sales_pct"] = 0.0
+    sales_positive_mask = sales_series > 0
+    if int(sales_positive_mask.sum()) >= 2:
+        df_valid.loc[sales_positive_mask, "_sales_pct"] = _percentile_rank(
+            sales_series[sales_positive_mask]
+        )
+    df_valid["_comp_pct"] = _percentile_rank(df_valid["_comp_clean"])
+    df_valid["_inv_comp_pct"] = 100.0 - df_valid["_comp_pct"]
+    composite_signal = (
+        0.40 * _percentile_rank(df_valid["_vol_clean"].fillna(0.0))
+        + 0.35 * df_valid["_sales_pct"].fillna(0.0)
+        + 0.25 * df_valid["_inv_comp_pct"].fillna(0.0)
+    )
+    df_valid["_opp_score"] = _percentile_rank(composite_signal)
+    df_valid["_opp_label"] = [_classify_opportunity(x) for x in df_valid["_opp_score"]]
+    df_valid["_opp_driver"] = [
+        _opportunity_driver(v, s, c)
+        for v, s, c in zip(df_valid["_vol_clean"], df_valid["_sales_pct"], df_valid["_inv_comp_pct"])
+    ]
+
+    high_extreme_mask = df_valid["_opp_label"].isin(["High Opportunity", "Extreme Opportunity"])
+    df_high_extreme = df_valid.loc[high_extreme_mask] if high_extreme_mask.any() else df_valid.head(0)
+    classification_map = _build_keyword_classification_map(None)
+    segments, _, _ = _build_entry_segments(df_high_extreme, keyword_col, classification_map)
+
+    for seg in segments:
+        if seg["segment"] == segment_name:
+            return {
+                "success": True,
+                "segment": segment_name,
+                "opportunity_revenue": seg.get("opportunity_revenue", 0.0),
+                "opportunity_keywords": seg.get("opportunity_keywords", 0),
+                "keyword_count": seg.get("keyword_count", 0),
+                "avg_opportunity_score": seg.get("avg_opportunity_score"),
+                "raw_rows_before_dedupe": seg.get("raw_rows_before_dedupe", 0),
+                "unique_keywords_after_dedupe": seg.get("unique_keywords_after_dedupe", 0),
+                "duplicate_rows_removed": seg.get("duplicate_rows_removed", 0),
+                "raw_row_count": seg.get("raw_rows_before_dedupe", 0),
+                "duplicate_removed_count": seg.get("duplicate_rows_removed", 0),
+                "recommended_priority": seg.get("recommended_priority", "Evaluate"),
+                "keywords": seg.get("keywords", []),
+            }
+
+    return {
+        "success": False,
+        "segment": segment_name,
+        "opportunity_revenue": 0.0,
+        "opportunity_keywords": 0,
+        "keyword_count": 0,
+        "avg_opportunity_score": None,
+        "raw_rows_before_dedupe": 0,
+        "unique_keywords_after_dedupe": 0,
+        "duplicate_rows_removed": 0,
+        "raw_row_count": 0,
+        "duplicate_removed_count": 0,
+        "recommended_priority": "Evaluate",
+        "keywords": [],
+    }
 
 
 def _recommended_priority(
