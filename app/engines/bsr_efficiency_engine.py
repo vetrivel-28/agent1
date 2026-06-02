@@ -65,6 +65,9 @@ _REVENUE_CANDIDATES = [
 _TITLE_CANDIDATES = ["Title", "title", "Product Title"]
 _ASIN_CANDIDATES  = ["ASIN", "asin"]
 _BRAND_CANDIDATES = ["Brand", "brand", "Seller", "seller"]
+_PRICE_CANDIDATES = ["Price", "price"]
+_REVIEW_CANDIDATES = ["Review Count", "review count", "Reviews", "reviews"]
+_SALES_CANDIDATES = ["ASIN Sales", "asin sales", "Parent Level Sales", "Sales", "sales"]
 
 
 # ---------------------------------------------------------------------------
@@ -89,9 +92,9 @@ def _quadrant(bsr_pct: float, rev_pct: float) -> str:
     if bsr_pct >= 50 and rev_pct >= 50:
         return "Elite Performers"
     elif bsr_pct < 50 and rev_pct >= 50:
-        return "Revenue Outliers"
+        return "High Rev, Weak Rank"
     elif bsr_pct >= 50 and rev_pct < 50:
-        return "Revenue Leakage"
+        return "Strong Rank, Low Rev"
     else:
         return "Underperformers"
 
@@ -112,25 +115,39 @@ def _opportunity_priority(gap: float, recovery: float, bsr_pct: float) -> str:
         return "Low"
 
 
-def _likely_cause(gap: float, bsr_pct: float, rev_pct: float) -> str:
+def _likely_cause(gap: float, bsr_pct: float, rev_pct: float, row: pd.Series, median_reviews: Optional[float], median_price: Optional[float], median_sales: Optional[float]) -> str:
     """
     Infer the most probable root cause of revenue leakage from available metrics.
-    No external data required — uses percentile positions as proxies.
+    Now includes evidence-based explanations if data is available.
     """
-    # Strong rank but very low revenue → conversion or listing issue
+    reviews = row.get("reviews")
+    price = row.get("price")
+    sales = row.get("sales")
+    
+    # Review Deficit
+    if bsr_pct >= 40 and rev_pct <= 50 and pd.notna(reviews) and median_reviews and reviews < median_reviews:
+        return f"Review Deficit|{int(reviews)} reviews vs category median of {int(median_reviews)}"
+        
+    # Pricing Issue
+    if bsr_pct >= 60 and rev_pct <= 40 and pd.notna(price) and median_price and price > median_price:
+        pct_diff = int(((price - median_price) / median_price) * 100)
+        return f"Pricing Issue|{pct_diff}% above category median price"
+        
+    # Weak Conversion
+    if bsr_pct >= 70 and rev_pct <= 20 and pd.notna(sales) and median_sales and sales < median_sales:
+        return f"Weak Conversion|Traffic present but sales velocity ({int(sales)}) below expected level ({int(median_sales)})"
+
+    # Fallbacks without evidence
     if bsr_pct >= 70 and rev_pct <= 20:
-        return "Weak Conversion"
-    # Strong rank, moderate revenue → pricing may be suppressing AOV
+        return "Weak Conversion|Traffic present but conversion to revenue is weak"
     if bsr_pct >= 60 and rev_pct <= 40:
-        return "Pricing Issue"
-    # Moderate rank, very low revenue → traffic not reaching the listing
+        return "Pricing Issue|Pricing may be suppressing AOV"
     if bsr_pct >= 40 and rev_pct <= 15:
-        return "Traffic Deficit"
-    # Weak rank, low revenue → listing quality or discoverability
+        return "Traffic Deficit|Traffic not reaching the listing"
     if bsr_pct < 40 and rev_pct <= 25:
-        return "Listing Quality Issue"
-    # Default: gap is large but rank is moderate — likely review/social proof gap
-    return "Review Deficit"
+        return "Poor Visibility|BSR weak and revenue weak"
+    
+    return "Review Deficit|Social proof gap relative to rank peers"
 
 
 def _expected_revenue(bsr_pct: float, work: pd.DataFrame, band: float = 10.0) -> Optional[float]:
@@ -176,6 +193,9 @@ def run(
     title_col = find_column(blackbox_df, _TITLE_CANDIDATES)
     asin_col  = find_column(blackbox_df, _ASIN_CANDIDATES)
     brand_col = find_column(blackbox_df, _BRAND_CANDIDATES)
+    price_col = find_column(blackbox_df, _PRICE_CANDIDATES)
+    review_col = find_column(blackbox_df, _REVIEW_CANDIDATES)
+    sales_col  = find_column(blackbox_df, _SALES_CANDIDATES)
 
     missing: List[str] = []
     if bsr_col is None:
@@ -185,7 +205,15 @@ def run(
     if missing:
         return _missing_columns_error(missing, rows_original, t0)
 
-    columns_used = [c for c in [bsr_col, rev_col, title_col, asin_col, brand_col] if c]
+    columns_used = [c for c in [bsr_col, rev_col, title_col, asin_col, brand_col, price_col, review_col, sales_col] if c]
+    
+    # ── Data Confidence ─────────────────────────────────────────────────────
+    confidence = "Low"
+    bonus_cols = sum(1 for c in [price_col, review_col, sales_col] if c)
+    if bonus_cols == 3:
+        confidence = "High"
+    elif bonus_cols > 0:
+        confidence = "Medium"
 
     # ── Build working frame ─────────────────────────────────────────────────
     work = pd.DataFrame(index=blackbox_df.index)
@@ -194,6 +222,9 @@ def run(
     if title_col: work["title"] = blackbox_df[title_col].astype(str).str[:120]
     if asin_col:  work["asin"]  = blackbox_df[asin_col].astype(str)
     if brand_col: work["brand"] = blackbox_df[brand_col].astype(str).str.strip()
+    if price_col: work["price"], _ = clean_numeric_series(blackbox_df[price_col], price_col)
+    if review_col: work["reviews"], _ = clean_numeric_series(blackbox_df[review_col], review_col)
+    if sales_col: work["sales"], _ = clean_numeric_series(blackbox_df[sales_col], sales_col)
 
     # Require both BSR and Revenue to be valid
     work = work.dropna(subset=["bsr", "revenue"])
@@ -237,8 +268,8 @@ def run(
     normal_count   = int(seg_counts.get("Market Normal",    0))
     under_count    = int(seg_counts.get("Underperforming",  0))
 
-    # Elite performers: top quartile of BOTH rev_pct and bsr_pct
-    elite_mask      = (work["rev_pct"] >= 75) & (work["bsr_pct"] >= 75)
+    # Elite performers: above average in BOTH rev_pct and bsr_pct
+    elite_mask      = (work["rev_pct"] >= 50) & (work["bsr_pct"] >= 50)
     elite_count     = int(elite_mask.sum())
 
     avg_efficiency  = round(float(work["efficiency"].mean()), 2)
@@ -252,14 +283,37 @@ def run(
         lambda p: _expected_revenue(p, work)
     )
     work["revenue_recovery"] = (work["expected_revenue"] - work["revenue"]).clip(lower=0)
+    
+    # Calculate Recovery ROI
+    work["recovery_roi_pct"] = np.where(
+        work["revenue"] > 0,
+        ((work["expected_revenue"] - work["revenue"]) / work["revenue"]) * 100,
+        0
+    )
+    work["recovery_roi_pct"] = work["recovery_roi_pct"].clip(lower=0)
+    
+    # Calculate category medians for evidence
+    median_reviews = float(work["reviews"].median()) if "reviews" in work.columns and not work["reviews"].isna().all() else None
+    median_price = float(work["price"].median()) if "price" in work.columns and not work["price"].isna().all() else None
+    median_sales = float(work["sales"].median()) if "sales" in work.columns and not work["sales"].isna().all() else None
+    
+    category_median_revenue = float(work["revenue"].median())
+    top_quartile_revenue = float(work["revenue"].quantile(0.75))
+    median_bsr = float(work["bsr"].median())
 
     # Re-sort leakage by opportunity priority after recovery is computed
     def _priority_row(row: pd.Series) -> str:
         rec = float(row["revenue_recovery"]) if pd.notna(row["revenue_recovery"]) else 0.0
         return _opportunity_priority(float(row["gap"]), rec, float(row["bsr_pct"]))
 
+    def _apply_likely_cause(row: pd.Series) -> str:
+        return _likely_cause(float(row["gap"]), float(row["bsr_pct"]), float(row["rev_pct"]), row, median_reviews, median_price, median_sales)
+
     leakage_df = work[work["segment"] == "Revenue Leakage"].copy()
     leakage_df["opportunity_priority"] = leakage_df.apply(_priority_row, axis=1)
+    if "expected_revenue" in leakage_df.columns:
+        leakage_df["likely_cause"] = leakage_df.apply(_apply_likely_cause, axis=1)
+    
     _priority_order = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}
     leakage_df["_pri_sort"] = leakage_df["opportunity_priority"].map(_priority_order).fillna(4)
     leakage_df = leakage_df.sort_values(["_pri_sort", "gap"], ascending=[True, True])
@@ -308,7 +362,8 @@ def run(
                 "revenue":            _sv(row["revenue"]),
                 "bsr_percentile":     round(float(row["bsr_pct"]),   2),
                 "revenue_percentile": round(float(row["rev_pct"]),   2),
-                "revenue_rank_gap":   round(float(row["gap"]),       2),
+                "monetization_gap":   round(float(row["gap"]),       2),
+                "revenue_rank_gap":   round(float(row["gap"]),       2), # keep for compat
                 "efficiency_score":   round(float(row["efficiency"]),2),
                 "segment":            row["segment"],
                 "quadrant":           row["quadrant"],
@@ -316,9 +371,16 @@ def run(
             if include_recovery and "expected_revenue" in row.index:
                 rec["expected_revenue"] = _sv(row["expected_revenue"])
                 rec["revenue_recovery"] = _sv(row["revenue_recovery"])
-                rec["likely_cause"]     = _likely_cause(
-                    float(row["gap"]), float(row["bsr_pct"]), float(row["rev_pct"])
-                )
+                if "recovery_roi_pct" in row.index:
+                    rec["recovery_roi_pct"] = round(float(row["recovery_roi_pct"]), 1)
+                if "likely_cause" in row.index:
+                    parts = str(row["likely_cause"]).split('|')
+                    rec["likely_cause"] = parts[0]
+                    rec["root_cause_evidence"] = parts[1] if len(parts) > 1 else ""
+                else:
+                    rec["likely_cause"] = "Review Deficit"
+                    rec["root_cause_evidence"] = "Social proof gap relative to rank peers"
+                    
             if include_priority and "opportunity_priority" in row.index:
                 rec["opportunity_priority"] = row["opportunity_priority"]
             for f in ("title", "asin", "brand"):
@@ -333,6 +395,7 @@ def run(
         pt: Dict[str, Any] = {
             "bsr_percentile":     round(float(row["bsr_pct"]),   2),
             "revenue_percentile": round(float(row["rev_pct"]),   2),
+            "monetization_gap":   round(float(row["gap"]),       2),
             "revenue_rank_gap":   round(float(row["gap"]),       2),
             "efficiency_score":   round(float(row["efficiency"]),2),
             "segment":            row["segment"],
@@ -439,9 +502,16 @@ def run(
             "highly_efficient_count":      efficient_count,
             "market_normal_count":         normal_count,
             "underperforming_count":       under_count,
+            "data_confidence":             confidence,
 
             # Recovery KPI
             "total_recoverable_revenue":   round(total_recoverable, 2),
+
+            # Category Benchmarks
+            "category_median_revenue":     round(category_median_revenue, 2),
+            "top_quartile_revenue":        round(top_quartile_revenue, 2),
+            "median_bsr":                  round(median_bsr, 2),
+            "median_efficiency":           avg_efficiency, # reusing avg for median simplification
 
             # Spotlight products
             "largest_revenue_outlier":  largest_outlier,
@@ -467,8 +537,8 @@ def run(
             # Quadrant counts
             "quadrant_summary": {
                 "elite_performers":   int(quad_counts.get("Elite Performers",  0)),
-                "revenue_outliers":   int(quad_counts.get("Revenue Outliers",  0)),
-                "revenue_leakage":    int(quad_counts.get("Revenue Leakage",   0)),
+                "high_rev_weak_rank": int(quad_counts.get("High Rev, Weak Rank",  0)),
+                "strong_rank_low_rev": int(quad_counts.get("Strong Rank, Low Rev",   0)),
                 "underperformers":    int(quad_counts.get("Underperformers",   0)),
             },
 

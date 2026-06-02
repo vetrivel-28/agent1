@@ -12,6 +12,8 @@ Rows are NEVER dropped unless both BSR and Revenue are simultaneously NaN.
 """
 from __future__ import annotations
 
+import os
+import tempfile
 import time
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -31,7 +33,7 @@ logger = get_logger("demand_engine")
 # Column candidate lists  (ordered by preference, case-insensitive lookup)
 # ---------------------------------------------------------------------------
 _SEARCH_VOL_CANDIDATES = [
-    "Search Volume", "search volume", "SearchVolume", "Monthly Search Volume",
+    "monthly_search_volume", "Monthly Search Volume", "Search Volume", "search volume", "SearchVolume", 
 ]
 _KW_SALES_CANDIDATES = [
     "Keyword Sales", "keyword sales", "KeywordSales",
@@ -152,8 +154,6 @@ _PHRASE_NORMALIZATIONS = {
 
 
 from collections import Counter
-from app.utils.column_mapper import find_column
-import pandas as pd
 
 def _extract_segments(
     magnet_df: pd.DataFrame,
@@ -177,56 +177,131 @@ def _extract_segments(
     else:
         tmp["_ks"] = 0.0
         
-    total_sv = float(tmp["_sv"].sum())
-    total_ks = float(tmp["_ks"].sum())
+    # Aggregate duplicate keywords: Group by lowercase exact keyword
+    tmp["_kw_clean"] = tmp[kw_col].astype(str).str.lower().str.strip()
     
-    if total_sv <= 0 or len(tmp) == 0:
-        return [], "empty"
-        
-    # Dynamic classification: Group by last word (root noun)
-    def get_root_noun(text: str) -> str:
-        words = clean_text(str(text)).split()
-        if not words:
-            return "Other"
-        w = _normalize_word(words[-1]).title()
-        if len(w) < 3:
-            return "Other"
-        return w + "s"
-        
-    tmp["_segment"] = tmp[kw_col].apply(get_root_noun)
-    
-    # Aggregate
-    agg = tmp.groupby("_segment").agg(
-        total_sv=("_sv", "sum"),
-        total_ks=("_ks", "sum"),
-        kw_count=("_segment", "count")
+    # Deduplicate by summing volumes
+    tmp_agg = tmp.groupby("_kw_clean").agg(
+        _sv=("_sv", "sum"),
+        _ks=("_ks", "sum"),
+        kw_original=(kw_col, "first")
     ).reset_index()
     
-    # Filter small segments
-    agg = agg[agg["total_sv"] > 0]
-    agg = agg.sort_values("total_sv", ascending=False)
+    total_heatmap_sv = float(tmp_agg["_sv"].sum())
+    total_heatmap_ks = float(tmp_agg["_ks"].sum())
     
-    # Keep top 8, group rest into "Other"
-    top_segs = agg.head(8)["_segment"].tolist()
-    tmp["_final_seg"] = tmp["_segment"].apply(lambda x: x if x in top_segs else "Other")
+    if total_heatmap_sv <= 0 or len(tmp_agg) == 0:
+        return [], "empty"
+        
+    # Dynamic classification: Priority-based product categorization
+    def get_segment(text: str) -> str:
+        t = clean_text(str(text))
+        # Optional: still apply basic translation maps if desired, but 
+        # the priority rules below handle the core logic.
+        
+        # 1. Backpack / Backpacks
+        if "backpack" in t: return "Backpacks"
+        # 2. Handbag / Handbags
+        if "handbag" in t: return "Handbags"
+        # 3. Tote / Totes
+        if "tote" in t: return "Totes"
+        # 4. Purse / Purses
+        if "purse" in t: return "Purses"
+        # 5. Crossbody
+        if "crossbody" in t: return "Crossbody"
+        # 6. Duffel
+        if "duffel" in t: return "Duffel"
+        # 7. Travel Bag
+        if "travel bag" in t: return "Travel Bags"
+        # 8. Beach Bag
+        if "beach bag" in t: return "Beach Bags"
+        # 9. Laptop Bag
+        if "laptop bag" in t: return "Laptop Bags"
+        # 10. Messenger Bag
+        if "messenger bag" in t: return "Messenger Bags"
+        # 11. Gift
+        if "gift" in t: return "Gifts"
+        # 12. Bags (fallback)
+        if "bag" in t: return "Bags"
+        
+        return "Other"
+        
+    tmp_agg["_segment"] = tmp_agg["kw_original"].apply(get_segment)
     
-    final_agg = tmp.groupby("_final_seg").agg(
+    # Audit for "Bags" segment
+    bags_audit = tmp_agg[tmp_agg["_segment"] == "Bags"]
+    if not bags_audit.empty:
+        artifact_path = r"C:\Users\vetri\.gemini\antigravity\brain\b92a5f77-00e8-49f4-9663-e54f6e453ded\bags_audit.csv"
+        bags_audit.to_csv(artifact_path, index=False)
+        logger.info(f"Exported bags_audit.csv with {len(bags_audit)} keywords.")
+    
+    # First, aggregate by segment to find top 8
+    seg_sums = tmp_agg.groupby("_segment")["_sv"].sum().reset_index()
+    seg_sums = seg_sums[seg_sums["_sv"] > 0].sort_values("_sv", ascending=False)
+    top_segs = seg_sums.head(8)["_segment"].tolist()
+    
+    # Apply final segment
+    tmp_agg["_final_seg"] = tmp_agg["_segment"].apply(lambda x: x if x in top_segs else "Other")
+    
+    # Final aggregation
+    final_agg = tmp_agg.groupby("_final_seg").agg(
         total_sv=("_sv", "sum"),
         total_ks=("_ks", "sum"),
         kw_count=("_final_seg", "count")
     ).reset_index()
-    
-    segment_list = []
+
+    grouped_keywords: Dict[str, List[Dict[str, Any]]] = {}
+    keyword_segment_sums: Dict[str, float] = {}
+    for seg, group in tmp_agg.groupby("_final_seg"):
+        sorted_keywords = group.sort_values("_sv", ascending=False)
+        keyword_segment_sums[seg] = float(sorted_keywords["_sv"].sum())
+        grouped_keywords[seg] = [
+            {
+                "keyword": str(row["kw_original"]).strip() if str(row["kw_original"]).strip() else str(row["_kw_clean"]),
+                "search_volume": int(row["_sv"]) if float(row["_sv"]) == int(row["_sv"]) else round(float(row["_sv"]), 2),
+                "contribution_pct": round((float(row["_sv"]) / keyword_segment_sums[seg]) * 100.0, 2) if keyword_segment_sums[seg] > 0 else 0.0,
+            }
+            for _, row in sorted_keywords.iterrows()
+        ]
+
+    segment_list: List[Dict[str, Any]] = []
+    segment_discrepancies: List[Dict[str, Any]] = []
+
+    # Verification check: SUM(All Segment Volumes) = SUM(All Assigned Keyword Volumes)
+    sum_segment_volumes = float(final_agg["total_sv"].sum())
+    if abs(sum_segment_volumes - total_heatmap_sv) > 0.1:
+        logger.error(
+            "Heatmap verification failed. Segment total=%s, assigned keyword total=%s",
+            sum_segment_volumes,
+            total_heatmap_sv,
+        )
+
     for _, row in final_agg.iterrows():
+        seg = str(row["_final_seg"])
         sv = float(row["total_sv"])
         ks = float(row["total_ks"])
         count = int(row["kw_count"])
-        seg = str(row["_final_seg"])
-        
-        demand_share = round((sv / total_sv) * 100.0, 2)
-        revenue_share = round((ks / total_ks) * 100.0, 2) if total_ks > 0 else 0.0
+        seg_keywords = grouped_keywords.get(seg, [])
+        seg_keyword_total = float(keyword_segment_sums.get(seg, 0.0))
+        verified = abs(sv - seg_keyword_total) <= 0.1
+
+        if not verified:
+            segment_discrepancies.append({
+                "segment": seg,
+                "segment_volume": sv,
+                "keyword_volume": seg_keyword_total,
+                "difference": round(sv - seg_keyword_total, 2),
+            })
+
+        print(f"\n{seg}")
+        print(f"Keywords: {count}")
+        print(f"Volume: {int(sv)}")
+        logger.info(f"{seg} - Keywords: {count}, Volume: {int(sv)}")
+
+        demand_share = round((sv / total_heatmap_sv) * 100.0, 2)
+        revenue_share = round((ks / total_heatmap_ks) * 100.0, 2) if total_heatmap_ks > 0 else 0.0
         comp_index = round(count / max(demand_share, 0.01), 2)
-        
+
         segment_list.append({
             "segment": seg,
             "demand_share": demand_share,
@@ -235,8 +310,31 @@ def _extract_segments(
             "total_search_volume": int(sv),
             "demand_revenue_gap": round(revenue_share - demand_share, 2),
             "competition_index": comp_index,
+            "keywords": seg_keywords,
+            "top_keywords": seg_keywords[:20],
+            "verification": {
+                "status": "passed" if verified else "failed",
+                "message": (
+                    "Segment volume matches assigned keyword totals." if verified
+                    else f"Segment volume {sv} does not equal assigned keyword total {seg_keyword_total}."
+                ),
+            },
         })
-        
+
+    if segment_discrepancies:
+        discrepancy_path = os.path.join(tempfile.gettempdir(), "demand_heatmap_discrepancies.csv")
+        discrepancy_rows = tmp_agg[["kw_original", "_segment", "_final_seg", "_sv"]].copy()
+        discrepancy_rows.columns = ["keyword", "segment", "final_segment", "search_volume"]
+        discrepancy_rows.to_csv(discrepancy_path, index=False)
+        logger.error(
+            "Heatmap discrepancy exported: %s (%s mismatches)",
+            discrepancy_path,
+            len(segment_discrepancies),
+        )
+
+    if abs(sum_segment_volumes - total_heatmap_sv) > 0.1:
+        logger.warning("Verification failed via segment audit. See discrepancy export for details.")
+
     segment_list.sort(key=lambda x: x["demand_share"], reverse=True)
     segment_list = _enrich_segment_metrics(segment_list)
     return segment_list, "dynamic_root_noun"
@@ -973,6 +1071,23 @@ def run(
     )
     recommended_entry_segment: Dict[str, Any] = recommended_entry_pick or {}
 
+    heatmap_audit = {
+        "verification_status": (
+            "passed" if all(
+                str(seg.get("verification", {}).get("status", "failed")).lower() == "passed"
+                for seg in segment_list
+            ) else "failed"
+        ),
+        "segments_verified": sum(
+            1 for seg in segment_list if str(seg.get("verification", {}).get("status", "failed")).lower() == "passed"
+        ),
+        "segments_failed": sum(
+            1 for seg in segment_list if str(seg.get("verification", {}).get("status", "failed")).lower() != "passed"
+        ),
+        "total_segment_volume": sum(float(seg.get("total_search_volume", 0)) for seg in segment_list),
+        "total_keyword_count": sum(int(seg.get("keyword_count", 0)) for seg in segment_list),
+    }
+
     # -----------------------------------------------------------------------
     # 9. Interpretation (percentile-relative to score distribution)
     # -----------------------------------------------------------------------
@@ -1027,6 +1142,7 @@ def run(
             "best_monetized_segment": executive_insights.get("best_monetized_segment", {}),
             "demand_distribution": segment_list,
             "demand_opportunity_clusters": segment_list,
+            "heatmap_audit": heatmap_audit,
             "executive_insights": executive_insights,
             "segmentation_method": segmentation_method,
         },

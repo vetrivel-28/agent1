@@ -1,74 +1,84 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../services/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/Card';
-import { DataTable, type ColumnDef } from '../components/ui/DataTable';
+import { DataTable, type Column } from '../components/tables/DataTable';
 import { Badge } from '../components/ui/Badge';
 import { formatCurrency, formatNumber, cn } from '../utils/cn';
 import { getEngineErrorMessage } from '../utils/analysisStatus';
+import { Drawer } from '../components/ui/Drawer';
 import {
-  AlertCircle, Loader2, DollarSign, TrendingUp, Crown,
-  Skull, Layers, Lightbulb, Info, Target, BarChart3, ShieldAlert, Zap
+  AlertCircle, Loader2, DollarSign, Target, BarChart3, TrendingUp,
+  Layers, Crown, Zap, AlertTriangle, Scale, Activity, Maximize, Target as TargetIcon, Info, Star, Package, Tag, Hash, Trophy
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  CartesianGrid, ScatterChart, Scatter, ZAxis, Cell,
+  CartesianGrid, ScatterChart, Scatter, Cell, ReferenceLine, ZAxis
 } from 'recharts';
 import { motion } from 'framer-motion';
 
-// Types remain the same
+// Types
+type TopProduct = {
+  title: string;
+  asin: string;
+  brand: string;
+  revenue: number;
+};
+
 type PriceBand = {
   price_band: string;
-  tier: string;
-  chart_label: string;
-  asin_count: number;
-  revenue: number;
-  revenue_share_pct: number;
-  avg_price: number;
-  revenue_density: number;
-  attractiveness_score: number;
-  recommendation: string;
-  competition_level?: string;
-};
-
-type DisplayFlags = {
-  show_seller_count?: boolean;
-  show_competition?: boolean;
-};
-
-type TierSummary = {
-  tier: string;
   price_range: string;
-  price_range_open?: string;
-};
-
-type TierRevenue = {
-  tier: string;
+  product_count: number;
   revenue: number;
   revenue_share_pct: number;
-  chart_label: string;
+  review_share_pct: number;
+  market_share_pct: number;
+  avg_reviews: number;
+  avg_rating: number;
+  revenue_per_listing: number;
+  opportunity_score: number;
+  quadrant: string;
+  is_valid_sample: boolean;
+  is_white_space: boolean;
+  top_product: TopProduct;
+  top_brand: string;
 };
 
-type CategoryOverview = {
-  min_price: number;
-  median_price: number;
-  max_price: number;
-  category_price_range: string;
+type MarketStructure = {
+  floor: number;
+  ceiling: number;
+  spread_str: string;
+  spread_val: number;
+  median: number;
+  average: number;
+  p25: number;
+  p75: number;
 };
 
-type Insight = { category: string; text: string };
+type PremiumViability = {
+  revenue_share_pct: number;
+  product_share_pct: number;
+  revenue_efficiency: number;
+};
 
-type MarketPositioning = {
-  classification: string;
-  budget_revenue_pct: number;
-  mid_tier_revenue_pct: number;
-  premium_revenue_pct: number;
-  dominant_range: string;
-  dominant_tier: string;
-  category_price_range: string;
-  median_price?: number;
-  min_price?: number;
-  max_price?: number;
+type RecommendedEntry = {
+  price_band: string | null;
+  price_range?: string;
+  confidence_score: string;
+  reasoning: string;
+};
+
+type PositioningData = {
+  title: string;
+  asin: string;
+  brand: string;
+  bsr: number;
+  price: number;
+  revenue: number;
+  reviews: number;
+  rating: number;
+  price_band: string;
+  market_share_pct: number;
 };
 
 function Tip({ text, children }: { text: string; children: React.ReactNode }) {
@@ -85,50 +95,9 @@ function Tip({ text, children }: { text: string; children: React.ReactNode }) {
   );
 }
 
-function tierBadge(tier: string): string {
-  if (tier === 'Budget') return 'bg-orange-500/10 text-orange-600 border-orange-500/20';
-  if (tier === 'Premium') return 'bg-purple-500/10 text-purple-600 border-purple-500/20';
-  return 'bg-blue-500/10 text-blue-600 border-blue-500/20';
-}
-
-function recommendationBadge(rec: string) {
-  switch (rec) {
-    case 'Strong Concentration':
-      return { variant: 'default' as const, className: 'bg-success/10 text-success hover:bg-success/20 border-success/20' };
-    case 'Moderate Concentration':
-      return { variant: 'warning' as const, className: 'bg-warning/10 text-warning hover:bg-warning/20 border-warning/20' };
-    case 'Low Priority':
-      return { variant: 'outline' as const, className: 'text-muted-foreground' };
-    case 'Avoid':
-      return { variant: 'danger' as const, className: 'bg-danger/10 text-danger hover:bg-danger/20 border-danger/20' };
-    default:
-      return { variant: 'outline' as const, className: 'text-muted-foreground' };
-  }
-}
-
-function structureBadge(cls: string): string {
-  if (cls.includes('Budget')) return 'text-orange-600 bg-orange-500/10 border-orange-500/20';
-  if (cls.includes('Premium')) return 'text-purple-600 bg-purple-500/10 border-purple-500/20';
-  if (cls.includes('Mid-Tier')) return 'text-blue-600 bg-blue-500/10 border-blue-500/20';
-  return 'text-muted-foreground bg-muted border-border';
-}
-
-function viabilityColor(rating: string): { color: string; bg: string } {
-  if (rating === 'Strong') return { color: 'text-success', bg: 'bg-success/10 border-success/20' };
-  if (rating === 'Moderate') return { color: 'text-warning', bg: 'bg-warning/10 border-warning/20' };
-  return { color: 'text-muted-foreground', bg: 'bg-muted border-border' };
-}
-
-function tierChartColor(tier: string): string {
-  if (tier === 'Budget') return 'hsl(var(--warning))';
-  if (tier === 'Premium') return 'hsl(var(--primary))';
-  return 'hsl(var(--info))';
-}
-
 interface KpiProps {
   title: string;
-  value: string;
-  highlight?: string;
+  value: string | React.ReactNode;
   sub?: string;
   icon: React.ReactNode;
   color?: string;
@@ -136,7 +105,7 @@ interface KpiProps {
   tooltip?: string;
 }
 
-function KpiCard({ title, value, highlight, sub, icon, color = 'text-primary', bg = 'bg-primary/10 border-primary/20', tooltip }: KpiProps) {
+function KpiCard({ title, value, sub, icon, color = 'text-primary', bg = 'bg-primary/10 border-primary/20', tooltip }: KpiProps) {
   return (
     <Card className="hover-card-anim border-t-4 border-t-primary/20 bg-card/50 glass">
       <CardContent className="p-5">
@@ -149,92 +118,26 @@ function KpiCard({ title, value, highlight, sub, icon, color = 'text-primary', b
               </Tip>
             )}
           </div>
-          <div className={cn('p-1.5 rounded-md border', bg)}>
+          <div className={cn('p-1.5 rounded-md border flex-shrink-0', bg)}>
             <span className={color}>{icon}</span>
           </div>
         </div>
-        <p className={cn('text-2xl font-black leading-tight tracking-tight font-serif', color)}>{value}</p>
-        {highlight && <p className={cn('text-sm font-semibold mt-1 font-mono uppercase tracking-wider', color)}>{highlight}</p>}
+        <div className={cn('text-2xl font-black leading-tight tracking-tight font-mono', color)}>{value}</div>
         {sub && <p className="text-xs text-muted-foreground mt-1 leading-snug">{sub}</p>}
       </CardContent>
     </Card>
   );
 }
 
-function TierRevenueTooltip({
-  active,
-  payload,
-  tierSummary,
-}: {
-  active?: boolean;
-  payload?: Array<{ payload: PriceBand & { tierRange?: string } }>;
-  tierSummary: TierSummary[];
-}) {
-  if (!active || !payload?.length) return null;
-  const d = payload[0].payload;
-  const tierMeta = tierSummary.find((t) => t.tier === d.tier);
-  return (
-    <div className="bg-card/90 backdrop-blur-md border border-border rounded-lg p-4 shadow-xl text-sm space-y-2 font-mono">
-      <p className="font-bold text-foreground uppercase tracking-widest text-xs border-b border-border/50 pb-2">{d.chart_label || d.tier}</p>
-      <div>
-        <p className="text-muted-foreground text-[10px] uppercase">Band</p>
-        <p className="font-semibold">{d.price_band}</p>
-      </div>
-      <div className="flex justify-between gap-6">
-        <div>
-          <p className="text-muted-foreground text-[10px] uppercase">Revenue</p>
-          <p className="font-medium text-success">{formatCurrency(d.revenue)}</p>
-        </div>
-        <div className="text-right">
-          <p className="text-muted-foreground text-[10px] uppercase">Share</p>
-          <p className="font-medium">{d.revenue_share_pct.toFixed(1)}%</p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function MatrixTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: PriceBand }> }) {
-  if (!active || !payload?.length) return null;
-  const d = payload[0].payload;
-  return (
-    <div className="bg-card/90 backdrop-blur-md border border-border rounded-lg p-4 shadow-xl text-sm space-y-2 font-mono">
-      <p className="font-bold text-foreground uppercase tracking-widest text-xs border-b border-border/50 pb-2">{d.tier}</p>
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <p className="text-muted-foreground text-[10px] uppercase">Band</p>
-          <p className="font-semibold">{d.price_band}</p>
-        </div>
-        <div className="text-right">
-          <p className="text-muted-foreground text-[10px] uppercase">Avg Price</p>
-          <p className="font-semibold text-primary">{formatCurrency(d.avg_price)}</p>
-        </div>
-        <div>
-          <p className="text-muted-foreground text-[10px] uppercase">Revenue</p>
-          <p className="font-medium text-success">{formatCurrency(d.revenue)}</p>
-        </div>
-        <div className="text-right">
-          <p className="text-muted-foreground text-[10px] uppercase">Share</p>
-          <p className="font-medium">{d.revenue_share_pct.toFixed(1)}%</p>
-        </div>
-        <div className="col-span-2 pt-2 border-t border-border/50 flex justify-between">
-          <p className="text-muted-foreground text-[10px] uppercase">ASIN Density</p>
-          <p className="font-medium">{formatNumber(Math.round(d.revenue_density))} / unit</p>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function UnavailableCard({ message, missing }: { message: string; missing?: string[] }) {
   return (
-    <Card className="border-danger/20 bg-danger/5 mt-10 theme-elasticity">
+    <Card className="border-red-500/20 bg-red-500/5 mt-10">
       <CardContent className="p-8 flex flex-col items-center text-center">
-        <AlertCircle className="w-12 h-12 text-danger mb-4" />
-        <h2 className="text-xl font-bold mb-2 font-serif">Pricing Data Unavailable</h2>
-        <p className="text-danger/80 max-w-lg">{message}</p>
+        <AlertCircle className="w-12 h-12 text-red-500 mb-4" />
+        <h2 className="text-xl font-bold mb-2 font-serif">Pricing Economics Unavailable</h2>
+        <p className="text-red-500/80 max-w-lg">{message}</p>
         {missing && missing.length > 0 && (
-          <p className="text-danger/60 text-sm mt-4 font-mono uppercase text-[10px] tracking-widest">Required Attributes: {missing.join(', ')}</p>
+          <p className="text-red-500/60 text-sm mt-4 font-mono uppercase text-[10px] tracking-widest">Required Attributes: {missing.join(', ')}</p>
         )}
       </CardContent>
     </Card>
@@ -242,454 +145,501 @@ function UnavailableCard({ message, missing }: { message: string; missing?: stri
 }
 
 export default function PriceElasticity() {
+  const [selectedProduct, setSelectedProduct] = useState<PositioningData | null>(null);
+
   const { data, isLoading, isError } = useQuery({
     queryKey: ['price-intelligence'],
     queryFn: () => api.getPriceElasticity(6),
   });
 
-  const payload = data?.data;
-  const results = payload?.results || {};
-
   const memoized = useMemo(() => {
-    const kpis = results.kpis as Record<string, string | number | null | undefined> || {};
-    const bands: PriceBand[] = results.price_buckets || [];
-    const insights: Insight[] = results.insights || [];
-    const positioning: MarketPositioning = results.market_positioning || {
-      classification: '—',
-      budget_revenue_pct: 0,
-      mid_tier_revenue_pct: 0,
-      premium_revenue_pct: 0,
-      dominant_range: '—',
-      dominant_tier: '—',
-      category_price_range: '—',
-    };
-    const categoryOverview: CategoryOverview = results.category_pricing_overview || {};
-    const tierSummary: TierSummary[] = results.price_tier_summary || [];
-    const revenueByTier: TierRevenue[] = results.revenue_by_tier || [];
-    const deadZones: PriceBand[] = results.dead_price_zones || [];
-    const totalRevenue = results.total_category_revenue as number | undefined;
-    const displayFlags: DisplayFlags = results.display_flags || {
-      show_seller_count: false,
-      show_competition: false,
-    };
+    if (!data?.data?.results) return null;
+    const res = data.data.results;
+    
+    const struct: MarketStructure = res.market_structure || {};
+    const bands: PriceBand[] = res.price_bands || [];
+    const topOpportunities: PriceBand[] = res.top_opportunity_bands || [];
+    const powerBands: PriceBand[] = res.highest_revenue_per_listing_bands || [];
+    const entry: RecommendedEntry = res.recommended_entry || {};
+    const premium: PremiumViability = res.premium_viability || { revenue_share_pct: 0, product_share_pct: 0, revenue_efficiency: 0 };
+    const sweetSpot: PriceBand | null = res.market_sweet_spot || null;
+    const whiteSpace: PriceBand[] = res.white_space_opportunities || [];
+    const positioningData: PositioningData[] = res.positioning_map_data || [];
+    
+    // Sort bands for bar charts based on price value
+    const sortedBands = [...bands].sort((a, b) => {
+        const aNum = parseFloat(a.price_band.replace(/[^0-9.-]/g, '').split('-')[0]) || 0;
+        const bNum = parseFloat(b.price_band.replace(/[^0-9.-]/g, '').split('-')[0]) || 0;
+        return aNum - bNum;
+    });
 
-    const chartBands = [...bands]
-      .sort((a, b) => a.avg_price - b.avg_price)
-      .map((b) => ({ ...b, tierRange: tierSummary.find((t) => t.tier === b.tier)?.price_range }));
-
-    const matrixData = bands.map((b) => ({
-      ...b,
-      x: b.avg_price,
-      y: b.revenue,
-      z: Math.max(b.asin_count, 1),
-    }));
-
-    const competitionLevels = new Set(
-      bands.map((b) => b.competition_level).filter(Boolean),
-    );
-    const showCompetition =
-      displayFlags.show_competition === true && competitionLevels.size > 1;
+    const highestRevenueBand = [...bands].sort((a, b) => b.revenue - a.revenue)[0];
 
     return {
-      results, kpis, bands, insights, positioning, categoryOverview,
-      tierSummary, revenueByTier, deadZones, totalRevenue, displayFlags,
-      chartBands, matrixData, showCompetition
+      struct, bands, sortedBands, topOpportunities, powerBands,
+      entry, premium, sweetSpot, whiteSpace, positioningData, highestRevenueBand
     };
   }, [data]);
 
   if (isLoading) {
     return (
-      <div className="flex h-[80vh] items-center justify-center flex-col gap-3 theme-elasticity">
+      <div className="flex h-[80vh] items-center justify-center flex-col gap-3">
         <Loader2 className="w-8 h-8 animate-spin text-primary" />
-        <p className="text-sm text-muted-foreground font-mono uppercase tracking-widest">Synthesizing Price Economics...</p>
+        <p className="text-sm text-muted-foreground font-mono uppercase tracking-widest">Synthesizing Price Intelligence...</p>
       </div>
     );
   }
 
-  if (isError || !data) {
-    return <UnavailableCard message="Could not reach the pricing analysis service." />;
-  }
-
-  const hasPricingData = !!results && (
-    (Array.isArray(results.price_bands) && results.price_bands.length > 0) ||
-    (Array.isArray(results.price_buckets) && results.price_buckets.length > 0) ||
-    !!results.market_structure ||
-    !!results.pricing_summary ||
-    !!results.dominant_price_range ||
-    !!results.total_products_analyzed
-  );
-
-  if (!hasPricingData) {
-    const missing = (data as any)?.validation?.missing_columns;
-    return (
-      <UnavailableCard
-        message={getEngineErrorMessage(data, 'Pricing analysis cannot be computed with the current dataset.')}
-        missing={missing}
-      />
-    );
+  if (isError || !memoized) {
+    return <UnavailableCard message={getEngineErrorMessage(data, 'Could not calculate price economics.')} />;
   }
 
   const {
-    kpis, bands, insights, positioning, categoryOverview,
-    tierSummary, deadZones, totalRevenue,
-    chartBands, matrixData, showCompetition
+    struct, bands, sortedBands, topOpportunities, powerBands,
+    entry, premium, sweetSpot, whiteSpace, positioningData, highestRevenueBand
   } = memoized;
 
   if (bands.length === 0) {
     return <UnavailableCard message="No price bands could be calculated from the uploaded catalog." />;
   }
 
-  const tableColumns: ColumnDef<PriceBand>[] = [
-    {
-      header: 'Tier',
-      cell: (r) => (
-        <span className={cn('text-[10px] px-2 py-1 uppercase tracking-wider font-bold rounded border', tierBadge(r.tier))}>
-          {r.tier}
-        </span>
-      ),
-    },
-    { header: 'Price Band', cell: (r) => <span className="font-mono">{r.price_band}</span> },
-    { header: 'Revenue', cell: (r) => <span className="font-medium">{formatCurrency(r.revenue)}</span> },
+  // --- TABLES ---
+  const bandAnalysisColumns: Column<PriceBand>[] = [
     { 
-      header: 'Share', 
+      header: 'Price Range', 
+      accessorKey: 'price_band', 
+      cell: (r) => <span className="font-mono font-bold block whitespace-nowrap">{r.price_band}</span>
+    },
+    { 
+      header: 'Sample Size', 
+      accessorKey: 'product_count', 
+      cell: (r) => (
+        <div className="flex flex-col gap-1">
+          <span className="font-mono text-sm">{formatNumber(r.product_count)}</span>
+          {!r.is_valid_sample && <Badge variant="outline" className="text-[9px] uppercase tracking-wider text-red-500 border-red-500/20 w-fit">Insufficient</Badge>}
+        </div>
+      )
+    },
+    { header: 'Revenue', accessorKey: 'revenue', cell: (r) => <span className="font-mono font-medium text-emerald-600">{formatCurrency(r.revenue)}</span> },
+    { 
+      header: 'Revenue Share', 
+      accessorKey: 'revenue_share_pct',
       cell: (r) => (
         <div className="flex items-center gap-2">
-          <span className="font-mono text-sm w-12">{r.revenue_share_pct.toFixed(1)}%</span>
+          <span className="font-mono text-sm w-12 font-bold">{r.revenue_share_pct.toFixed(1)}%</span>
           <div className="w-16 h-1.5 bg-muted rounded-full overflow-hidden">
-            <div className="h-full bg-primary/50 rounded-full" style={{ width: `${r.revenue_share_pct}%` }} />
+            <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${r.revenue_share_pct}%` }} />
           </div>
         </div>
-      ) 
+      )
     },
-    ...(showCompetition
-      ? [{
-          header: 'Competition',
-          cell: (r: PriceBand) => (
-            <span className={cn(
-              'text-xs font-bold uppercase tracking-wider',
-              r.competition_level === 'Low' && 'text-success',
-              r.competition_level === 'Moderate' && 'text-warning',
-              r.competition_level === 'High' && 'text-danger',
-            )}>
-              {r.competition_level}
-            </span>
-          ),
-        }]
-      : []),
-    { header: 'Attractiveness', cell: (r) => <span className="font-mono text-muted-foreground">{r.attractiveness_score.toFixed(0)}/100</span> },
-    {
-      header: 'Recommendation',
-      cell: (r) => {
-        const badgeProps = recommendationBadge(r.recommendation);
-        return (
-          <Badge variant={badgeProps.variant} className={cn("uppercase text-[10px] tracking-widest", badgeProps.className)}>
-            {r.recommendation}
-          </Badge>
-        );
-      },
+    { 
+      header: 'Top Product', 
+      accessorKey: 'top_product', 
+      cell: (r) => (
+        <div className="max-w-[200px]">
+          <span className="font-bold text-xs block truncate text-foreground" title={r.top_product.title}>{r.top_product.title}</span>
+          <div className="flex items-center justify-between mt-1">
+            <span className="text-[10px] font-mono text-muted-foreground">{r.top_product.asin}</span>
+            <span className="text-[10px] font-mono text-emerald-600">{formatCurrency(r.top_product.revenue)}</span>
+          </div>
+        </div>
+      )
+    },
+    { header: 'Avg Rating', accessorKey: 'avg_rating', cell: (r) => <span className="font-mono">{r.avg_rating > 0 ? r.avg_rating.toFixed(2) : 'N/A'}</span> },
+  ];
+
+  const topOpportunitiesColumns: Column<PriceBand>[] = [
+    { 
+      header: 'Price Range', 
+      accessorKey: 'price_band', 
+      cell: (r) => <span className="font-mono font-bold block">{r.price_band}</span>
+    },
+    { header: 'Revenue Share', accessorKey: 'revenue_share_pct', cell: (r) => <span className="font-mono text-emerald-600 font-bold">{r.revenue_share_pct.toFixed(1)}%</span> },
+    { 
+      header: 'Top Product', 
+      accessorKey: 'top_product', 
+      cell: (r) => (
+        <div className="max-w-[150px]">
+          <span className="font-bold text-xs block truncate text-foreground">{r.top_product.title}</span>
+        </div>
+      )
+    },
+    { header: 'Median Rev / Listing', accessorKey: 'revenue_per_listing', cell: (r) => <span className="font-mono">{formatCurrency(r.revenue_per_listing)}</span> },
+    { 
+      header: 'Opportunity Score', 
+      accessorKey: 'opportunity_score',
+      cell: (r) => (
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-sm w-12 font-black text-primary">{r.opportunity_score.toFixed(0)}</span>
+          <div className="w-16 h-1.5 bg-muted rounded-full overflow-hidden">
+            <div className="h-full bg-primary rounded-full" style={{ width: `${r.opportunity_score}%` }} />
+          </div>
+        </div>
+      )
     },
   ];
 
-  const premiumViability = String(kpis.premium_viability || '—');
-  const viabilityStyle = viabilityColor(premiumViability);
-
-  const insightIcons: Record<string, React.ReactNode> = {
-    'Key Finding': <BarChart3 className="w-5 h-5 text-primary" />,
-    'Premium Revenue': <Crown className="w-5 h-5 text-purple-500" />,
-    'Market Structure': <Layers className="w-5 h-5 text-blue-500" />,
-    'Market Gap': <Target className="w-5 h-5 text-orange-500" />,
-    'Revenue Concentration': <TrendingUp className="w-5 h-5 text-success" />,
-  };
-
   return (
-    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-8 pb-10 theme-elasticity">
+    <>
+    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-8 pb-10">
       
-      {/* Header — Consulting Briefing Style */}
+      {/* Header */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 border-b border-border/50 pb-6">
         <div>
           <Badge className="bg-primary/10 text-primary hover:bg-primary/20 mb-3 border border-primary/20 font-mono tracking-widest uppercase rounded-none">
-            STRATEGIC PRICING BRIEF
+            PRICE INTELLIGENCE
           </Badge>
-          <h1 className="text-4xl font-black tracking-tight text-foreground font-serif">Price Economics & Elasticity</h1>
+          <h1 className="text-4xl font-black tracking-tight text-foreground font-serif">Price Economics & Strategy</h1>
           <p className="text-muted-foreground mt-2 max-w-2xl text-lg">
-            Consulting-grade analysis of where the market aggregates revenue, pricing tier dominance, and strategic whitespace.
+            Structural analysis of revenue concentration, competition density, and strategic pricing power based on dynamic price ranges.
           </p>
         </div>
-        {totalRevenue != null && totalRevenue > 0 && (
-          <div className="text-right">
-            <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-1">Total Addressable Market</p>
-            <p className="text-3xl font-black font-mono text-primary flex items-center justify-end gap-2">
-              {formatCurrency(totalRevenue)}
-            </p>
-            <p className="text-[10px] text-muted-foreground uppercase tracking-widest mt-1">Across {bands.length} Price Corridors</p>
-          </div>
-        )}
       </div>
 
-      {/* Category Pricing Overview */}
-      {categoryOverview.min_price != null && (
-        <Card className="border-none bg-muted/30 shadow-none rounded-xl overflow-hidden">
-          <div className="flex flex-col md:flex-row">
-            <div className="p-6 md:w-1/3 bg-primary/5 border-r border-border/50 flex flex-col justify-center">
-              <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-1">Total Category Spread</p>
-              <p className="text-xl font-bold font-mono text-foreground">{categoryOverview.category_price_range}</p>
-            </div>
-            <div className="grid grid-cols-3 p-6 gap-6 md:w-2/3">
-              <div>
-                <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">Floor Price</p>
-                <p className="text-2xl font-black font-serif text-muted-foreground">{formatCurrency(categoryOverview.min_price)}</p>
-              </div>
-              <div>
-                <p className="text-[10px] uppercase tracking-widest text-primary font-bold mb-1">Median Vector</p>
-                <p className="text-3xl font-black font-serif text-primary">{formatCurrency(categoryOverview.median_price)}</p>
-              </div>
-              <div>
-                <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-1">Ceiling Price</p>
-                <p className="text-2xl font-black font-serif text-muted-foreground">{formatCurrency(categoryOverview.max_price)}</p>
-              </div>
-            </div>
-          </div>
-        </Card>
-      )}
-
-      {/* Executive Insights (Highlights) */}
-      {insights.length > 0 && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {insights.map((ins, i) => (
-            <Card key={i} className="bg-card/40 border-l-4 border-l-primary shadow-sm hover:shadow-md transition-shadow">
-              <CardContent className="p-6 flex gap-4">
-                <div className="p-3 bg-background rounded-xl border shadow-sm h-min">
-                  {insightIcons[ins.category] ?? <Lightbulb className="w-5 h-5 text-primary" />}
-                </div>
-                <div>
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-primary mb-2">
-                    {ins.category}
-                  </p>
-                  <p className="text-base leading-relaxed text-foreground/90 font-medium">{ins.text}</p>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+      {/* SECTION 1: MARKET PRICE STRUCTURE */}
+      <div>
+        <h2 className="text-lg font-bold font-serif mb-4 flex items-center gap-2">
+          <Scale className="w-5 h-5 text-primary" /> Market Price Structure
+        </h2>
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+          <KpiCard title="Median Price" value={formatCurrency(struct.median)} icon={<DollarSign className="w-4 h-4" />} />
+          <KpiCard title="Average Price" value={formatCurrency(struct.average)} icon={<Activity className="w-4 h-4" />} color="text-emerald-500" bg="bg-emerald-500/10 border-emerald-500/20" />
+          <KpiCard title="25th Percentile" value={formatCurrency(struct.p25)} icon={<TrendingUp className="w-4 h-4" />} color="text-amber-500" bg="bg-amber-500/10 border-amber-500/20" />
+          <KpiCard title="75th Percentile" value={formatCurrency(struct.p75)} icon={<TrendingUp className="w-4 h-4" />} color="text-amber-500" bg="bg-amber-500/10 border-amber-500/20" />
+          <KpiCard title="Price Floor" value={formatCurrency(struct.floor)} icon={<Maximize className="w-4 h-4" />} color="text-muted-foreground" bg="bg-muted border-border" />
+          <KpiCard title="Price Ceiling" value={formatCurrency(struct.ceiling)} icon={<Maximize className="w-4 h-4" />} color="text-muted-foreground" bg="bg-muted border-border" />
+          <KpiCard title="Price Spread" value={formatCurrency(struct.spread_val)} sub={struct.spread_str} icon={<Layers className="w-4 h-4" />} color="text-blue-500" bg="bg-blue-500/10 border-blue-500/20" />
         </div>
-      )}
-
-      {/* KPIs Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-        <KpiCard
-          title="Optimal Tier"
-          value={(kpis.best_selling_tier as string) || '—'}
-          highlight={(kpis.best_selling_price_band as string) || undefined}
-          sub="Peak revenue concentration"
-          icon={<Target className="w-5 h-5" />}
-          color="text-success"
-          bg="bg-success/10 border-success/20"
-        />
-        <KpiCard
-          title="Apex Revenue Band"
-          value={(kpis.highest_revenue_tier as string) || '—'}
-          highlight={(kpis.highest_revenue_band as string) || undefined}
-          sub="Maximum absolute capital"
-          icon={<DollarSign className="w-5 h-5" />}
-          color="text-primary"
-          bg="bg-primary/10 border-primary/20"
-        />
-        <KpiCard
-          title="Premium Quotient"
-          value={premiumViability}
-          highlight={
-            kpis.premium_revenue_pct != null
-              ? `${Number(kpis.premium_revenue_pct).toFixed(0)}% Premium Rev`
-              : undefined
-          }
-          sub="Up-market viability"
-          icon={<Crown className="w-5 h-5" />}
-          color={viabilityStyle.color}
-          bg={viabilityStyle.bg}
-          tooltip="Strong ≥35%, Moderate ≥15%, Weak &lt;15% of revenue from Premium tier."
-        />
-        <KpiCard
-          title="Inefficient Zones"
-          value={String(kpis.dead_price_zone_count ?? deadZones.length)}
-          sub="Low yield corridors"
-          icon={<Skull className="w-5 h-5" />}
-          color={(Number(kpis.dead_price_zone_count) || 0) > 0 ? 'text-danger' : 'text-muted-foreground'}
-          bg={(Number(kpis.dead_price_zone_count) || 0) > 0 ? 'bg-danger/10 border-danger/20' : 'bg-muted border-border'}
-        />
-        <KpiCard
-          title="Market Taxonomy"
-          value={String(kpis.market_pricing_structure || positioning.classification)}
-          highlight={String(positioning.dominant_tier || kpis.dominant_tier || '')}
-          sub={`Anchor: ${positioning.dominant_range}`}
-          icon={<Layers className="w-5 h-5" />}
-          color="text-warning"
-          bg="bg-warning/10 border-warning/20"
-        />
       </div>
 
-      {/* Visual Data Models */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <Card className="overflow-hidden border-border/50">
-          <CardHeader className="bg-muted/10 border-b border-border/50">
-            <CardTitle className="font-serif">Revenue Distribution Mapping</CardTitle>
-            <CardDescription>Capital concentration across established pricing corridors</CardDescription>
-          </CardHeader>
-          <CardContent className="h-[400px] p-6">
+      {/* SECTION: PRODUCT POSITIONING MAP */}
+      <Card className="border-border/50 overflow-hidden shadow-sm">
+        <CardHeader className="bg-muted/10 border-b border-border/50 flex flex-row items-center justify-between">
+          <div>
+            <CardTitle className="font-serif">Product Positioning Map</CardTitle>
+            <CardDescription>Primary pricing chart: Top 200 items plotted by Price vs. Revenue. Bubble size indicates total reviews. Click a bubble for details.</CardDescription>
+          </div>
+        </CardHeader>
+        <CardContent className="p-6">
+          <div className="h-[500px] relative">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chartBands} margin={{ top: 10, right: 20, bottom: 40, left: 10 }}>
+              <ScatterChart margin={{ top: 20, right: 20, bottom: 40, left: 40 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.5} />
+                <XAxis 
+                  type="number" 
+                  dataKey="price" 
+                  name="Price" 
+                  tickFormatter={v => formatCurrency(v)} 
+                  label={{ value: 'Price ($)', position: 'insideBottom', offset: -25, fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
+                />
+                <YAxis 
+                  type="number" 
+                  dataKey="revenue" 
+                  name="Revenue" 
+                  tickFormatter={v => `$${formatNumber(v)}`} 
+                  label={{ value: 'Revenue', angle: -90, position: 'insideLeft', fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
+                />
+                <ZAxis type="number" dataKey="reviews" range={[20, 400]} name="Reviews" />
+                <Tooltip 
+                  cursor={{ strokeDasharray: '3 3' }}
+                  content={({ active, payload }) => {
+                    if (!active || !payload?.length) return null;
+                    const d = payload[0].payload as PositioningData;
+                    return (
+                      <div className="bg-card/95 backdrop-blur-md border border-border rounded-lg p-3 shadow-xl text-sm font-mono space-y-1 z-50 min-w-[250px]">
+                        <p className="font-bold border-b border-border/50 pb-2 mb-2 truncate text-foreground">{d.title}</p>
+                        <p className="text-muted-foreground flex justify-between gap-4">ASIN: <span className="text-foreground">{d.asin}</span></p>
+                        <p className="text-muted-foreground flex justify-between gap-4">Brand: <span className="text-foreground truncate max-w-[100px] text-right">{d.brand}</span></p>
+                        <p className="text-muted-foreground flex justify-between gap-4">Price: <span className="text-foreground font-bold">{formatCurrency(d.price)}</span></p>
+                        <p className="text-muted-foreground flex justify-between gap-4">Revenue: <span className="text-emerald-500 font-bold">{formatCurrency(d.revenue)}</span></p>
+                        <p className="text-muted-foreground flex justify-between gap-4">Reviews: <span className="text-blue-500 font-bold">{formatNumber(d.reviews)}</span></p>
+                        <p className="text-muted-foreground flex justify-between gap-4">BSR: <span className="text-foreground font-bold">{formatNumber(d.bsr)}</span></p>
+                      </div>
+                    );
+                  }}
+                />
+                <ReferenceLine x={struct.median} stroke="hsl(var(--primary))" strokeDasharray="4 4" strokeOpacity={0.5} label={{ position: 'top', value: 'Median Price', fill: 'hsl(var(--primary))', fontSize: 10 }} />
+                
+                <Scatter 
+                  data={positioningData} 
+                  onClick={(e: any) => {
+                    if (e && e.payload) setSelectedProduct(e.payload as PositioningData);
+                  }}
+                  className="cursor-pointer"
+                >
+                  {positioningData.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={'hsl(var(--primary))'} fillOpacity={0.6} stroke="hsl(var(--background))" strokeWidth={1} className="hover:fill-primary hover:opacity-100 transition-all duration-200" />
+                  ))}
+                </Scatter>
+              </ScatterChart>
+            </ResponsiveContainer>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* STRATEGIC INSIGHTS */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        
+        {/* Market Sweet Spot (Expanded) */}
+        <Card className="border-border/50 shadow-sm bg-primary/5 border-primary/20">
+          <CardHeader className="border-b border-primary/10 pb-3">
+            <CardTitle className="text-sm font-bold uppercase tracking-widest text-primary flex items-center gap-2">
+              <TargetIcon className="w-4 h-4 text-primary" /> Market Sweet Spot
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-4 flex flex-col justify-between h-full space-y-4">
+            {sweetSpot ? (
+                <>
+                <div className="grid grid-cols-2 gap-4">
+                    <div>
+                        <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest">Price Range</p>
+                        <p className="text-2xl font-black font-mono text-primary leading-tight">{sweetSpot.price_band}</p>
+                    </div>
+                    <div>
+                        <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest">Products</p>
+                        <p className="text-2xl font-black font-mono text-foreground leading-tight">{formatNumber(sweetSpot.product_count)}</p>
+                    </div>
+                    <div>
+                        <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest">Revenue Share</p>
+                        <p className="text-2xl font-black font-mono text-emerald-600 leading-tight">{sweetSpot.revenue_share_pct.toFixed(1)}%</p>
+                    </div>
+                    <div>
+                        <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest">Top Brand</p>
+                        <p className="text-xl font-bold font-sans text-foreground leading-tight truncate">{sweetSpot.top_brand}</p>
+                    </div>
+                </div>
+
+                <div className="bg-card border border-border p-3 rounded-lg shadow-sm">
+                    <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest mb-1 flex items-center gap-1"><Trophy className="w-3 h-3 text-amber-500" /> Top Product</p>
+                    <p className="font-bold text-sm text-foreground line-clamp-2 leading-snug">{sweetSpot.top_product.title}</p>
+                    <div className="flex justify-between items-center mt-2">
+                        <Badge variant="outline" className="text-[9px] font-mono">{sweetSpot.top_product.asin}</Badge>
+                        <span className="font-mono text-emerald-600 font-bold text-sm">{formatCurrency(sweetSpot.top_product.revenue)}</span>
+                    </div>
+                </div>
+                <p className="text-xs text-foreground/80 leading-relaxed font-medium">
+                  Highest revenue concentration with statistically meaningful sample size.
+                </p>
+                </>
+            ) : (
+                <div className="flex flex-col items-center justify-center text-center py-6 opacity-70">
+                    <AlertCircle className="w-8 h-8 text-muted-foreground mb-2" />
+                    <p className="text-sm font-bold">No Sweet Spot Identified</p>
+                </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <div className="flex flex-col gap-6">
+            {/* Section 7: Premium Viability Analysis */}
+            <Card className="border-border/50 shadow-sm flex-1">
+            <CardHeader className="bg-muted/10 border-b border-border/50 pb-3">
+                <CardTitle className="text-sm font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-2">
+                <Crown className="w-4 h-4 text-purple-500" /> Premium Viability
+                </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-4">
+                <div className="flex justify-between items-end mb-4">
+                    <div>
+                        <p className="text-xs text-muted-foreground mb-1">Premium Revenue Share</p>
+                        <p className="text-4xl font-black font-mono text-purple-600 leading-none">{premium.revenue_share_pct.toFixed(1)}%</p>
+                    </div>
+                    <div className="text-right">
+                        <p className="text-[10px] uppercase text-muted-foreground mb-1 font-bold">Product Share</p>
+                        <p className="text-lg font-black font-mono text-foreground leading-none">{premium.product_share_pct.toFixed(1)}%</p>
+                    </div>
+                </div>
+                <div className="bg-muted/30 p-2 rounded flex justify-between items-center border border-border/50">
+                    <span className="text-xs text-muted-foreground">Revenue Efficiency:</span>
+                    <span className={cn("font-mono font-bold text-sm", premium.revenue_efficiency > 1 ? 'text-emerald-500' : 'text-amber-500')}>{premium.revenue_efficiency.toFixed(2)}x</span>
+                </div>
+                <p className="text-[10px] text-muted-foreground mt-2 leading-relaxed text-center">
+                Evaluating products priced &gt; {formatCurrency(struct.median)}.
+                </p>
+            </CardContent>
+            </Card>
+
+            {/* Section 8: Entry Price Recommendation */}
+            <Card className="border-border/50 shadow-sm flex-1">
+            <CardHeader className="border-b border-border/50 pb-3 bg-muted/10">
+                <CardTitle className="text-sm font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-2">
+                <TargetIcon className="w-4 h-4 text-muted-foreground" /> Entry Price Recommendation
+                </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-4">
+                {entry.price_band ? (
+                <>
+                    <div className="flex justify-between items-start mb-2">
+                    <div>
+                        <p className="text-3xl font-black font-mono text-foreground">{entry.price_band}</p>
+                    </div>
+                    <Badge variant="outline" className="uppercase text-[10px] tracking-widest bg-background border-border text-muted-foreground">
+                        {entry.confidence_score} Conf
+                    </Badge>
+                    </div>
+                    <p className="text-xs text-foreground/80 leading-relaxed font-medium">
+                    {entry.reasoning}
+                    </p>
+                </>
+                ) : (
+                <div className="flex flex-col items-center justify-center text-center py-2 opacity-70">
+                    <AlertCircle className="w-8 h-8 text-muted-foreground mb-2" />
+                    <p className="text-sm font-bold">{entry.confidence_score}</p>
+                    <p className="text-xs text-muted-foreground mt-1">{entry.reasoning}</p>
+                </div>
+                )}
+            </CardContent>
+            </Card>
+        </div>
+      </div>
+
+      {/* SECTIONS 3 & 4: CHARTS */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        
+        {/* Section 3: Revenue by Price Range */}
+        <Card className="border-border/50">
+          <CardHeader className="bg-muted/10 border-b border-border/50">
+            <CardTitle className="font-serif text-lg">Revenue by Price Range</CardTitle>
+            <CardDescription>Where revenue is concentrated</CardDescription>
+          </CardHeader>
+          <CardContent className="p-6 h-[400px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart layout="vertical" data={sortedBands} margin={{ top: 5, right: 30, left: 40, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} stroke="hsl(var(--border))" />
+                <XAxis type="number" tickFormatter={v => `$${formatNumber(v)}`} stroke="hsl(var(--muted-foreground))" fontSize={10} />
+                <YAxis dataKey="price_band" type="category" stroke="hsl(var(--muted-foreground))" fontSize={10} width={80} />
+                <Tooltip 
+                  cursor={{ fill: 'hsl(var(--muted))', opacity: 0.2 }}
+                  formatter={(value: any) => [formatCurrency(Number(value)), 'Revenue']}
+                />
+                <Bar dataKey="revenue" fill="hsl(var(--emerald-500))" radius={[0, 4, 4, 0]}>
+                  {sortedBands.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={entry.price_band === highestRevenueBand?.price_band ? 'hsl(var(--primary))' : 'hsl(var(--emerald-500))'} opacity={entry.price_band === highestRevenueBand?.price_band ? 1 : 0.6} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+            <div className="mt-4 text-center">
+              <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                Revenue Leader: <span className="text-primary">{highestRevenueBand?.price_band}</span> captures {highestRevenueBand?.revenue_share_pct.toFixed(1)}% of category revenue.
+              </span>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Section 4: Competition Density */}
+        <Card className="border-border/50">
+          <CardHeader className="bg-muted/10 border-b border-border/50 flex flex-row justify-between items-center">
+            <div>
+                <CardTitle className="font-serif text-lg">Competition Density</CardTitle>
+                <CardDescription>Number of products in each price range</CardDescription>
+            </div>
+            {whiteSpace.length > 0 && (
+                <Badge variant="outline" className="border-blue-500/30 text-blue-500 bg-blue-500/5 uppercase text-[10px] tracking-widest">
+                    {whiteSpace.length} White Space Zone(s)
+                </Badge>
+            )}
+          </CardHeader>
+          <CardContent className="p-6 h-[400px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={sortedBands} margin={{ top: 10, right: 10, left: 0, bottom: 20 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
-                <XAxis
-                  dataKey="chart_label"
-                  stroke="hsl(var(--muted-foreground))"
-                  fontSize={10}
-                  tickFormatter={(v) => String(v)}
-                  tickMargin={10}
+                <XAxis dataKey="price_band" stroke="hsl(var(--muted-foreground))" fontSize={10} angle={-45} textAnchor="end" height={60} />
+                <YAxis stroke="hsl(var(--muted-foreground))" fontSize={10} />
+                <Tooltip 
+                  cursor={{ fill: 'hsl(var(--muted))', opacity: 0.2 }}
+                  formatter={(value: any) => [formatNumber(Number(value)), 'Products']}
                 />
-                <YAxis
-                  yAxisId="left"
-                  stroke="hsl(var(--muted-foreground))"
-                  fontSize={10}
-                  tickFormatter={(v) => `$${formatNumber(v)}`}
-                  tickMargin={10}
-                />
-                <YAxis
-                  yAxisId="right"
-                  orientation="right"
-                  stroke="hsl(var(--success))"
-                  fontSize={10}
-                  tickFormatter={(v) => `${v}%`}
-                  tickMargin={10}
-                />
-                <Tooltip content={<TierRevenueTooltip tierSummary={tierSummary} />} cursor={{ fill: 'hsl(var(--muted))', opacity: 0.2 }} />
-                <Bar yAxisId="left" dataKey="revenue" fill="hsl(var(--primary))" radius={[2, 2, 0, 0]} />
-                <Bar yAxisId="right" dataKey="revenue_share_pct" fill="hsl(var(--success))" fillOpacity={0.4} radius={[2, 2, 0, 0]} />
+                <Bar dataKey="product_count" fill="hsl(var(--blue-500))" radius={[4, 4, 0, 0]} opacity={0.8}>
+                  {sortedBands.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={entry.is_white_space ? 'hsl(var(--primary))' : 'hsl(var(--blue-500))'} opacity={entry.is_white_space ? 1 : 0.8} />
+                  ))}
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           </CardContent>
         </Card>
 
-        <Card className="overflow-hidden border-border/50">
-          <CardHeader className="bg-muted/10 border-b border-border/50">
-            <CardTitle className="font-serif">Economic Positioning Matrix</CardTitle>
-            <CardDescription>Price vs Revenue yield. Size indicates ASIN density.</CardDescription>
-          </CardHeader>
-          <CardContent className="h-[400px] p-6 flex flex-col">
-            <div className="flex-1 min-h-0">
-              <ResponsiveContainer width="100%" height="100%">
-                <ScatterChart margin={{ top: 10, right: 20, bottom: 20, left: 10 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis type="number" dataKey="x" stroke="hsl(var(--muted-foreground))" fontSize={10} tickFormatter={(v) => `$${v}`} tickMargin={10} />
-                  <YAxis type="number" dataKey="y" stroke="hsl(var(--muted-foreground))" fontSize={10} tickFormatter={(v) => `$${formatNumber(v)}`} tickMargin={10} />
-                  <ZAxis type="number" dataKey="z" range={[100, 800]} />
-                  <Tooltip content={<MatrixTooltip />} cursor={{ strokeDasharray: '3 3' }} />
-                  <Scatter data={matrixData}>
-                    {matrixData.map((entry, i) => (
-                      <Cell key={i} fill={tierChartColor(entry.tier)} fillOpacity={0.8} />
-                    ))}
-                  </Scatter>
-                </ScatterChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="flex justify-center gap-6 mt-4 pt-4 border-t border-border/50">
-              <span className="flex items-center gap-2 text-[10px] uppercase font-bold tracking-widest"><span className="w-3 h-3 rounded-sm bg-[hsl(var(--warning))]" /> Budget</span>
-              <span className="flex items-center gap-2 text-[10px] uppercase font-bold tracking-widest"><span className="w-3 h-3 rounded-sm bg-[hsl(var(--info))]" /> Mid-Tier</span>
-              <span className="flex items-center gap-2 text-[10px] uppercase font-bold tracking-widest"><span className="w-3 h-3 rounded-sm bg-[hsl(var(--primary))]" /> Premium</span>
-            </div>
-          </CardContent>
-        </Card>
       </div>
 
-      {/* Market Structure Breakdown */}
-      <Card className="border-border/50 overflow-hidden">
-        <CardHeader className="bg-muted/5 border-b border-border/50">
-          <CardTitle className="font-serif text-2xl flex items-center gap-2">
-            <Layers className="w-6 h-6 text-primary" /> Architecture of Revenue
-          </CardTitle>
-          <CardDescription>Structural breakdown of capital distribution across categorical tiers</CardDescription>
+      {/* SECTION 9: TOP PRICING OPPORTUNITIES */}
+      <Card className="border-border/50 overflow-hidden shadow-sm">
+        <CardHeader className="bg-primary/5 border-b border-border/50">
+          <CardTitle className="font-serif">Top Pricing Opportunities</CardTitle>
+          <CardDescription>Ranked by composite opportunity score (Revenue Density, Median Revenue Per Listing, Competition Gap)</CardDescription>
         </CardHeader>
         <CardContent className="p-0">
-          <div className="grid grid-cols-1 md:grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-border/50">
-            {[
-              { label: 'Budget Allocation', pct: positioning.budget_revenue_pct, tier: 'Budget', color: 'bg-warning', text: 'text-warning' },
-              { label: 'Mid-Tier Allocation', pct: positioning.mid_tier_revenue_pct, tier: 'Mid-Tier', color: 'bg-info', text: 'text-info' },
-              { label: 'Premium Allocation', pct: positioning.premium_revenue_pct, tier: 'Premium', color: 'bg-primary', text: 'text-primary' },
-            ].map((item) => {
-              const range = tierSummary.find((t) => t.tier === item.tier)?.price_range;
-              return (
-                <div key={item.label} className="p-8 hover:bg-muted/5 transition-colors">
-                  <div className="flex justify-between items-start mb-6">
-                    <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">{item.label}</p>
-                    <Badge variant="outline" className={cn("rounded-sm font-mono bg-background", item.text)}>{item.tier}</Badge>
-                  </div>
-                  <p className="text-5xl font-black font-serif mb-2">{(item.pct || 0).toFixed(0)}<span className="text-3xl text-muted-foreground font-sans">%</span></p>
-                  {range && <p className="text-sm font-mono text-muted-foreground mb-6">{range}</p>}
-                  <div className="w-full bg-muted/50 rounded-full h-1.5 overflow-hidden">
-                    <div className={cn("h-full rounded-full transition-all duration-1000 ease-out", item.color)} style={{ width: `${Math.min(item.pct, 100)}%` }} />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          <div className="bg-muted/20 p-6 border-t border-border/50 flex flex-col sm:flex-row justify-between items-center gap-4">
-            <div className="flex items-center gap-3">
-              <span className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Structural Classification</span>
-              <span className={cn('px-3 py-1 rounded-sm border text-xs font-bold uppercase tracking-wider', structureBadge(positioning.classification))}>
-                {positioning.classification}
-              </span>
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Dominant Center</span>
-              <span className="font-mono text-sm font-bold bg-background border px-3 py-1 rounded-sm">{positioning.dominant_range}</span>
-            </div>
-          </div>
+          <DataTable columns={topOpportunitiesColumns} data={topOpportunities} pageSize={5} />
         </CardContent>
       </Card>
 
-      {/* Detailed Corridors Table */}
-      <Card className="border-border/50 bg-card/50 glass">
-        <CardHeader>
-          <CardTitle className="font-serif">Strategic Entry Corridors</CardTitle>
-          <CardDescription>Band-level analysis of revenue, competition, and entry viability.</CardDescription>
+      {/* SECTION 2: PRICE RANGE ANALYSIS */}
+      <Card className="border-border/50 overflow-hidden shadow-sm">
+        <CardHeader className="bg-muted/10 border-b border-border/50">
+          <CardTitle className="font-serif">Price Range Analysis</CardTitle>
+          <CardDescription>Comprehensive metrics across all dynamic price ranges</CardDescription>
         </CardHeader>
-        <CardContent>
-          <DataTable columns={tableColumns} data={bands} pageSize={10} />
+        <CardContent className="p-0">
+          <DataTable columns={bandAnalysisColumns} data={bands} pageSize={15} />
         </CardContent>
       </Card>
 
-      {/* Dead Zones Alert */}
-      {deadZones.length > 0 && (
-        <Card className="border-danger/30 bg-danger/5 relative overflow-hidden">
-          <div className="absolute right-0 top-0 opacity-5 p-4 pointer-events-none"><Skull className="w-32 h-32 text-danger" /></div>
-          <CardHeader>
-            <CardTitle className="text-danger flex items-center gap-2 font-serif text-xl">
-              <ShieldAlert className="w-5 h-5" /> Inefficient Capital Corridors (Dead Zones)
-            </CardTitle>
-            <CardDescription className="text-danger/70">Price bands with negligible revenue share relative to ASIN density. Avoid product positioning in these ranges.</CardDescription>
-          </CardHeader>
-          <CardContent className="relative z-10">
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-              {deadZones.map((dz, i) => (
-                <div key={i} className="bg-background/80 backdrop-blur border border-danger/20 rounded-lg p-4 shadow-sm">
-                  <div className="flex justify-between items-center mb-2">
-                    <span className={cn('text-[10px] font-bold uppercase tracking-widest', tierBadge(dz.tier).split(' ')[1])}>{dz.tier}</span>
-                    <span className="text-[10px] text-danger font-mono uppercase">Avoid</span>
-                  </div>
-                  <p className="font-mono text-lg font-bold mb-3">{dz.price_band}</p>
-                  <div className="flex justify-between items-end border-t border-danger/10 pt-2">
-                    <div>
-                      <p className="text-[10px] uppercase text-muted-foreground">Share</p>
-                      <p className="font-medium text-danger">{dz.revenue_share_pct.toFixed(1)}%</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-[10px] uppercase text-muted-foreground">Revenue</p>
-                      <p className="font-medium text-muted-foreground">{formatCurrency(dz.revenue)}</p>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
     </motion.div>
+
+    {/* PRODUCT DETAIL DRAWER */}
+    <Drawer 
+      isOpen={!!selectedProduct} 
+      onClose={() => setSelectedProduct(null)} 
+      title="Product Positioning Details"
+    >
+      {selectedProduct && (
+        <div className="space-y-6">
+          
+          <div className="bg-muted/30 p-4 rounded-xl border border-border">
+            <h3 className="text-xl font-bold leading-tight text-foreground mb-2">{selectedProduct.title}</h3>
+            <div className="flex flex-wrap gap-2 mb-4">
+              <Badge variant="outline" className="font-mono bg-background border-border"><Tag className="w-3 h-3 mr-1" /> {selectedProduct.brand}</Badge>
+              <Badge variant="outline" className="font-mono bg-background border-border"><Package className="w-3 h-3 mr-1" /> {selectedProduct.asin}</Badge>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="bg-card border border-border rounded-xl p-4 shadow-sm flex flex-col justify-center">
+              <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest mb-1 flex items-center gap-1">
+                <DollarSign className="w-3 h-3 text-emerald-500" /> Price
+              </span>
+              <span className="text-3xl font-black font-mono text-emerald-600">{formatCurrency(selectedProduct.price)}</span>
+              <span className="text-xs text-muted-foreground mt-2">Band: {selectedProduct.price_band}</span>
+            </div>
+
+            <div className="bg-card border border-border rounded-xl p-4 shadow-sm flex flex-col justify-center">
+              <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest mb-1 flex items-center gap-1">
+                <Activity className="w-3 h-3 text-primary" /> Revenue
+              </span>
+              <span className="text-3xl font-black font-mono text-primary">{formatCurrency(selectedProduct.revenue)}</span>
+            </div>
+
+            <div className="bg-card border border-border rounded-xl p-4 shadow-sm flex flex-col justify-center">
+              <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest mb-1 flex items-center gap-1">
+                <Star className="w-3 h-3 text-amber-500" /> Reviews & Rating
+              </span>
+              <span className="text-2xl font-black font-mono text-foreground">{formatNumber(selectedProduct.reviews)}</span>
+              <span className="text-xs text-muted-foreground mt-1">Rating: {selectedProduct.rating > 0 ? selectedProduct.rating.toFixed(1) : 'N/A'}</span>
+            </div>
+
+            <div className="bg-card border border-border rounded-xl p-4 shadow-sm flex flex-col justify-center">
+              <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest mb-1 flex items-center gap-1">
+                <Hash className="w-3 h-3 text-blue-500" /> BSR & Market Share
+              </span>
+              <span className="text-2xl font-black font-mono text-foreground">{formatNumber(selectedProduct.bsr)}</span>
+              <span className="text-xs text-muted-foreground mt-1">Market Share: {selectedProduct.market_share_pct.toFixed(2)}%</span>
+            </div>
+          </div>
+          
+        </div>
+      )}
+    </Drawer>
+    </>
   );
 }

@@ -47,6 +47,11 @@ _REVENUE_CANDIDATES = [
     "Parent Level Revenue", "parent level revenue",
     "Monthly Revenue", "monthly revenue",
 ]
+_ASIN_SALES_CANDIDATES = [
+    "ASIN Sales", "asin sales",
+    "Sales", "sales",
+    "Parent Level Sales", "parent level sales",
+]
 _SALES_TREND_CANDIDATES = [
     "Sales Trend (90 days) (%)", "sales trend (90 days) (%)",
     "Sales Trend (%)", "sales trend (%)",
@@ -100,6 +105,7 @@ def run(
     # -----------------------------------------------------------------------
     brand_col = find_column(blackbox_df, _BRAND_CANDIDATES)
     rev_col = find_column(blackbox_df, _REVENUE_CANDIDATES)
+    sales_col = find_column(blackbox_df, _ASIN_SALES_CANDIDATES)
     sales_trend_col = find_column(blackbox_df, _SALES_TREND_CANDIDATES)
     sales_yoy_col = find_column(blackbox_df, _SALES_YOY_CANDIDATES)
     review_count_col = find_column(blackbox_df, _REVIEW_COUNT_CANDIDATES)
@@ -203,6 +209,16 @@ def run(
     work["revenue"] = rev_clean
     numeric_cols_cleaned.append(rev_col)
 
+    if sales_col:
+        sales_clean, sales_stats = clean_numeric_series(blackbox_df[sales_col], sales_col)
+        logger.info(
+            f"Sales '{sales_col}': original={sales_stats['original_count']}, "
+            f"cleaned={sales_stats['cleaned_count']}, nan={sales_stats['nan_introduced']}"
+        )
+        work["sales"] = sales_clean
+        numeric_cols_cleaned.append(sales_col)
+
+
     if sales_trend_col:
         sales_trend_clean, sales_trend_stats = clean_numeric_series(
             blackbox_df[sales_trend_col], sales_trend_col
@@ -274,6 +290,8 @@ def run(
     # Brand-level aggregation
     # -----------------------------------------------------------------------
     agg_dict: Dict[str, str] = {"revenue": "sum"}
+    if "sales" in work.columns:
+        agg_dict["sales"] = "sum"
     if "sales_trend" in work.columns:
         agg_dict["sales_trend"] = "mean"
     if "sales_yoy" in work.columns:
@@ -477,6 +495,8 @@ def run(
     market_median = float(brand_agg["momentum_score"].median(skipna=True))
     total_revenue = float(brand_agg["revenue"].sum(skipna=True))
 
+    brand_agg["revenue_share"] = (brand_agg["revenue"] / total_revenue * 100.0).fillna(0.0) if total_revenue > 0 else 0.0
+
     if market_mean >= 60:
         direction = "Growing"
     elif market_mean >= 40:
@@ -526,6 +546,12 @@ def run(
             "0.20×BSRMomentum + 0.10×RevenueStrength, normalized to 0-100. "
             f"Metrics used: {metrics_available}"
         ),
+        "audit_flags": {
+            "sales_trend_available": bool(sales_trend_col),
+            "sales_yoy_available": bool(sales_yoy_col),
+            "review_growth_available": bool(review_growth_col),
+            "bsr_trend_available": bool(bsr_trend_col),
+        },
         "results": {
             "market_momentum_direction": direction,
             "market_mean_score": round(market_mean, 2),
@@ -588,6 +614,33 @@ def _momentum_category(score: float) -> str:
 def _brand_records(df: pd.DataFrame, n: int) -> List[Dict]:
     records = []
     for _, row in df.head(n).iterrows():
+        drivers = {
+            "sales_velocity": _sv(row.get("sales_velocity_score")),
+            "review_velocity": _sv(row.get("review_velocity_score")),
+            "bsr_momentum": _sv(row.get("bsr_momentum_score")),
+            "revenue_strength": _sv(row.get("revenue_strength_score")),
+        }
+        
+        # Validation Rule
+        valid_drivers = {k: v for k, v in drivers.items() if v is not None}
+        primary_engine_calc = "Unknown"
+        
+        if valid_drivers:
+            # max() by value. We map keys back to their capitalized display names
+            driver_name_map = {
+                "sales_velocity": "Sales Velocity",
+                "review_velocity": "Review Velocity",
+                "bsr_momentum": "BSR Momentum",
+                "revenue_strength": "Revenue Strength"
+            }
+            max_driver_key = max(valid_drivers, key=valid_drivers.get)
+            primary_engine_calc = driver_name_map[max_driver_key]
+            
+        primary_engine = _sv(row.get("primary_driver")) or primary_engine_calc
+
+        if primary_engine != primary_engine_calc and primary_engine != "Unknown" and primary_engine_calc != "Unknown":
+            logger.error(f"Validation Error for {row['brand']}: Computed Primary Engine '{primary_engine}' does not match highest driver '{primary_engine_calc}'")
+
         rec: Dict[str, Any] = {
             "brand": str(row["brand"]),
             "momentum_score": _sv(row.get("momentum_score")),
@@ -597,8 +650,12 @@ def _brand_records(df: pd.DataFrame, n: int) -> List[Dict]:
             "bsr_momentum_score": _sv(row.get("bsr_momentum_score")),
             "revenue_strength_score": _sv(row.get("revenue_strength_score")),
             "total_revenue": _sv(row.get("revenue")),
+            "revenue_share": _sv(row.get("revenue_share")),
+            "sales_estimate": _sv(row.get("sales")),
             "momentum_category": _sv(row.get("momentum_category")),
             "weakest_driver": _sv(row.get("weakest_driver")),
+            "primary_engine": primary_engine,
+            "drivers": drivers,
         }
         if "sales_trend" in row.index:
             rec["avg_sales_trend_pct"] = _sv(row.get("sales_trend"))

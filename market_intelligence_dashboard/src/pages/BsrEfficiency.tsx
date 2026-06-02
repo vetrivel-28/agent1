@@ -35,8 +35,8 @@ function segmentBadge(seg: string): string {
 function quadrantDotColor(q: string): string {
   switch (q) {
     case 'Elite Performers':  return '#a855f7';
-    case 'Revenue Outliers':  return '#10b981';
-    case 'Revenue Leakage':   return '#ef4444';
+    case 'High Rev, Weak Rank':  return '#10b981';
+    case 'Strong Rank, Low Rev':   return '#ef4444';
     case 'Underperformers':   return '#64748b';
     default:                  return '#94a3b8';
   }
@@ -158,9 +158,9 @@ function ScatterTip({ active, payload }: any) {
           <p className="text-xs font-mono">{d.bsr_percentile?.toFixed(1)}</p>
         </div>
         <div>
-          <p className="text-[10px] text-muted-foreground uppercase">Gap</p>
-          <p className={cn('text-xs font-bold font-mono', gapColor(d.revenue_rank_gap ?? 0))}>
-            {(d.revenue_rank_gap ?? 0) > 0 ? '+' : ''}{d.revenue_rank_gap?.toFixed(1)}
+          <p className="text-[10px] text-muted-foreground uppercase">Monetization Gap</p>
+          <p className={cn('text-xs font-bold font-mono', gapColor(d.monetization_gap ?? 0))}>
+            {(d.monetization_gap ?? 0) > 0 ? '+' : ''}{d.monetization_gap?.toFixed(1)}
           </p>
         </div>
         <div>
@@ -252,6 +252,23 @@ export default function BsrEfficiency() {
     ? Math.round((top5Recovery / totalRecoverable) * 100) : 0;
   const totalProducts = r.total_products_analysed ?? 1;
   const avgEfficiency = r.average_category_efficiency ?? 0;
+  const dataConfidence = r.data_confidence ?? "Medium";
+
+  // ── Validation ─────────────────────────────────────────────────────────
+  const cardEliteCount = r.elite_performer_count ?? 0;
+  const quadEliteCount = qs.elite_performers ?? 0;
+  const scatterEliteCount = scatter.filter(p => p.quadrant === 'Elite Performers').length;
+  const isEliteValid = cardEliteCount === quadEliteCount && quadEliteCount === scatterEliteCount;
+
+  const cardOutlierCount = r.revenue_outlier_count ?? 0;
+  const scatterOutlierCount = scatter.filter(p => p.segment === 'Revenue Outlier').length;
+  const isOutlierValid = cardOutlierCount === scatterOutlierCount;
+
+  const cardLeakageCount = r.revenue_leakage_count ?? 0;
+  const scatterLeakageCount = scatter.filter(p => p.segment === 'Revenue Leakage').length;
+  const isLeakageValid = cardLeakageCount === scatterLeakageCount;
+
+  const isAuditValid = isEliteValid && isOutlierValid && isLeakageValid;
 
   // ── Table Columns ──────────────────────────────────────────────────────
 
@@ -287,14 +304,41 @@ export default function BsrEfficiency() {
       cell: (row) => <span className="font-mono text-sm">{row.bsr_percentile != null ? row.bsr_percentile.toFixed(1) : '—'}</span>,
     },
     {
-      header: 'Gap',
-      accessorKey: 'revenue_rank_gap',
+      header: 'Monetization Gap',
+      accessorKey: 'monetization_gap',
       cell: (row) => {
-        const gap = row.revenue_rank_gap ?? 0;
+        const gap = row.monetization_gap ?? 0;
+        const revPct = row.revenue_percentile ?? 0;
+        const bsrPct = row.bsr_percentile ?? 0;
+        
         return (
-          <span className={cn('font-mono font-bold text-sm', gapColor(gap))}>
-            {gap > 0 ? '+' : ''}{gap.toFixed(1)}
-          </span>
+          <div className="relative group/gap inline-flex cursor-help items-center w-full">
+            <span className={cn('font-mono font-bold text-sm border-b border-dashed border-border/50 hover:border-border transition-colors', gapColor(gap))}>
+              {gap > 0 ? '+' : ''}{gap.toFixed(1)}
+            </span>
+            
+            <div className="hidden group-hover/gap:block absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-64 bg-background/95 backdrop-blur-md border border-border/50 shadow-xl rounded-lg p-4 z-[999] text-left cursor-default">
+              <p className="font-bold text-xs uppercase tracking-wider text-muted-foreground border-b border-border/50 pb-1 mb-2">Efficiency Formula</p>
+              
+              <div className="space-y-1 font-mono text-xs">
+                <div className="flex justify-between"><span className="text-muted-foreground">BSR Percentile</span> <span>{bsrPct.toFixed(1)}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Revenue Percentile</span> <span>{revPct.toFixed(1)}</span></div>
+              </div>
+              
+              <div className="mt-3 bg-muted/30 p-2 rounded border border-border/30 font-mono text-[10px] text-muted-foreground leading-relaxed">
+                <p>Monetization Gap = Revenue Percentile - BSR Percentile</p>
+                <p className="pl-2 mt-1">= {revPct.toFixed(1)} - {bsrPct.toFixed(1)}</p>
+                <p className={cn('pl-2 font-bold mt-1', gapColor(gap))}>= {gap > 0 ? '+' : ''}{gap.toFixed(1)}</p>
+              </div>
+              
+              <div className="mt-3 pt-2 border-t border-border/50">
+                <p className="text-[10px] uppercase font-bold text-muted-foreground mb-1">Classification</p>
+                <span className={cn('text-[10px] px-2 py-0.5 rounded-full font-bold border uppercase tracking-wider', segmentBadge(row.segment))}>{row.segment}</span>
+              </div>
+              
+              <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-border/50" />
+            </div>
+          </div>
         );
       },
     },
@@ -368,6 +412,16 @@ export default function BsrEfficiency() {
           : <span className="text-muted-foreground">—</span>;
       },
     },
+    {
+      header: 'Recovery ROI',
+      accessorKey: 'recovery_roi_pct',
+      cell: (row) => {
+        const roi = row.recovery_roi_pct ?? 0;
+        return roi > 0
+          ? <span className="font-mono text-sm font-bold text-emerald-600">+{roi.toFixed(0)}%</span>
+          : <span className="text-muted-foreground">—</span>;
+      },
+    },
     baseColumns[2],
     baseColumns[5],
     {
@@ -383,9 +437,16 @@ export default function BsrEfficiency() {
       header: 'Likely Cause',
       accessorKey: 'likely_cause',
       cell: (row) => (
-        <span className={cn('text-[10px] px-2 py-0.5 rounded-full font-bold', causeBadge(row.likely_cause ?? ''))}>
-          {row.likely_cause ?? '—'}
-        </span>
+        <div className="flex flex-col gap-0.5">
+          <span className={cn('text-[10px] px-2 py-0.5 rounded-full font-bold w-max', causeBadge(row.likely_cause ?? ''))}>
+            {row.likely_cause ?? '—'}
+          </span>
+          {row.root_cause_evidence && (
+            <span className="text-[10px] text-muted-foreground italic leading-tight max-w-[150px]">
+              {row.root_cause_evidence}
+            </span>
+          )}
+        </div>
       ),
     },
   ];
@@ -398,9 +459,17 @@ export default function BsrEfficiency() {
       {/* ═══ HEADER ═══ */}
       <div className="flex flex-col lg:flex-row justify-between items-start lg:items-end gap-6 border-b border-border/40 pb-6">
         <div>
-          <Badge className="bg-primary/10 text-primary border-primary/20 mb-3 font-mono text-[10px] tracking-widest uppercase rounded-sm px-2.5 py-1">
-            Performance Analytics
-          </Badge>
+          <div className="flex items-center gap-3 mb-3">
+            <Badge className="bg-primary/10 text-primary border-primary/20 font-mono text-[10px] tracking-widest uppercase rounded-sm px-2.5 py-1">
+              Performance Analytics
+            </Badge>
+            <Badge className={cn('font-mono text-[10px] tracking-widest uppercase rounded-sm px-2.5 py-1', 
+              dataConfidence === 'High' ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' : 
+              dataConfidence === 'Medium' ? 'bg-yellow-500/10 text-yellow-700 border-yellow-500/20' : 
+              'bg-red-500/10 text-red-600 border-red-500/20')}>
+              Data Confidence: {dataConfidence}
+            </Badge>
+          </div>
           <h1 className="text-4xl font-black tracking-tight text-foreground">BSR Efficiency</h1>
           <p className="text-muted-foreground mt-2 text-base max-w-2xl">
             Market-relative product performance intelligence — which products outperform their rank, and where revenue is being lost.
@@ -415,94 +484,162 @@ export default function BsrEfficiency() {
         </div>
       </div>
 
-      {/* ═══ KPI GRID ═══ */}
+      {!isAuditValid && (
+        <Card className="border-danger/30 bg-danger/5 mb-6 max-w-4xl">
+          <CardContent className="p-4 flex gap-3 items-center text-sm">
+            <AlertCircle className="w-5 h-5 text-danger shrink-0" />
+            <div className="text-danger">
+              <p><strong>Audit Warning: Classification Discrepancies Detected</strong></p>
+              <ul className="list-disc pl-5 mt-1 space-y-0.5">
+                {!isEliteValid && <li>Elite Performers: Card ({cardEliteCount}) vs Quadrant ({quadEliteCount}) vs Scatter ({scatterEliteCount})</li>}
+                {!isOutlierValid && <li>Revenue Outliers: Card ({cardOutlierCount}) vs Scatter Segment ({scatterOutlierCount})</li>}
+                {!isLeakageValid && <li>Revenue Leakage: Card ({cardLeakageCount}) vs Scatter Segment ({scatterLeakageCount})</li>}
+              </ul>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ═══ METHODOLOGY BANNER ═══ */}
+      <Card className="border-border/30 bg-muted/10 mb-6 shadow-none max-w-[1400px]">
+        <CardContent className="p-4 flex gap-3 text-sm">
+          <Info className="w-5 h-5 text-muted-foreground shrink-0 mt-0.5" />
+          <div className="space-y-3 text-muted-foreground w-full">
+            <p>
+              <strong className="text-foreground">Methodology Note: Algebraic Gaps vs Geometric Quadrants</strong><br/>
+              BSR Efficiency uses two distinct lenses to classify product performance, which is why Summary Card counts differ from Quadrant Distribution counts.
+            </p>
+            <div className="grid md:grid-cols-2 gap-4">
+              <div className="bg-background/50 rounded-lg p-3.5 border border-border/30">
+                <p className="font-bold text-[11px] uppercase tracking-wider text-foreground mb-2 border-b border-border/50 pb-1.5 flex items-center gap-1.5">
+                  <span className="w-4 h-4 rounded-full bg-primary/10 text-primary flex items-center justify-center text-[9px]">1</span> 
+                  Gap Segments (Summary Cards)
+                </p>
+                <p className="text-xs mb-3 text-muted-foreground">Measures the relative distance between a product's revenue and its rank, identifying severe mismatches <em className="text-foreground/80">regardless of where the product sits</em> on the board.</p>
+                <ul className="list-disc pl-5 space-y-1.5 text-xs font-mono text-muted-foreground/80">
+                  <li><strong className="font-sans text-emerald-600/80">Revenue Outlier:</strong> Rev % - BSR % &gt; +20</li>
+                  <li><strong className="font-sans text-red-600/80">Revenue Leakage:</strong> Rev % - BSR % &lt; -20</li>
+                </ul>
+              </div>
+              <div className="bg-background/50 rounded-lg p-3.5 border border-border/30">
+                <p className="font-bold text-[11px] uppercase tracking-wider text-foreground mb-2 border-b border-border/50 pb-1.5 flex items-center gap-1.5">
+                  <span className="w-4 h-4 rounded-full bg-primary/10 text-primary flex items-center justify-center text-[9px]">2</span> 
+                  Quadrants (Scatter Distribution)
+                </p>
+                <p className="text-xs mb-3 text-muted-foreground">Measures absolute, fixed geometric positioning relative to the category median (50th percentile) to identify broad strategic placement.</p>
+                <ul className="list-disc pl-5 space-y-1.5 text-xs font-mono text-muted-foreground/80">
+                  <li><strong className="font-sans text-emerald-600/80">High Rev, Weak Rank:</strong> Rev % &gt;= 50 AND BSR % &lt; 50</li>
+                  <li><strong className="font-sans text-red-600/80">Strong Rank, Low Rev:</strong> Rev % &lt; 50 AND BSR % &gt;= 50</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* ═══ EXECUTIVE SUMMARY ═══ */}
+      {totalRecoverable > 0 && (
+        <Card className="border-amber-500/30 bg-amber-500/5 mb-6">
+          <CardContent className="p-6">
+            <div className="flex flex-col md:flex-row gap-6 items-center justify-between">
+              <div className="flex-1">
+                <p className="text-sm font-bold uppercase tracking-widest text-amber-600 mb-1">Executive Summary</p>
+                <h2 className="text-2xl font-black text-foreground mb-2">Revenue Left on Table: {formatCurrency(totalRecoverable)}/month</h2>
+                <p className="text-muted-foreground">{r.revenue_leakage_count} products underperforming expectations.</p>
+              </div>
+              
+              {(() => {
+                const biggestOpp = leakage.length > 0
+                  ? leakage.slice().sort((a: any, b: any) => (b.revenue_recovery ?? 0) - (a.revenue_recovery ?? 0))[0]
+                  : null;
+                  
+                if (!biggestOpp) return null;
+                return (
+                  <div className="flex-1 bg-background/60 rounded-xl p-4 border border-border/50">
+                    <p className="text-xs uppercase tracking-widest font-bold text-muted-foreground mb-2">Largest Opportunity</p>
+                    <p className="font-semibold text-foreground line-clamp-1 mb-3" title={biggestOpp.title}>{biggestOpp.title || biggestOpp.asin}</p>
+                    <div className="flex gap-4">
+                      <div>
+                        <p className="text-[10px] text-muted-foreground uppercase">Potential Recovery</p>
+                        <p className="text-sm font-bold text-emerald-600 font-mono">+{formatCurrency(biggestOpp.revenue_recovery ?? 0)}/mo</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-muted-foreground uppercase">Primary Cause</p>
+                        <p className="text-sm font-bold text-foreground">{biggestOpp.likely_cause}</p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ═══ QUANTITATIVE CATEGORY HEALTH ═══ */}
       <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-4 gap-4">
         <KpiCard
-          title="Revenue Outliers"
-          value={r.revenue_outlier_count ?? 0}
-          sub="Products earning above rank expectations (Gap > +20)"
-          icon={<ArrowUpRight className="w-4 h-4" />}
-          color="text-emerald-600"
-          bg="bg-emerald-500/10 border-emerald-500/30"
-          tooltip="Products earning significantly more revenue than similarly ranked competitors."
+          title="Median Efficiency"
+          value={r.median_efficiency ?? 0}
+          sub="Overall category health score"
+          icon={<Activity className="w-4 h-4" />}
+          color="text-primary"
+          bg="bg-primary/10 border-primary/30"
+          tooltip="Median efficiency score (0-100) across all analysed products."
         />
         <KpiCard
-          title="Revenue Leakage"
-          value={r.revenue_leakage_count ?? 0}
-          sub="Products underperforming their rank (Gap < −20)"
+          title="Revenue Leakage Rate"
+          value={totalProducts > 0 ? `${Math.round(((r.revenue_leakage_count ?? 0) / totalProducts) * 100)}%` : '0%'}
+          sub="Products severely under-monetizing"
           icon={<ArrowDownRight className="w-4 h-4" />}
           color="text-red-600"
           bg="bg-red-500/10 border-red-500/30"
-          tooltip="Products with strong rank but weak monetisation. Highest optimization priority."
+          tooltip="Percentage of products with a Monetization Gap < -20."
         />
         <KpiCard
-          title="Elite Performers"
-          value={r.elite_performer_count ?? 0}
-          sub="Top quartile in both rank and revenue"
-          icon={<Crown className="w-4 h-4" />}
-          color="text-purple-600"
-          bg="bg-purple-500/10 border-purple-500/30"
-          tooltip="Products in the top 25% of both revenue and BSR percentile."
+          title="Products Below Expectation"
+          value={r.revenue_leakage_count ?? 0}
+          sub="Require immediate optimization"
+          icon={<Target className="w-4 h-4" />}
+          color="text-orange-600"
+          bg="bg-orange-500/10 border-orange-500/30"
+          tooltip="Total count of products classified as Revenue Leakage."
         />
         <KpiCard
-          title="Recovery Opportunity"
+          title="Recoverable Revenue"
           value={totalRecoverable > 0 ? formatCurrency(totalRecoverable) : '—'}
           sub={`Top 5 account for ${recoveryConcentrationPct}% of total`}
           icon={<DollarSign className="w-4 h-4" />}
-          color="text-amber-600"
-          bg="bg-amber-500/10 border-amber-500/30"
-          tooltip="Estimated revenue upside if leakage products matched expected revenue for their BSR percentile."
+          color="text-emerald-600"
+          bg="bg-emerald-500/10 border-emerald-500/30"
+          tooltip="Expected Revenue - Actual Revenue for all leakage products."
         />
       </div>
 
-      {/* ═══ INSIGHTS PANEL ═══ */}
-      {(() => {
-        const keyFinding = r.revenue_leakage_count > 0
-          ? `${r.revenue_leakage_count} products monetise below category expectations — optimization opportunity exists.`
-          : r.revenue_outlier_count > 0
-            ? `${r.revenue_outlier_count} products outperform their rank — study their strategies.`
-            : `Category efficiency is ${avgEfficiency}/100.`;
-
-        const biggestOpp = leakage.length > 0
-          ? leakage.slice().sort((a: any, b: any) => (b.revenue_recovery ?? 0) - (a.revenue_recovery ?? 0))[0]
-          : null;
-
-        const bestInClass = elite.length > 0
-          ? elite.slice().sort((a: any, b: any) => (b.efficiency_score ?? 0) - (a.efficiency_score ?? 0))[0]
-          : null;
-
-        const causeCounts: Record<string, number> = {};
-        leakage.forEach((p: any) => {
-          if (p.likely_cause) causeCounts[p.likely_cause] = (causeCounts[p.likely_cause] || 0) + 1;
-        });
-        const topCause = Object.entries(causeCounts).sort((a, b) => b[1] - a[1])[0];
-        const topCausePct = topCause && leakage.length > 0
-          ? Math.round((topCause[1] / leakage.length) * 100) : 0;
-
-        const panels = [
-          { category: 'Key Finding', text: keyFinding, value: null, color: 'text-primary', bg: 'bg-primary/5 border-primary/20', icon: <Lightbulb className="w-4 h-4" /> },
-          ...(biggestOpp ? [{ category: 'Biggest Opportunity', text: (biggestOpp.title || biggestOpp.asin || 'Unknown').slice(0, 60), value: `+${formatCurrency(biggestOpp.revenue_recovery ?? 0)} recovery potential`, color: 'text-amber-600', bg: 'bg-amber-500/5 border-amber-500/20', icon: <Target className="w-4 h-4" /> }] : []),
-          ...(bestInClass ? [{ category: 'Best-in-Class', text: (bestInClass.title || bestInClass.asin || 'Unknown').slice(0, 60), value: `${(bestInClass.efficiency_score ?? 0).toFixed(1)}/100 efficiency`, color: 'text-purple-600', bg: 'bg-purple-500/5 border-purple-500/20', icon: <Crown className="w-4 h-4" /> }] : []),
-          ...(topCause ? [{ category: 'Root Cause', text: topCause[0], value: `Affects ${topCausePct}% of leakage products`, color: 'text-red-600', bg: 'bg-red-500/5 border-red-500/20', icon: <AlertCircle className="w-4 h-4" /> }] : []),
-        ];
-
-        return (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-            {panels.map((p, i) => (
-              <motion.div key={i} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: i * 0.08 }}
-                className={cn('rounded-xl border p-5 space-y-3', p.bg)}>
-                <div className="flex items-center gap-2">
-                  <span className={p.color}>{p.icon}</span>
-                  <span className={cn('text-[10px] font-bold uppercase tracking-widest', p.color)}>{p.category}</span>
-                </div>
-                <p className="text-sm font-semibold text-foreground leading-snug line-clamp-2" title={p.text}>{p.text}</p>
-                {p.value && <p className="text-xs text-muted-foreground">{p.value}</p>}
-              </motion.div>
-            ))}
+      {/* ═══ CATEGORY BENCHMARKS ═══ */}
+      <Card className="border-border/30 bg-muted/5">
+        <CardContent className="p-4">
+          <p className="text-xs uppercase font-bold tracking-widest text-muted-foreground mb-4">Category Benchmarks</p>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+            <div>
+              <p className="text-[10px] text-muted-foreground uppercase">Category Median Revenue</p>
+              <p className="text-lg font-mono font-bold text-foreground">{formatCurrency(r.category_median_revenue ?? 0)}</p>
+            </div>
+            <div>
+              <p className="text-[10px] text-muted-foreground uppercase">Top Quartile Revenue</p>
+              <p className="text-lg font-mono font-bold text-foreground">{formatCurrency(r.top_quartile_revenue ?? 0)}</p>
+            </div>
+            <div>
+              <p className="text-[10px] text-muted-foreground uppercase">Median BSR</p>
+              <p className="text-lg font-mono font-bold text-foreground">{(r.median_bsr ?? 0).toLocaleString()}</p>
+            </div>
+            <div>
+              <p className="text-[10px] text-muted-foreground uppercase">Median Efficiency</p>
+              <p className="text-lg font-mono font-bold text-foreground">{(r.median_efficiency ?? 0).toFixed(1)}</p>
+            </div>
           </div>
-        );
-      })()}
+        </CardContent>
+      </Card>
 
       {/* ═══ TOP RECOVERY OPPORTUNITIES ═══ */}
       {leakage.length > 0 && (() => {
@@ -535,16 +672,41 @@ export default function BsrEfficiency() {
                     <p className="text-sm font-bold leading-snug line-clamp-2 text-foreground" title={p.title || p.asin}>
                       {(p.title || p.asin || 'Unknown product').slice(0, 60)}
                     </p>
-                    <div className="space-y-1.5 pt-2 border-t border-border/40">
-                      <div className="flex justify-between items-center">
-                        <span className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Recovery</span>
-                        <span className="text-sm font-black font-mono text-amber-600">+{formatCurrency(p.revenue_recovery ?? 0)}</span>
+                    <div className="space-y-2 pt-3 border-t border-border/40">
+                      <div className="grid grid-cols-2 gap-3 mb-2">
+                        <div>
+                          <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Revenue</p>
+                          <p className="text-sm font-medium text-foreground">{formatCurrency(p.revenue ?? 0)}</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Expected</p>
+                          <p className="text-sm font-medium text-foreground">{formatCurrency(p.expected_revenue ?? 0)}</p>
+                        </div>
                       </div>
-                      <div className="flex justify-between items-center">
-                        <span className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Cause</span>
-                        <span className={cn('text-[10px] px-2 py-0.5 rounded-full font-bold', causeBadge(p.likely_cause ?? ''))}>
-                          {p.likely_cause ?? '—'}
-                        </span>
+                      
+                      <div className="grid grid-cols-2 gap-3 mb-3 pb-3 border-b border-border/40">
+                        <div>
+                          <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Potential Recovery</p>
+                          <p className="text-sm font-black font-mono text-emerald-600">+{formatCurrency(p.revenue_recovery ?? 0)}</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Potential Lift</p>
+                          <p className="text-sm font-black font-mono text-emerald-600">+{((p.recovery_roi_pct ?? 0)).toFixed(0)}%</p>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col gap-1.5">
+                        <span className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Root Cause</span>
+                        <div className="flex flex-col gap-0.5">
+                          <span className={cn('text-xs px-2 py-0.5 rounded-md font-bold w-max', causeBadge(p.likely_cause ?? ''))}>
+                            {p.likely_cause ?? '—'}
+                          </span>
+                          {p.root_cause_evidence && (
+                            <span className="text-xs text-muted-foreground italic leading-tight mt-1">
+                              "{p.root_cause_evidence}"
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -557,13 +719,26 @@ export default function BsrEfficiency() {
 
       {/* ═══ SCATTER MATRIX + QUADRANT BREAKDOWN ═══ */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <Card className="lg:col-span-2 border-border/40">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base font-bold">Revenue vs Rank Matrix</CardTitle>
-            <CardDescription>
-              X = BSR Percentile (right = better rank). Y = Revenue Percentile (up = more revenue). Quadrants reveal strategic positioning.
-            </CardDescription>
-          </CardHeader>
+        <div className="lg:col-span-2 flex flex-col gap-4">
+          <Card className="border-border/40 bg-muted/5">
+            <CardContent className="p-4 flex flex-col md:flex-row gap-4 justify-between items-center text-sm text-muted-foreground">
+              <div className="flex items-center gap-2">
+                <Info className="w-4 h-4" />
+                <span className="font-bold uppercase tracking-widest text-[10px] text-foreground">How to Read</span>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 w-full">
+                <div><strong className="text-purple-500">Top Right:</strong> Elite Performers<br/><span className="text-xs">Strong rank + strong revenue</span></div>
+                <div><strong className="text-emerald-500">Top Left:</strong> Revenue Outliers<br/><span className="text-xs">Weak rank + strong revenue</span></div>
+                <div><strong className="text-red-500">Bottom Right:</strong> Revenue Leakage<br/><span className="text-xs">Strong rank + weak revenue</span></div>
+                <div><strong className="text-slate-400">Bottom Left:</strong> Underperformers<br/><span className="text-xs">Weak rank + weak revenue</span></div>
+              </div>
+            </CardContent>
+          </Card>
+          
+          <Card className="border-border/40">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base font-bold">Revenue vs Rank Matrix</CardTitle>
+            </CardHeader>
           <CardContent>
             <div className="relative">
               <div className="absolute inset-0 pointer-events-none z-10" style={{ top: 8, left: 48, right: 16, bottom: 40 }}>
@@ -595,8 +770,8 @@ export default function BsrEfficiency() {
             <div className="flex flex-wrap gap-5 mt-3 pt-3 border-t border-border/30 justify-center">
               {[
                 { label: 'Elite Performers', color: '#a855f7' },
-                { label: 'Revenue Outliers', color: '#10b981' },
-                { label: 'Revenue Leakage', color: '#ef4444' },
+                { label: 'High Rev, Weak Rank', color: '#10b981' },
+                { label: 'Strong Rank, Low Rev', color: '#ef4444' },
                 { label: 'Underperformers', color: '#64748b' },
               ].map((l) => (
                 <span key={l.label} className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
@@ -607,6 +782,7 @@ export default function BsrEfficiency() {
             </div>
           </CardContent>
         </Card>
+        </div>
 
         {/* Quadrant + Health Sidebar */}
         <div className="space-y-5">
@@ -618,10 +794,10 @@ export default function BsrEfficiency() {
             </CardHeader>
             <CardContent className="space-y-2.5">
               {[
-                { label: 'Elite Performers', count: qs.elite_performers ?? 0, color: 'text-purple-600', bg: 'bg-purple-500/10', bar: 'bg-purple-500' },
-                { label: 'Revenue Outliers', count: qs.revenue_outliers ?? 0, color: 'text-emerald-600', bg: 'bg-emerald-500/10', bar: 'bg-emerald-500' },
-                { label: 'Revenue Leakage', count: qs.revenue_leakage ?? 0, color: 'text-red-600', bg: 'bg-red-500/10', bar: 'bg-red-500' },
-                { label: 'Underperformers', count: qs.underperformers ?? 0, color: 'text-slate-500', bg: 'bg-muted/50', bar: 'bg-slate-400' },
+                { label: 'Elite Performers (Top Right)', count: qs.elite_performers ?? 0, color: 'text-purple-600', bg: 'bg-purple-500/10', bar: 'bg-purple-500' },
+                { label: 'High Rev, Weak Rank (Top Left)', count: qs.high_rev_weak_rank ?? 0, color: 'text-emerald-600', bg: 'bg-emerald-500/10', bar: 'bg-emerald-500' },
+                { label: 'Strong Rank, Low Rev (Bot Right)', count: qs.strong_rank_low_rev ?? 0, color: 'text-red-600', bg: 'bg-red-500/10', bar: 'bg-red-500' },
+                { label: 'Underperformers (Bot Left)', count: qs.underperformers ?? 0, color: 'text-slate-500', bg: 'bg-muted/50', bar: 'bg-slate-400' },
               ].map((q) => {
                 const pct = totalProducts > 0 ? Math.round((q.count / totalProducts) * 100) : 0;
                 return (
@@ -728,12 +904,12 @@ export default function BsrEfficiency() {
             <CardTitle className="text-base font-bold">Elite Performers</CardTitle>
           </div>
           <CardDescription>
-            Products in the top quartile of both revenue and rank. Category benchmarks — these define best-in-class.
+            Products in the top half of both revenue and rank. Category benchmarks — these define best-in-class.
           </CardDescription>
         </CardHeader>
         <CardContent>
           {elite.length === 0
-            ? <p className="text-sm text-muted-foreground py-6 text-center">No elite performers detected (requires top-25% on both metrics).</p>
+            ? <p className="text-sm text-muted-foreground py-6 text-center">No elite performers detected (requires top-50% on both metrics).</p>
             : <DataTable columns={eliteColumns} data={elite} pageSize={10} />
           }
         </CardContent>

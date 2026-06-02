@@ -60,6 +60,10 @@ _SEARCH_VOL_CANDIDATES = ["Search Volume", "search volume", "SearchVolume", "Mon
 _KEYWORD_SALES_CANDIDATES = ["Keyword Sales", "keyword sales", "Sales", "sales"]
 _TITLE_DENSITY_CANDIDATES = ["Title Density", "title density", "TitleDensity"]
 
+_CLICKS_CANDIDATES = ["Clicks", "clicks", "PPC Clicks"]
+_ORDERS_CANDIDATES = ["Orders", "orders", "PPC Orders", "Total Orders"]
+_CVR_CANDIDATES = ["Conversion Rate", "CVR", "CR", "conversion rate"]
+
 
 def _opportunity_level(efficiency: float) -> str:
     if efficiency >= 75: return "Critical"
@@ -91,12 +95,15 @@ def run(magnet_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
     keyword_col = find_column(magnet_df, _KEYWORD_CANDIDATES)
     vol_col     = find_column(magnet_df, _SEARCH_VOL_CANDIDATES)
     sales_col   = find_column(magnet_df, _KEYWORD_SALES_CANDIDATES)
+    clicks_col  = find_column(magnet_df, _CLICKS_CANDIDATES)
+    orders_col  = find_column(magnet_df, _ORDERS_CANDIDATES)
+    cvr_col     = find_column(magnet_df, _CVR_CANDIDATES)
 
     if click_col is None or conv_col is None:
         missing = [c for c, col in [("ABA Total Click Share", click_col), ("ABA Total Conv. Share", conv_col)] if col is None]
         return _error(f"Required columns not found: {', '.join(missing)}", ["magnet"], [], rows_before, t0)
 
-    columns_used = [c for c in [click_col, conv_col, keyword_col, vol_col, sales_col] if c]
+    columns_used = [c for c in [click_col, conv_col, keyword_col, vol_col, sales_col, clicks_col, orders_col, cvr_col] if c]
 
     # ── Build working frame ──────────────────────────────────────────────────
     work = pd.DataFrame(index=magnet_df.index)
@@ -107,6 +114,13 @@ def run(magnet_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
     else:           work["search_vol"] = 0.0
     if sales_col:   work["kw_sales"],  _ = clean_numeric_series(magnet_df[sales_col], sales_col)
     else:           work["kw_sales"]   = 0.0
+    
+    if clicks_col:  work["clicks"], _ = clean_numeric_series(magnet_df[clicks_col], clicks_col)
+    else:           work["clicks"] = None
+    if orders_col:  work["orders"], _ = clean_numeric_series(magnet_df[orders_col], orders_col)
+    else:           work["orders"] = None
+    if cvr_col:     work["cvr"], _ = clean_numeric_series(magnet_df[cvr_col], cvr_col)
+    else:           work["cvr"] = None
 
     work = work.dropna(subset=["click_share", "conv_share"])
     work = work[(work["click_share"] >= 0) & (work["conv_share"] >= 0)]
@@ -116,6 +130,14 @@ def run(magnet_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
         return _error("Insufficient valid rows after cleaning (need ≥ 3).", ["magnet"], columns_used, rows_before, t0)
 
     n = rows_after
+
+    # ── Confidence Level ─────────────────────────────────────────────────────
+    if clicks_col and orders_col and cvr_col:
+        confidence_level = "High"
+    elif sales_col or vol_col:
+        confidence_level = "Medium"
+    else:
+        confidence_level = "Low"
 
     # ── Data quality check ───────────────────────────────────────────────────
     conv_unique_ratio = work["conv_share"].nunique() / max(n, 1)
@@ -173,6 +195,19 @@ def run(magnet_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
     work["lost_sales"]      = (work["potential_sales"] - work["kw_sales"]).clip(lower=0)
     total_lost_revenue      = round(float(work.loc[friction_mask, "lost_sales"].sum()), 2)
 
+    # ── Extra Metrics ─────────────────────────────────────────────────────────
+    work["revenue_per_click"] = None
+    if clicks_col and sales_col:
+        valid_clicks = work["clicks"] > 0
+        work.loc[valid_clicks, "revenue_per_click"] = work.loc[valid_clicks, "kw_sales"] / work.loc[valid_clicks, "clicks"]
+
+    work["root_cause"] = None
+    if friction_count > 0:
+        mask_severe = friction_mask & (work["gap"] <= -20)
+        work.loc[mask_severe, "root_cause"] = "Severe Conversion Leak (Click share far exceeds Conv share)"
+        mask_moderate = friction_mask & (work["gap"] > -20)
+        work.loc[mask_moderate, "root_cause"] = "Underperforming Conversion"
+
     # ── Top/bottom products ───────────────────────────────────────────────────
     demand_winners_df  = work[work["quadrant"] == "Demand Winner"].sort_values("efficiency", ascending=False)
     friction_df        = work[work["quadrant"] == "Friction Keyword"].sort_values("efficiency", ascending=True)
@@ -185,13 +220,14 @@ def run(magnet_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
         return str(row.get("keyword", "—")) if row is not None else "—"
 
     # ── Record builder ────────────────────────────────────────────────────────
-    def _records(df: pd.DataFrame, limit: int) -> List[Dict]:
+    def _records(df: pd.DataFrame, limit: Optional[int] = None) -> List[Dict]:
         out = []
-        for _, row in df.head(limit).iterrows():
+        subset = df.head(limit) if limit is not None else df
+        for _, row in subset.iterrows():
             rec: Dict[str, Any] = {
                 "click_share":        _sv(row["click_share"]),
                 "conv_share":         _sv(row["conv_share"]),
-                "search_volume":      _sv(row["search_vol"]),
+                "search_volume":      _sv(row.get("search_vol")),
                 "click_percentile":   round(float(row["click_pct"]),  2),
                 "conv_percentile":    round(float(row["conv_pct"]),   2),
                 "demand_percentile":  round(float(row["vol_pct"]),    2),
@@ -199,6 +235,13 @@ def run(magnet_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
                 "gap":                round(float(row["gap"]),        2),
                 "quadrant":           row["quadrant"],
                 "opportunity_level":  row["opportunity_level"],
+                "revenue":            _sv(row.get("kw_sales")),
+                "clicks":             _sv(row.get("clicks")),
+                "orders":             _sv(row.get("orders")),
+                "conversion_rate":    _sv(row.get("cvr")),
+                "revenue_per_click":  _sv(row.get("revenue_per_click")),
+                "lost_revenue_estimate": _sv(row.get("lost_sales")),
+                "root_cause":         row.get("root_cause"),
             }
             if "keyword" in row.index:
                 rec["keyword"] = str(row["keyword"])
@@ -264,6 +307,23 @@ def run(magnet_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
     }
 
     elapsed = round(time.time() - t0, 3)
+    
+    # ── Full drill-down data extraction ───────────────────────────────────────
+    high_intent_full_records = _records(work[work["efficiency"] >= work["efficiency"].median()].sort_values("efficiency", ascending=False))
+    friction_full_records = _records(friction_df)
+    
+    # Audit Logging
+    logger.info("====== SIEI AUDIT LOG ======")
+    logger.info(f"Confidence Level: {confidence_level}")
+    logger.info(f"High Intent Count: {high_intent_count} (Returned: {len(high_intent_full_records)})")
+    for i, r in enumerate(high_intent_full_records[:5]):
+        logger.info(f"  HI [{i+1}] {r.get('keyword', '—')}: Eff={r.get('efficiency_score')}, Gap={r.get('gap')}, Raw[Vol={r.get('search_volume')}, Click%={r.get('click_percentile')}, Conv%={r.get('conv_percentile')}] - Reason: Efficiency >= Median")
+    
+    logger.info(f"Friction Count: {friction_count} (Returned: {len(friction_full_records)})")
+    for i, r in enumerate(friction_full_records[:5]):
+        logger.info(f"  FR [{i+1}] {r.get('keyword', '—')}: Eff={r.get('efficiency_score')}, Gap={r.get('gap')}, Raw[Vol={r.get('search_volume')}, Click%={r.get('click_percentile')}, Conv%={r.get('conv_percentile')}] - Reason: {r.get('root_cause', 'Friction Quadrant')}")
+    logger.info("============================")
+
     logger.info(
         f"Keyword Conversion Intelligence complete: n={n}, avg_eff={avg_efficiency}, "
         f"friction={friction_count}, winners={quad_counts.get('Demand Winner',0)}, elapsed={elapsed}s"
@@ -287,6 +347,7 @@ def run(magnet_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
         ),
         "results": {
             # KPI summary
+            "confidence_level":         confidence_level,
             "high_intent_count":        high_intent_count,
             "friction_count":           friction_count,
             "total_lost_revenue":       total_lost_revenue,
@@ -310,6 +371,10 @@ def run(magnet_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
             "friction_keywords": _records(friction_df,       max(top_n, 20)),
             "hidden_gems":      _records(hidden_gems_df,     max(top_n, 20)),
             "all_keywords":     _records(work.sort_values("efficiency", ascending=False), min(n, 300)),
+            
+            # Full drill-down data
+            "high_intent_keywords_full": high_intent_full_records,
+            "friction_keywords_full":    friction_full_records,
 
             # Scatter data
             "scatter_data": scatter,
