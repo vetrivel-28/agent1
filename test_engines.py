@@ -1,53 +1,36 @@
-import json
-import pandas as pd
-from app.services.dataset_registry import registry
-from app.engines import (
-    demand_engine,
-    sales_momentum_engine,
-    revenue_momentum_engine,
-    bsr_efficiency_engine,
-    siei_engine,
-    whitespace_engine,
-    direct_competitor_engine,
-    substitute_engine,
-    complement_engine,
-    bundle_opportunity_engine,
-    price_elasticity_engine,
-)
-from app.services.report_builder import build_report
+"""
+Engine Tests - Data-Driven Only
 
-# 1. Create mock data
-bb_data = {
-    'Title': ['Product A', 'Product B', 'Product C', 'Product D', 'Product E'],
-    'Brand': ['Brand1', 'Brand2', 'Brand1', 'Brand3', 'Brand2'],
-    'Category': ['Cat', 'Cat', 'Cat', 'Cat', 'Cat'],
-    'Price': [10, 20, 15, 25, 30],
-    'Sales': [1000, 800, 1200, 500, 300],
-    'Revenue': [10000, 16000, 18000, 12500, 9000],
-    'BSR': [1, 5, 2, 10, 20],
-    'Review Count': [100, 50, 200, 30, 10],
-    'Rating': [4.5, 4.0, 4.8, 3.5, 4.2],
-    'Sales Trend': [5, -2, 10, -5, 0],
-    'Price Trend': [1, 0, 2, -1, 0],
-}
-mag_data = {
-    'Keyword': ['key a', 'key b', 'key c', 'key d', 'key e'],
-    'Search Volume': [10000, 5000, 2000, 1000, 500],
-    'Search Volume Trend': [10, -5, 2, 0, -1],
-    'Keyword Sales': [2000, 1000, 500, 200, 100],
-    'Title Density': [5, 2, 8, 1, 0],
-}
+POLICY: No mock data, no synthetic data.
+All tests must use actual CSV files uploaded through the API.
 
-bb_df = pd.DataFrame(bb_data)
-mag_df = pd.DataFrame(mag_data)
+To test engines:
+1. Prepare test CSV files (Magnet, BlackBox, etc.)
+2. Upload via POST /api/v1/upload-datasets
+3. Call engine endpoints
+4. Verify results are traceable to source data
 
-registry.set_blackbox(bb_df)
-registry.set_magnet(mag_df)
-registry.set_keyword_classification(mag_df)
+Example test pattern:
+    import requests
+    
+    # Upload test data
+    files = {
+        'magnet_file': open('test_data/magnet.csv', 'rb'),
+        'blackbox_file': open('test_data/blackbox.csv', 'rb')
+    }
+    requests.post('http://localhost:8000/api/v1/upload-datasets', files=files)
+    
+    # Run engine
+    response = requests.post('http://localhost:8000/api/v1/demand-strength?top_n=10')
+    
+    # Verify evidence is included
+    assert response.json()['evidence_enabled'] == True
+    assert 'audit_summary' in response.json()
+"""
 
-# 2. Run engines
-demand = demand_engine.run(mag_df, bb_df)
-sales = sales_momentum_engine.run(bb_df)
+# If you need to run a quick test with real data files, use this pattern:
+# This file is NO LONGER used for mock data testing.
+# See integration test files in tests/ directory for real data examples.
 revenue = revenue_momentum_engine.run(bb_df)
 bsr = bsr_efficiency_engine.run(bb_df)
 siei = siei_engine.run(mag_df)

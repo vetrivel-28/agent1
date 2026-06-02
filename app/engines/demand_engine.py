@@ -25,6 +25,7 @@ from app.utils.column_mapper import find_column
 from app.utils.normalization import min_max_normalize
 from app.utils.logger import get_logger
 from app.utils.numeric_cleaner import clean_numeric_series
+from app.utils.category_rules import get_matching_categories, get_category_formula
 from app.utils.text_matching import clean_text, tokenize_text
 
 logger = get_logger("demand_engine")
@@ -176,90 +177,76 @@ def _extract_segments(
         tmp["_ks"] = ks_c.fillna(0)
     else:
         tmp["_ks"] = 0.0
+
+    if "exact_search_volume" in magnet_df.columns:
+        exact_sv, _ = clean_numeric_series(magnet_df.loc[tmp.index, "exact_search_volume"], "exact_search_volume")
+        tmp["_sv_exact"] = exact_sv.fillna(0)
+    else:
+        tmp["_sv_exact"] = tmp["_sv"]
+
+    if "variant_count" in magnet_df.columns:
+        tmp["variant_count"] = magnet_df.loc[tmp.index, "variant_count"].fillna(1)
+    else:
+        tmp["variant_count"] = 1
+
         
     # Aggregate duplicate keywords: Group by lowercase exact keyword
     tmp["_kw_clean"] = tmp[kw_col].astype(str).str.lower().str.strip()
     
     # Deduplicate by summing volumes
     tmp_agg = tmp.groupby("_kw_clean").agg(
-        _sv=("_sv", "sum"),
+        _sv=("_sv", "first"), # Keep the aggregated volume for display
+        _sv_exact=("_sv_exact", "sum"), # Exact volume for math
         _ks=("_ks", "sum"),
+        variant_count=("variant_count", "first"),
         kw_original=(kw_col, "first")
     ).reset_index()
     
-    total_heatmap_sv = float(tmp_agg["_sv"].sum())
+    total_heatmap_sv = float(tmp_agg["_sv_exact"].sum()) # Use exact volume!
     total_heatmap_ks = float(tmp_agg["_ks"].sum())
     
     if total_heatmap_sv <= 0 or len(tmp_agg) == 0:
         return [], "empty"
         
-    # Dynamic classification: Priority-based product categorization
-    def get_segment(text: str) -> str:
-        t = clean_text(str(text))
-        # Optional: still apply basic translation maps if desired, but 
-        # the priority rules below handle the core logic.
-        
-        # 1. Backpack / Backpacks
-        if "backpack" in t: return "Backpacks"
-        # 2. Handbag / Handbags
-        if "handbag" in t: return "Handbags"
-        # 3. Tote / Totes
-        if "tote" in t: return "Totes"
-        # 4. Purse / Purses
-        if "purse" in t: return "Purses"
-        # 5. Crossbody
-        if "crossbody" in t: return "Crossbody"
-        # 6. Duffel
-        if "duffel" in t: return "Duffel"
-        # 7. Travel Bag
-        if "travel bag" in t: return "Travel Bags"
-        # 8. Beach Bag
-        if "beach bag" in t: return "Beach Bags"
-        # 9. Laptop Bag
-        if "laptop bag" in t: return "Laptop Bags"
-        # 10. Messenger Bag
-        if "messenger bag" in t: return "Messenger Bags"
-        # 11. Gift
-        if "gift" in t: return "Gifts"
-        # 12. Bags (fallback)
-        if "bag" in t: return "Bags"
-        
-        return "Other"
-        
-    tmp_agg["_segment"] = tmp_agg["kw_original"].apply(get_segment)
+    tmp_agg["_categories"] = tmp_agg["kw_original"].apply(get_matching_categories)
+    tmp_exploded = tmp_agg.explode("_categories")
+    tmp_exploded["_segment"] = tmp_exploded["_categories"]
     
     # Audit for "Bags" segment
-    bags_audit = tmp_agg[tmp_agg["_segment"] == "Bags"]
+    bags_audit = tmp_exploded[tmp_exploded["_segment"] == "Bags"]
     if not bags_audit.empty:
         artifact_path = r"C:\Users\vetri\.gemini\antigravity\brain\b92a5f77-00e8-49f4-9663-e54f6e453ded\bags_audit.csv"
         bags_audit.to_csv(artifact_path, index=False)
         logger.info(f"Exported bags_audit.csv with {len(bags_audit)} keywords.")
     
     # First, aggregate by segment to find top 8
-    seg_sums = tmp_agg.groupby("_segment")["_sv"].sum().reset_index()
-    seg_sums = seg_sums[seg_sums["_sv"] > 0].sort_values("_sv", ascending=False)
+    seg_sums = tmp_exploded.groupby("_segment")["_sv_exact"].sum().reset_index()
+    seg_sums = seg_sums[seg_sums["_sv_exact"] > 0].sort_values("_sv_exact", ascending=False)
     top_segs = seg_sums.head(8)["_segment"].tolist()
     
     # Apply final segment
-    tmp_agg["_final_seg"] = tmp_agg["_segment"].apply(lambda x: x if x in top_segs else "Other")
+    tmp_exploded["_final_seg"] = tmp_exploded["_segment"].apply(lambda x: x if x in top_segs else "Other")
     
     # Final aggregation
-    final_agg = tmp_agg.groupby("_final_seg").agg(
-        total_sv=("_sv", "sum"),
+    final_agg = tmp_exploded.groupby("_final_seg").agg(
+        total_sv=("_sv_exact", "sum"),
+        total_sv_aggregated=("_sv", "sum"),
         total_ks=("_ks", "sum"),
         kw_count=("_final_seg", "count")
     ).reset_index()
 
     grouped_keywords: Dict[str, List[Dict[str, Any]]] = {}
     keyword_segment_sums: Dict[str, float] = {}
-    for seg, group in tmp_agg.groupby("_final_seg"):
+    for seg, group in tmp_exploded.groupby("_final_seg"):
         sorted_keywords = group.sort_values("_sv", ascending=False)
-        keyword_segment_sums[seg] = float(sorted_keywords["_sv"].sum())
+        keyword_segment_sums[seg] = float(sorted_keywords["_sv_exact"].sum())
         grouped_keywords[seg] = [
             {
                 "keyword": str(row["kw_original"]).strip() if str(row["kw_original"]).strip() else str(row["_kw_clean"]),
                 "search_volume": int(row["_sv"]) if float(row["_sv"]) == int(row["_sv"]) else round(float(row["_sv"]), 2),
-                "contribution_pct": round((float(row["_sv"]) / keyword_segment_sums[seg]) * 100.0, 2) if keyword_segment_sums[seg] > 0 else 0.0,
+                "exact_search_volume": int(row["_sv_exact"]) if float(row["_sv_exact"]) == int(row["_sv_exact"]) else round(float(row["_sv_exact"]), 2),
+                "variant_count": int(row["variant_count"]),
+                "contribution_pct": round((float(row["_sv_exact"]) / keyword_segment_sums[seg]) * 100.0, 2) if keyword_segment_sums[seg] > 0 else 0.0,
             }
             for _, row in sorted_keywords.iterrows()
         ]
@@ -267,18 +254,13 @@ def _extract_segments(
     segment_list: List[Dict[str, Any]] = []
     segment_discrepancies: List[Dict[str, Any]] = []
 
-    # Verification check: SUM(All Segment Volumes) = SUM(All Assigned Keyword Volumes)
+    # Verification check: SUM(All Segment Volumes) will likely exceed dataset total due to overlap.
     sum_segment_volumes = float(final_agg["total_sv"].sum())
-    if abs(sum_segment_volumes - total_heatmap_sv) > 0.1:
-        logger.error(
-            "Heatmap verification failed. Segment total=%s, assigned keyword total=%s",
-            sum_segment_volumes,
-            total_heatmap_sv,
-        )
-
+    
     for _, row in final_agg.iterrows():
         seg = str(row["_final_seg"])
         sv = float(row["total_sv"])
+        sv_agg = float(row["total_sv_aggregated"])
         ks = float(row["total_ks"])
         count = int(row["kw_count"])
         seg_keywords = grouped_keywords.get(seg, [])
@@ -312,6 +294,13 @@ def _extract_segments(
             "competition_index": comp_index,
             "keywords": seg_keywords,
             "top_keywords": seg_keywords[:20],
+            "formula": get_category_formula(seg),
+            "reconciliation": {
+                "category_volume": int(sv),
+                "keyword_count": count,
+                "unique_search_volume": int(sv),
+                "family_overlap_removed": int(sv_agg - sv)
+            },
             "verification": {
                 "status": "passed" if verified else "failed",
                 "message": (
@@ -323,7 +312,7 @@ def _extract_segments(
 
     if segment_discrepancies:
         discrepancy_path = os.path.join(tempfile.gettempdir(), "demand_heatmap_discrepancies.csv")
-        discrepancy_rows = tmp_agg[["kw_original", "_segment", "_final_seg", "_sv"]].copy()
+        discrepancy_rows = tmp_exploded[["kw_original", "_segment", "_final_seg", "_sv"]].copy()
         discrepancy_rows.columns = ["keyword", "segment", "final_segment", "search_volume"]
         discrepancy_rows.to_csv(discrepancy_path, index=False)
         logger.error(
@@ -331,9 +320,6 @@ def _extract_segments(
             discrepancy_path,
             len(segment_discrepancies),
         )
-
-    if abs(sum_segment_volumes - total_heatmap_sv) > 0.1:
-        logger.warning("Verification failed via segment audit. See discrepancy export for details.")
 
     segment_list.sort(key=lambda x: x["demand_share"], reverse=True)
     segment_list = _enrich_segment_metrics(segment_list)
@@ -934,6 +920,10 @@ def run(
                 "search_volume": _sv(sv_val),
                 "demand_contribution": contrib,
             }
+            if "exact_search_volume" in tmp.columns:
+                entry["exact_search_volume"] = _sv(row["exact_search_volume"])
+            if "variant_count" in tmp.columns:
+                entry["variant_count"] = int(row["variant_count"])
             if kw_col:
                 entry["keyword"] = str(row[kw_col])
             if kw_sales_col and "_ks" in tmp.columns:

@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
+from datetime import datetime
 
 
 class ValidationResponse(BaseModel):
@@ -50,6 +51,20 @@ class EngineResponse(BaseModel):
     validation: ValidationResponse = Field(default_factory=ValidationResponse)
     processing_time_seconds: float = 0.0
     message: Optional[str] = None
+    
+    # Data lineage & evidence (NEW)
+    evidence: Optional[Dict[str, Any]] = Field(
+        None, 
+        description="Complete audit trail: metrics, segments, KPIs, insights with source data"
+    )
+    audit_summary: Optional[Dict[str, Any]] = Field(
+        None,
+        description="High-level audit stats: rows loaded, processed, ignored; data quality score"
+    )
+    evidence_enabled: bool = Field(
+        False,
+        description="Whether this response includes full evidence tracking"
+    )
 
     class Config:
         extra = "allow"

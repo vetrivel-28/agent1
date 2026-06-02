@@ -3,7 +3,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routes import router
+from app.routes import router, audit_router
 from app.utils.logger import get_logger
 
 logger = get_logger("main")
@@ -41,6 +41,7 @@ app.add_middleware(
 # ========================================================================
 
 app.include_router(router)
+app.include_router(audit_router)
 
 # ========================================================================
 # Startup / Shutdown Events
@@ -66,6 +67,16 @@ async def startup_event():
     logger.info("  POST   /api/v1/search-intent-efficiency")
     logger.info("  POST   /api/v1/market-concentration")
     logger.info("  POST   /api/v1/finance-intelligence")
+    logger.info("")
+    logger.info("AUDIT & EVIDENCE ENDPOINTS:")
+    logger.info("  GET    /api/v1/audit/")
+    logger.info("  GET    /api/v1/audit/datasets")
+    logger.info("  GET    /api/v1/audit/quality")
+    logger.info("  GET    /api/v1/audit/lineage/{metric_name}")
+    logger.info("  GET    /api/v1/audit/all-evidence")
+    logger.info("  GET    /api/v1/audit/metrics")
+    logger.info("  GET    /api/v1/audit/segments")
+    logger.info("  GET    /api/v1/audit/insights")
     logger.info("=" * 70)
 
 

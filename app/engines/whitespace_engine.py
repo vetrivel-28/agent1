@@ -31,6 +31,7 @@ import pandas as pd
 
 from app.utils.column_mapper import find_column
 from app.utils.logger import get_logger
+from app.utils.category_rules import get_matching_categories
 from app.utils.numeric_cleaner import clean_numeric_series
 
 logger = get_logger("whitespace_engine")
@@ -472,6 +473,12 @@ def run(
             record["title_density"] = _format_score(density_val)
         else:
             record["title_density"] = None
+            
+        if "exact_search_volume" in row.index:
+            record["exact_search_volume"] = int(row["exact_search_volume"]) if pd.notna(row["exact_search_volume"]) else 0
+        if "variant_count" in row.index:
+            record["variant_count"] = int(row["variant_count"]) if pd.notna(row["variant_count"]) else 0
+            
         return record
 
     top_keywords: List[Dict[str, Any]] = [
@@ -606,36 +613,7 @@ def run(
     }
 
 
-_SEGMENT_RULES: List[tuple] = [
-    ("Handbags", ("handbag", "hand bag", "purse", "clutch", "satchel", "hobo")),
-    ("Tote Bags", ("tote bag", "tote")),
-    ("Travel Bags", ("travel bag", "luggage", "carry on", "weekender", "duffle", "duffel")),
-    ("Laptop Bags", ("laptop bag", "laptop", "computer bag", "briefcase", "messenger")),
-    ("Crossbody Bags", ("crossbody", "cross body", "cross-body")),
-    ("Beach Bags", ("beach bag", "beach", "pool bag")),
-    ("Backpacks", ("backpack", "back pack", "rucksack")),
-    ("Diaper Bags", ("diaper bag", "nappy bag")),
-    ("Gym Bags", ("gym bag", "sport bag", "workout bag")),
-    ("Wallet & Small Leather", ("wallet", "card holder", "wristlet")),
-]
-
-
-def _assign_entry_segment(keyword: str) -> str:
-    """Map a keyword phrase to a product segment label (presentation only)."""
-    kw = keyword.lower().strip()
-    for segment, tokens in _SEGMENT_RULES:
-        if any(token in kw for token in tokens):
-            return segment
-    stop = {
-        "for", "and", "the", "with", "in", "of", "a", "an", "to", "women", "womens",
-        "men", "mens", "large", "small", "best", "new", "set", "pack",
-    }
-    words = [w.strip(".,!?-()[]\"'") for w in kw.split() if len(w.strip(".,!?-()[]\"'")) > 3]
-    words = [w for w in words if w not in stop]
-    if words:
-        head = words[0].replace("-", " ")
-        return f"{head.title()} & Related"
-    return "General Search Terms"
+# Removed legacy _SEGMENT_RULES and _assign_entry_segment since we are using get_matching_categories now.
 
 
 def _derive_cluster_name(rows: List[Dict[str, Any]], keyword_col: str) -> str:
@@ -698,19 +676,36 @@ def _build_entry_segments(
         if not normalized_keyword:
             continue
 
-        label = None
+        labels = set()
+
+        # From HEAD: Check segment column
         if segment_col and row.get(segment_col) is not None:
             label_value = str(row.get(segment_col)).strip()
             if label_value:
-                label = label_value
+                labels.add(label_value)
 
-        if not label and normalized_keyword in classification_map:
-            label = classification_map[normalized_keyword]
+        # From HEAD: Check classification map
+        if normalized_keyword in classification_map:
+            labels.add(classification_map[normalized_keyword])
 
-        if not label:
-            label = _assign_dynamic_segment(str(row[keyword_col]))
+        # From remote: Match categories
+        rule_labels = get_matching_categories(str(row[keyword_col]))
+        for rl in rule_labels:
+            if rl != "Other":
+                labels.add(rl)
 
-        buckets.setdefault(label, []).append(row)
+        # Fallbacks if no labels yet
+        if not labels:
+            dyn_label = _assign_dynamic_segment(str(row[keyword_col]))
+            if dyn_label != "General Search Terms":
+                labels.add(dyn_label)
+            elif "Other" in rule_labels:
+                labels.add("Other")
+            else:
+                labels.add(dyn_label)
+
+        for label in labels:
+            buckets.setdefault(label, []).append(row)
 
     merged: Dict[str, List[Dict[str, Any]]] = {}
     for label, rows in buckets.items():

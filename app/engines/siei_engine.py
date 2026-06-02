@@ -73,11 +73,11 @@ def _opportunity_level(efficiency: float) -> str:
 
 
 def _quadrant(demand_pct: float, efficiency: float) -> str:
-    if demand_pct >= 50 and efficiency >= 50:
+    if demand_pct >= 60 and efficiency >= 60:
         return "Demand Winner"
-    elif demand_pct < 50 and efficiency >= 50:
+    elif demand_pct < 60 and efficiency >= 80:
         return "Hidden Gem"
-    elif demand_pct >= 50 and efficiency < 50:
+    elif demand_pct >= 60 and efficiency < 40:
         return "Friction Keyword"
     else:
         return "Low Priority"
@@ -149,28 +149,31 @@ def run(magnet_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
             "Efficiency scores may not be meaningful."
         )
 
-    # ── Step 1: Click Share Percentile ───────────────────────────────────────
-    work["click_rank"]  = work["click_share"].rank(method="average", ascending=False)
-    work["click_pct"]   = (1.0 - (work["click_rank"] - 1) / max(n - 1, 1)) * 100.0
-    work["click_pct"]   = work["click_pct"].clip(0, 100)
+    # ── Step 1: Revenue Per Search & Efficiency Index ────────────────────────
+    work["revenue_per_search"] = np.where(work["search_vol"] > 0, work["kw_sales"] / work["search_vol"], 0.0)
+    work["revenue_per_1000_searches"] = work["revenue_per_search"] * 1000.0
+    
+    work["rps_rank"] = work["revenue_per_search"].rank(method="average", ascending=False)
+    work["rps_pct"]  = (1.0 - (work["rps_rank"] - 1) / max(n - 1, 1)) * 100.0
+    work["rps_pct"]  = work["rps_pct"].clip(0, 100)
+    
+    work["efficiency"] = work["rps_pct"]  # Revenue Efficiency Index
 
-    # ── Step 2: Conversion Share Percentile ──────────────────────────────────
-    work["conv_rank"]   = work["conv_share"].rank(method="average", ascending=False)
-    work["conv_pct"]    = (1.0 - (work["conv_rank"] - 1) / max(n - 1, 1)) * 100.0
-    work["conv_pct"]    = work["conv_pct"].clip(0, 100)
-
-    # ── Step 3: Demand Strength (Search Volume Percentile) ───────────────────
+    # ── Step 2: Demand Strength (Search Volume Percentile) ───────────────────
     work["vol_rank"]    = work["search_vol"].rank(method="average", ascending=False)
     work["vol_pct"]     = (1.0 - (work["vol_rank"] - 1) / max(n - 1, 1)) * 100.0
     work["vol_pct"]     = work["vol_pct"].clip(0, 100)
 
-    # ── Step 4: Conversion Efficiency Score ──────────────────────────────────
-    # gap: positive = converts better than it clicks (efficient)
-    # negative = clicks more than it converts (friction)
+    # ── Step 3: Gap Calculation (for legacy friction reporting) ──────────────
+    work["click_rank"]  = work["click_share"].rank(method="average", ascending=False)
+    work["click_pct"]   = (1.0 - (work["click_rank"] - 1) / max(n - 1, 1)) * 100.0
+    work["click_pct"]   = work["click_pct"].clip(0, 100)
+
+    work["conv_rank"]   = work["conv_share"].rank(method="average", ascending=False)
+    work["conv_pct"]    = (1.0 - (work["conv_rank"] - 1) / max(n - 1, 1)) * 100.0
+    work["conv_pct"]    = work["conv_pct"].clip(0, 100)
+
     work["gap"]         = work["conv_pct"] - work["click_pct"]
-    gap_shifted         = (work["gap"] + 100.0) / 2.0   # map -100..+100 → 0..100
-    raw_score           = 0.50 * gap_shifted + 0.30 * work["conv_pct"] + 0.20 * work["vol_pct"]
-    work["efficiency"]  = min_max_normalize(raw_score)   # 0-100, natural distribution
 
     # ── Step 5: Quadrant + opportunity level ─────────────────────────────────
     work["quadrant"]    = work.apply(lambda r: _quadrant(r["vol_pct"], r["efficiency"]), axis=1)
@@ -232,6 +235,8 @@ def run(magnet_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
                 "conv_percentile":    round(float(row["conv_pct"]),   2),
                 "demand_percentile":  round(float(row["vol_pct"]),    2),
                 "efficiency_score":   round(float(row["efficiency"]), 2),
+                "revenue_per_search": _sv(row.get("revenue_per_search")),
+                "revenue_per_1000_searches": _sv(row.get("revenue_per_1000_searches")),
                 "gap":                round(float(row["gap"]),        2),
                 "quadrant":           row["quadrant"],
                 "opportunity_level":  row["opportunity_level"],
@@ -243,6 +248,10 @@ def run(magnet_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
                 "lost_revenue_estimate": _sv(row.get("lost_sales")),
                 "root_cause":         row.get("root_cause"),
             }
+            if "exact_search_volume" in row.index:
+                rec["exact_search_volume"] = _sv(row.get("exact_search_volume"))
+            if "variant_count" in row.index:
+                rec["variant_count"] = int(row.get("variant_count") or 0)
             if "keyword" in row.index:
                 rec["keyword"] = str(row["keyword"])
             out.append(rec)
@@ -261,7 +270,13 @@ def run(magnet_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
             "click_share":        _sv(row["click_share"]),
             "conv_share":         _sv(row["conv_share"]),
             "search_volume":      _sv(row["search_vol"]),
+            "revenue_per_search": _sv(row.get("revenue_per_search")),
+            "revenue_per_1000_searches": _sv(row.get("revenue_per_1000_searches")),
         }
+        if "exact_search_volume" in row.index:
+            pt["exact_search_volume"] = _sv(row.get("exact_search_volume"))
+        if "variant_count" in row.index:
+            pt["variant_count"] = int(row.get("variant_count") or 0)
         if "keyword" in row.index:
             pt["keyword"] = str(row["keyword"])
         scatter.append(pt)
@@ -355,7 +370,7 @@ def run(magnet_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
             "total_keywords_analysed":  n,
 
             # Spotlight keywords
-            "best_converting_keyword":  {
+            "top_revenue_efficiency_keyword":  {
                 "keyword":    _kw(best_converting),
                 "efficiency": round(float(best_converting["efficiency"]), 2) if best_converting is not None else 0,
                 "conv_share": _sv(best_converting["conv_share"]) if best_converting is not None else None,
@@ -442,8 +457,8 @@ def _generate_insights(
         short = kw[:45] + "…" if len(kw) > 45 else kw
         eff = float(best_converting.get("efficiency", 0))
         insights.append(
-            f"'{short}' delivers the strongest demand-to-sales efficiency "
-            f"with a conversion efficiency score of {eff:.1f}/100."
+            f"'{short}' delivers the strongest revenue per search "
+            f"with a Revenue Efficiency Index of {eff:.1f}/100."
         )
 
     if biggest_friction is not None:

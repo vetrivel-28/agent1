@@ -10,6 +10,7 @@ from typing import Dict, Optional
 import pandas as pd
 from app.utils.logger import get_logger
 from app.utils.column_mapper import find_column
+from app.services.search_volume_aggregator import search_volume_aggregator
 
 logger = get_logger("dataset_registry")
 
@@ -50,6 +51,8 @@ class DatasetRegistry:
         logger.info(f"BlackBox stored: {len(df)} rows, {len(df.columns)} cols")
 
     def set_magnet(self, df: pd.DataFrame) -> None:
+        # Apply global search volume aggregation
+        df = search_volume_aggregator.apply_global_aggregation(df)
         self._magnet = df.copy()
         
         sample_kw = ""

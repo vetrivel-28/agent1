@@ -16,6 +16,8 @@ import { motion } from 'framer-motion';
 type KeywordRow = {
   keyword: string;
   search_volume: number;
+  exact_search_volume?: number;
+  variant_count?: number;
   contribution_pct: number;
 };
 
@@ -29,6 +31,13 @@ type SegmentRow = {
   entry_difficulty?: string;
   competition_index?: number;
   keywords?: KeywordRow[];
+  formula?: string;
+  reconciliation?: {
+    category_volume: number;
+    keyword_count: number;
+    unique_search_volume: number;
+    family_overlap_removed: number;
+  };
   verification?: {
     status?: string;
     message?: string;
@@ -130,9 +139,13 @@ export default function DemandStrength() {
           ? row.keywords.map((kw: any) => ({
               keyword: String(kw.keyword || ''),
               search_volume: safeNum(kw.search_volume),
+              exact_search_volume: kw.exact_search_volume !== undefined ? safeNum(kw.exact_search_volume) : undefined,
+              variant_count: kw.variant_count !== undefined ? safeNum(kw.variant_count) : undefined,
               contribution_pct: safeNum(kw.contribution_pct),
             }))
           : [],
+        formula: row.formula,
+        reconciliation: row.reconciliation,
         verification: row.verification,
       }))
     : [];
@@ -141,7 +154,9 @@ export default function DemandStrength() {
 
   const keywordColumns: ColumnDef<KeywordRow>[] = [
     { header: 'Keyword', accessorKey: 'keyword' },
-    { header: 'Search Volume', cell: (item) => formatNumber(item.search_volume), className: 'text-right' },
+    { header: 'Exact Volume', cell: (item) => item.exact_search_volume !== undefined ? formatNumber(item.exact_search_volume) : '—', className: 'text-right text-muted-foreground' },
+    { header: 'Aggregated Volume', cell: (item) => formatNumber(item.search_volume), className: 'text-right font-medium text-primary' },
+    { header: 'Variants', cell: (item) => item.variant_count !== undefined ? item.variant_count : '—', className: 'text-right' },
     { header: 'Contribution %', cell: (item) => `${safeNum(item.contribution_pct).toFixed(1)}%`, className: 'text-right' },
   ];
 
@@ -340,8 +355,11 @@ export default function DemandStrength() {
                         {selectedSegment.keywords?.slice(0, 4).map((keyword, index) => (
                           <div key={index} className="rounded-2xl bg-background/80 p-4 border border-border/50">
                             <p className="text-sm font-semibold text-foreground">{keyword.keyword}</p>
-                            <p className="text-xs text-muted-foreground mt-1">{formatNumber(keyword.search_volume)} searches</p>
-                            <p className="text-xs text-muted-foreground">{keyword.contribution_pct.toFixed(1)}%</p>
+                            <p className="text-xs text-primary font-medium mt-1">{formatNumber(keyword.search_volume)} (Aggregated)</p>
+                            {keyword.exact_search_volume !== undefined && (
+                              <p className="text-xs text-muted-foreground">{formatNumber(keyword.exact_search_volume)} (Exact)</p>
+                            )}
+                            <p className="text-xs text-muted-foreground mt-1">{keyword.contribution_pct.toFixed(1)}% segment contribution</p>
                           </div>
                         ))}
                       </div>
@@ -369,6 +387,51 @@ export default function DemandStrength() {
                       <p className="text-sm text-muted-foreground">Showing {filteredKeywords.length} of {selectedSegment.keywords?.length ?? 0} keywords</p>
                     </div>
                   </div>
+                  
+                  {/* View Evidence / Aggregation Formula & Reconciliation */}
+                  <div className="mb-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="p-4 rounded-xl bg-primary/5 border border-primary/20 h-full">
+                      <div className="flex items-start gap-3">
+                        <AlertCircle className="w-5 h-5 text-primary shrink-0 mt-0.5" />
+                        <div>
+                          <h4 className="text-sm font-bold text-primary mb-1">View Evidence: Category Formula</h4>
+                          {selectedSegment.formula && (
+                            <div className="mb-2 inline-block rounded bg-primary/10 px-2 py-1 text-xs font-mono text-primary font-bold">
+                              {selectedSegment.formula}
+                            </div>
+                          )}
+                          <p className="text-sm text-foreground/80 leading-relaxed">
+                            <strong>Category Volume = Sum(Unique Search Volumes of Matched Keywords).</strong> This category aggregates ALL keywords containing the formula conditions. The volume displayed is a pure Category-level metric calculated from exactly matched keyword rows, preventing any overlapping family aggregation.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {selectedSegment.reconciliation && (
+                      <div className="p-4 rounded-xl bg-card border border-border/50 h-full flex flex-col justify-center">
+                        <h4 className="text-sm font-bold uppercase tracking-widest text-muted-foreground mb-4">Volume Reconciliation Audit</h4>
+                        <div className="space-y-3">
+                          <div className="flex justify-between text-sm">
+                            <span className="text-muted-foreground">Category Volume</span>
+                            <span className="font-bold text-foreground">{formatNumber(selectedSegment.reconciliation.category_volume)}</span>
+                          </div>
+                          <div className="flex justify-between text-sm">
+                            <span className="text-muted-foreground">Keyword Count</span>
+                            <span className="font-medium text-foreground">{selectedSegment.reconciliation.keyword_count}</span>
+                          </div>
+                          <div className="flex justify-between text-sm">
+                            <span className="text-muted-foreground">Unique Search Volume</span>
+                            <span className="font-medium text-success">{formatNumber(selectedSegment.reconciliation.unique_search_volume)}</span>
+                          </div>
+                          <div className="flex justify-between text-sm border-t border-border/50 pt-3">
+                            <span className="text-muted-foreground">Family Overlap Removed</span>
+                            <span className="font-medium text-danger">-{formatNumber(selectedSegment.reconciliation.family_overlap_removed)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
                   <DataTable
                     data={filteredKeywords}
                     columns={keywordColumns}

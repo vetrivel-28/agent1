@@ -6,9 +6,7 @@ import { AlertTriangle, Loader2, FileText, Zap, ShieldAlert, Target, CheckCircle
 import { motion } from 'framer-motion';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip as RechartsTooltip, CartesianGrid, PieChart, Pie, Cell, Legend } from 'recharts';
 
-// Mock Data fallbacks for massive visual impact
-
-
+// Chart colors (configuration, not mock data)
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
 
 export default function MarketReport() {

@@ -155,7 +155,7 @@ function ScatterTip({ active, payload }: any) {
       <div className="border-t border-border/50 pt-1 space-y-0.5">
         <p className="text-muted-foreground">Search Volume: <span className="text-foreground font-medium">{valOrMissing(d.search_volume, v => v.toLocaleString())}</span></p>
         <p className="text-muted-foreground">Est. Market Revenue: <span className="text-foreground font-medium">{valOrMissing(d.revenue, formatCurrency)}</span></p>
-        <p className="text-muted-foreground">Efficiency: <span className={cn('font-medium', efficiencyColor(d.efficiency_score ?? 0))}>{(d.efficiency_score ?? 0).toFixed(1)}/100</span></p>
+        <p className="text-muted-foreground">Rev Efficiency Index: <span className={cn('font-medium', efficiencyColor(d.efficiency_score ?? 0))}>{(d.efficiency_score ?? 0).toFixed(1)}/100</span></p>
         <span className="text-xs text-muted-foreground font-bold mt-1 block">{d.quadrant}</span>
       </div>
     </div>
@@ -202,7 +202,7 @@ export default function IntentEfficiency() {
   const hiddenGems: any[]     = r.hidden_gems           || [];
   const qs                    = r.quadrant_summary      || {};
   const ch                    = r.category_health       || {};
-  const bestConverting        = r.best_converting_keyword  || {};
+  const topRevenueEfficiency  = r.top_revenue_efficiency_keyword  || {};
   const biggestFriction       = r.biggest_friction_keyword || {};
   const totalKeywords         = r.total_keywords_analysed  ?? 1;
   const dataQualityWarning    = ch.data_quality_warning    ?? false;
@@ -254,7 +254,7 @@ export default function IntentEfficiency() {
   };
 
   const efficiencyCol: Column<any> = {
-    header: 'Efficiency Score',
+    header: 'Revenue Efficiency Index',
     accessorKey: 'efficiency_score',
     cell: (row) => {
       const s = row.efficiency_score ?? 0;
@@ -267,6 +267,18 @@ export default function IntentEfficiency() {
         </div>
       );
     },
+  };
+
+  const revenuePerSearchCol: Column<any> = {
+    header: 'Revenue/Search',
+    accessorKey: 'revenue_per_search',
+    cell: (row) => <span className="font-mono text-sm font-bold text-emerald-600">{valOrMissing(row.revenue_per_search, v => formatCurrency(v))}</span>,
+  };
+
+  const revenuePer1000Col: Column<any> = {
+    header: 'Revenue / 1K Searches',
+    accessorKey: 'revenue_per_1000_searches',
+    cell: (row) => <span className="font-mono text-sm">{valOrMissing(row.revenue_per_1000_searches, v => formatCurrency(v))}</span>,
   };
 
   const badgeCol: Column<any> = {
@@ -301,8 +313,8 @@ export default function IntentEfficiency() {
   };
 
   // Build strict tables
-  const winnersColumns = filterEmptyColumns([keywordCol, searchVolCol, revenueCol, efficiencyCol, badgeCol], winners);
-  const frictionColumns = filterEmptyColumns([keywordCol, searchVolCol, revenueCol, lostRevCol, rootCauseCol, badgeCol], friction);
+  const winnersColumns = filterEmptyColumns([keywordCol, searchVolCol, revenueCol, revenuePerSearchCol, revenuePer1000Col, efficiencyCol, badgeCol], winners);
+  const frictionColumns = filterEmptyColumns([keywordCol, searchVolCol, revenueCol, revenuePerSearchCol, lostRevCol, rootCauseCol, badgeCol], friction);
 
   // Status computation for audit card
   const processedCount = totalKeywords;
@@ -397,13 +409,13 @@ export default function IntentEfficiency() {
           bg="bg-amber-500/10 border-amber-500/30"
         />
         <KpiCard
-          title="Best Converting Keyword"
+          title="Top Revenue Efficiency Keyword"
           value={
-            bestConverting.keyword 
-            ? <button onClick={() => setSelectedKeyword(bestConverting)} className="hover:underline underline-offset-4 decoration-emerald-500/50">{bestConverting.keyword.slice(0, 18) + (bestConverting.keyword.length > 18 ? '…' : '')}</button>
+            topRevenueEfficiency.keyword 
+            ? <button onClick={() => setSelectedKeyword(topRevenueEfficiency)} className="hover:underline underline-offset-4 decoration-emerald-500/50">{topRevenueEfficiency.keyword.slice(0, 18) + (topRevenueEfficiency.keyword.length > 18 ? '…' : '')}</button>
             : valOrMissing(null)
           }
-          sub={bestConverting.efficiency != null ? `${bestConverting.efficiency.toFixed(1)}/100 score` : 'Click to drill down'}
+          sub={topRevenueEfficiency.efficiency != null ? `${topRevenueEfficiency.efficiency.toFixed(1)}/100 index` : 'Click to drill down'}
           icon={<Zap className="w-4 h-4" />}
           color="text-emerald-500"
           bg="bg-emerald-500/10 border-emerald-500/30"
@@ -443,7 +455,7 @@ export default function IntentEfficiency() {
                   <XAxis type="number" dataKey="demand_percentile" domain={[0, 100]} name="Demand Strength"
                     label={{ value: 'Demand Intensity (Search Volume Percentile)', position: 'insideBottom', offset: -28, fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
                     tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false} />
-                  <YAxis type="number" dataKey="efficiency_score" domain={[0, 100]} name="Conversion Efficiency"
+                  <YAxis type="number" dataKey="efficiency_score" domain={[0, 100]} name="Revenue Per Search Percentile"
                     label={{ value: 'Monetization Efficiency (Revenue Per Search Percentile)', angle: -90, position: 'insideLeft', offset: -24, style: { textAnchor: 'middle' }, fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
                     tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false} />
                   <ReferenceLine x={50} stroke="hsl(var(--border))" strokeDasharray="4 4" strokeWidth={1.5} />
@@ -635,6 +647,14 @@ export default function IntentEfficiency() {
                   <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Est. Market Revenue</p>
                   <p className="text-xl font-mono font-black text-emerald-600">{valOrMissing(k.revenue, formatCurrency)}</p>
                 </div>
+                <div className="bg-primary/5 border border-primary/20 p-4 rounded-xl shadow-sm">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-primary mb-1">Revenue/Search</p>
+                  <p className="text-xl font-mono font-black text-primary">{valOrMissing(k.revenue_per_search, formatCurrency)}</p>
+                </div>
+                <div className="bg-card border border-border/50 p-4 rounded-xl shadow-sm">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Revenue / 1K Searches</p>
+                  <p className="text-xl font-mono font-black">{valOrMissing(k.revenue_per_1000_searches, formatCurrency)}</p>
+                </div>
                 {k.lost_revenue_estimate > 0 && (
                   <div className="bg-red-500/5 border border-red-500/20 p-4 rounded-xl shadow-sm col-span-2">
                     <p className="text-[10px] font-bold uppercase tracking-wider text-red-600 mb-1">Est. Market Rev Leakage</p>
@@ -646,7 +666,7 @@ export default function IntentEfficiency() {
               <div className="bg-card border border-border/50 p-4 rounded-xl shadow-sm space-y-4">
                 <div>
                   <div className="flex justify-between items-end mb-1">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Efficiency Score</span>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Revenue Efficiency Index</span>
                     <span className={cn('font-mono text-sm font-bold', efficiencyColor(k.efficiency_score ?? 0))}>{(k.efficiency_score ?? 0).toFixed(1)}/100</span>
                   </div>
                   <div className="h-2 bg-muted rounded-full overflow-hidden">
@@ -656,12 +676,12 @@ export default function IntentEfficiency() {
                 
                 <div className="grid grid-cols-2 gap-4 pt-3 border-t border-border/50">
                   <div>
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Click Share</p>
-                    <p className="font-mono text-sm font-semibold">{formatShare(k.click_share)}</p>
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Search Volume Pct</p>
+                    <p className="font-mono text-sm font-semibold">Top {Math.round(100 - (k.demand_percentile ?? 0))}%</p>
                   </div>
                   <div>
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Conv Share</p>
-                    <p className="font-mono text-sm font-semibold">{formatShare(k.conv_share)}</p>
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Revenue/Search Pct</p>
+                    <p className="font-mono text-sm font-semibold">Top {Math.round(100 - (k.efficiency_score ?? 0))}%</p>
                   </div>
                   <div className="col-span-2">
                     <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Missing Metrics</p>
