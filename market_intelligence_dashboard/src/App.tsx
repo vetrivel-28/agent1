@@ -8,7 +8,6 @@ import { Loader2 } from 'lucide-react';
 const DashboardOverview = lazy(() => import('./pages/DashboardOverview'));
 const DatasetUpload = lazy(() => import('./pages/DatasetUpload'));
 const DemandStrength = lazy(() => import('./pages/DemandStrength'));
-const SalesMomentum = lazy(() => import('./pages/SalesMomentum'));
 const RevenueMomentum = lazy(() => import('./pages/RevenueMomentum'));
 const BsrEfficiency = lazy(() => import('./pages/BsrEfficiency'));
 const IntentEfficiency = lazy(() => import('./pages/IntentEfficiency'));
@@ -58,7 +57,6 @@ function App() {
               <Route path="upload" element={<DatasetUpload />} />
               <Route path="overview" element={<DashboardOverview />} />
               <Route path="demand-strength" element={<DemandStrength />} />
-              <Route path="sales-momentum" element={<SalesMomentum />} />
               <Route path="revenue-momentum" element={<RevenueMomentum />} />
               <Route path="bsr-efficiency" element={<BsrEfficiency />} />
               <Route path="search-intent-efficiency" element={<IntentEfficiency />} />

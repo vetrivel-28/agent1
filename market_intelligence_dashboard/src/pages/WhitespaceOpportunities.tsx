@@ -26,7 +26,7 @@ type WhitespaceKeyword = {
 };
 
 type SegmentKeyword = {
-  keyword: string;
+  keyword?: string;
   search_volume?: number;
   click_share?: number | null;
   conversion_share?: number | null;
@@ -34,6 +34,16 @@ type SegmentKeyword = {
   efficiency_score?: number;
   classification?: string;
   source?: string;
+};
+
+type CombinedKeyword = WhitespaceKeyword & SegmentKeyword;
+
+type SegmentKeywordDetailsResponse = {
+  success?: boolean;
+  keywords?: SegmentKeyword[];
+  keyword_count?: number;
+  raw_row_count?: number;
+  duplicate_removed_count?: number;
 };
 
 type EntrySegment = {
@@ -173,14 +183,14 @@ export default function WhitespaceOpportunities() {
     isLoading: isSegmentLoading,
     isError: isSegmentError,
     refetch: refetchSegmentKeywords,
-  } = useQuery({
+  } = useQuery<SegmentKeywordDetailsResponse | null>({
     queryKey: ['revenue-opportunity-segment-keywords', selectedSegment],
     queryFn: async () => {
       if (!selectedSegment) return null;
       return api.getRevenueOpportunitySegmentKeywords(selectedSegment);
     },
     enabled: Boolean(selectedSegment),
-    keepPreviousData: true,
+    placeholderData: (prev) => prev,
   });
 
   if (isLoading) {
@@ -353,7 +363,7 @@ export default function WhitespaceOpportunities() {
     },
   ];
 
-  const keywordColumns: Column<WhitespaceKeyword | SegmentKeyword>[] = [
+  const keywordColumns: Column<CombinedKeyword>[] = [
     { header: 'Keyword', accessorKey: 'keyword', cell: (row) => <span className="font-medium text-sm">{row.keyword || '—'}</span> },
     { header: 'Search Volume', accessorKey: 'search_volume', cell: (row) => <span className="font-mono text-sm">{formatNumber(row.search_volume ?? 0)}</span> },
     { header: 'Click Share', accessorKey: 'click_share', cell: (row) => <span className="font-mono text-sm">{row.click_share != null ? `${row.click_share.toFixed(1)}%` : '—'}</span> },

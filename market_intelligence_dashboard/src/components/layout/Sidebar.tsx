@@ -5,7 +5,6 @@ import {
   LayoutDashboard,
   UploadCloud,
   Activity,
-  TrendingUp,
   DollarSign,
   Crosshair,
   MousePointerClick,
@@ -35,7 +34,6 @@ const topStandalone: NavItem[] = [
 
 const marketIntelligenceItems: NavItem[] = [
   { name: 'Demand Intelligence', href: '/demand-strength', icon: Activity },
-  { name: 'Brand Momentum Intelligence', href: '/sales-momentum', icon: TrendingUp },
   { name: 'Market Structure', href: '/market-structure', icon: BarChart4 },
   { name: 'Revenue Growth', href: '/revenue-momentum', icon: DollarSign },
   // { name: 'BSR Efficiency', href: '/bsr-efficiency', icon: Crosshair },

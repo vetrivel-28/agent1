@@ -62,7 +62,14 @@ from app.services.analysis_runner import run_all_engines
 from app.services.dataset_registry import registry
 from app.services.finance_intelligence import run as run_finance_intelligence
 from app.services.pdf_exporter import export_market_report_pdf
-from app.services.report_builder import build_report
+from app.services.report_builder import (
+    build_report,
+    _build_demand_hotspot,
+    _build_primary_price_cluster,
+    _find_column,
+    _to_numeric_series,
+    _normalize_text,
+)
 from app.utils.dataframe_checks import is_empty_dataframe
 from app.utils.logger import get_logger
 from app.validators.dataset_validator import validate_csv_bytes
@@ -920,6 +927,113 @@ def market_report(top_n: int = 10):
     report = _build_report_from_snapshot(top_n=top_n)
     logger.info("Market Report complete")
     return report
+
+
+@router.get(
+    "/overview-verification",
+    response_model=StandardResponse,
+    summary="Overview verification breakdown",
+    description=(
+        "Temporary verification endpoint returning raw first-page overview calculations "
+        "from loaded datasets and parity checks against /market-report output."
+    ),
+)
+def overview_verification(top_n: int = 10):
+    blackbox_df = registry.get_blackbox()
+    magnet_df = registry.get_magnet()
+    if is_empty_dataframe(blackbox_df) or is_empty_dataframe(magnet_df):
+        return _datasets_not_loaded("Overview Verification", "blackbox and magnet")
+
+    parent_revenue_col = _find_column(blackbox_df, ["Parent Level Revenue", "Revenue"])
+    brand_col = _find_column(blackbox_df, ["Brand", "Brand Name"])
+    asin_col = _find_column(blackbox_df, ["ASIN"])
+    title_col = _find_column(blackbox_df, ["Title", "Product Title", "Product Name"])
+    price_col = _find_column(blackbox_df, ["Price", "Listing Price", "Current Price"])
+
+    revenue_series = _to_numeric_series(blackbox_df[parent_revenue_col]).fillna(0.0) if parent_revenue_col else None
+    total_revenue = float(revenue_series[revenue_series > 0].sum()) if revenue_series is not None else 0.0
+
+    product_source = "none"
+    total_products = 0
+    if asin_col and asin_col in blackbox_df.columns:
+        asin_values = (
+            blackbox_df[asin_col]
+            .astype(str)
+            .str.strip()
+            .replace({"": None, "nan": None, "none": None, "null": None})
+            .dropna()
+        )
+        total_products = int(asin_values.nunique())
+        product_source = "ASIN"
+    elif title_col and title_col in blackbox_df.columns:
+        titles = blackbox_df[title_col].map(_normalize_text)
+        titles = titles[titles != ""]
+        total_products = int(titles.nunique())
+        product_source = "normalized_title"
+
+    market_leader_brand = "N/A"
+    market_leader_revenue = 0.0
+    market_leader_share = 0.0
+    if brand_col and revenue_series is not None and total_revenue > 0:
+        work = blackbox_df[[brand_col]].copy()
+        work["_revenue"] = revenue_series
+        work = work[work["_revenue"] > 0]
+        if not work.empty:
+            work["_brand"] = work[brand_col].astype(str).str.strip().replace({"": "Unknown Brand"})
+            grouped = work.groupby("_brand", observed=False)["_revenue"].sum().sort_values(ascending=False)
+            if not grouped.empty:
+                market_leader_brand = str(grouped.index[0])
+                market_leader_revenue = float(grouped.iloc[0])
+                market_leader_share = (market_leader_revenue / total_revenue) * 100.0
+
+    demand_hotspot = _build_demand_hotspot(magnet_df)
+    primary_cluster = _build_primary_price_cluster(blackbox_df, total_revenue)
+
+    report_resp = _build_report_from_snapshot(top_n=top_n)
+    report_data = report_resp.get("data", {})
+    report_results = report_data.get("results", {})
+    snapshot = report_results.get("market_snapshot", {})
+    report_price = report_results.get("primary_price_cluster", {})
+    report_verification = report_results.get("overview_verification", {})
+
+    parity_checks = {
+        "snapshot_total_revenue_matches_raw": snapshot.get("total_revenue") == (f"${total_revenue:,.0f}" if total_revenue > 0 else "N/A"),
+        "snapshot_total_products_matches_raw": int(snapshot.get("total_products") or 0) == int(total_products),
+        "snapshot_market_leader_matches_raw": snapshot.get("market_leader") == market_leader_brand,
+        "snapshot_market_leader_share_matches_raw": snapshot.get("market_leader_share") == (f"{market_leader_share:.1f}%" if market_leader_share > 0 else "N/A"),
+        "price_cluster_range_matches_raw": report_price.get("dominant_range") == primary_cluster.get("dominant_range"),
+        "price_cluster_share_matches_raw": report_price.get("revenue_share") == primary_cluster.get("revenue_share"),
+        "verification_block_present": bool(report_verification),
+        "price_column_detected": bool(price_col),
+    }
+
+    return format_response({
+        "status": "success",
+        "message": "Overview verification breakdown generated",
+        "results": {
+            "raw_breakdown": {
+                "revenue_total_parent_level": total_revenue,
+                "product_count": total_products,
+                "product_count_source": product_source,
+                "market_leader_brand": market_leader_brand,
+                "market_leader_revenue": market_leader_revenue,
+                "market_leader_share_pct": round(market_leader_share, 4),
+                "demand_hotspot_cluster": demand_hotspot.get("cluster_name", "N/A"),
+                "demand_hotspot_combined_volume": float(demand_hotspot.get("cluster_search_volume", 0.0) or 0.0),
+                "demand_hotspot_phrase_count": int(demand_hotspot.get("keyword_count", 0) or 0),
+                "primary_price_bucket": primary_cluster.get("dominant_range", "N/A"),
+                "primary_price_bucket_revenue": float(primary_cluster.get("range_revenue", 0.0) or 0.0),
+                "primary_price_bucket_product_count": int(primary_cluster.get("product_count", 0) or 0),
+                "primary_price_bucket_share_pct": float(str(primary_cluster.get("revenue_share", "0")).replace("%", "") or 0.0),
+            },
+            "market_report_snapshot": {
+                "market_snapshot": snapshot,
+                "primary_price_cluster": report_price,
+                "overview_verification": report_verification,
+            },
+            "parity_checks": parity_checks,
+        },
+    })
 
 
 @router.get(

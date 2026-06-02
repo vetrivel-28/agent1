@@ -6,19 +6,37 @@ import { Badge } from '../components/ui/Badge';
 import { formatCurrency, cn } from '../utils/cn';
 import { isEngineOk, getEngineErrorMessage } from '../utils/analysisStatus';
 import {
-  AlertCircle, Loader2, Crown, Lightbulb, Network, Layers, Shield
+  AlertCircle, Loader2, Crown, Network, Layers, Shield
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
 } from 'recharts';
 import { motion } from 'framer-motion';
 
-function tierBadgeClass(tier: string): string {
-  switch (tier) {
-    case 'Market Leader':     return 'bg-purple-500/15 text-purple-400 border border-purple-500/30';
-    case 'Major Player':      return 'bg-blue-500/15 text-blue-400 border border-blue-500/30';
-    case 'Strong Challenger': return 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/30';
-    case 'Emerging Player':   return 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30';
+type BrandRanking = {
+  rank: number;
+  brand: string;
+  parent_revenue: number;
+  revenue_share: number;
+  product_count: number;
+  avg_revenue_per_product: number;
+  segment: string;
+};
+
+type CompetitiveSegment = {
+  segment: string;
+  brand_count: number;
+  combined_revenue: number;
+  combined_share: number;
+  top_brands: string[];
+};
+
+function segmentBadgeClass(segment: string): string {
+  switch (segment) {
+    case 'Market Leaders': return 'bg-purple-500/15 text-purple-400 border border-purple-500/30';
+    case 'Strong Competitors': return 'bg-blue-500/15 text-blue-400 border border-blue-500/30';
+    case 'Niche Players': return 'bg-cyan-500/15 text-cyan-400 border border-cyan-500/30';
+    case 'Long Tail': return 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30';
     default:                  return 'bg-muted text-muted-foreground border border-border';
   }
 }
@@ -73,9 +91,9 @@ function BarTip({ active, payload }: any) {
   return (
     <div className="bg-card border border-border rounded-lg p-4 shadow-xl text-sm space-y-1.5 min-w-[200px]">
       <p className="font-bold text-base border-b border-border/50 pb-2 mb-2">{d.fullBrand ?? d.brand}</p>
-      <div className="flex justify-between"><span className="text-muted-foreground">Revenue:</span> <span className="font-medium">{formatCurrency(d.revenue)}</span></div>
-      <div className="flex justify-between"><span className="text-muted-foreground">Share:</span> <span className="font-medium text-primary">{d.market_share_pct?.toFixed(2)}%</span></div>
-      <div className="flex justify-between"><span className="text-muted-foreground">Tier:</span> <span className="font-medium">{d.tier}</span></div>
+      <div className="flex justify-between"><span className="text-muted-foreground">Parent Revenue:</span> <span className="font-medium">{formatCurrency(d.parent_revenue)}</span></div>
+      <div className="flex justify-between"><span className="text-muted-foreground">Share:</span> <span className="font-medium text-primary">{d.revenue_share?.toFixed(2)}%</span></div>
+      <div className="flex justify-between"><span className="text-muted-foreground">Segment:</span> <span className="font-medium">{d.segment}</span></div>
     </div>
   );
 }
@@ -107,37 +125,39 @@ export default function MarketConcentration() {
     );
   }
 
-  const r = data.data?.results || {};
-  const topBrands: any[] = r.top_brands_by_market_share || [];
-  const insights: { category: string; text: string }[] = r.strategic_insights || [];
-
-  const totalBrands: number = r.fragmentation_analysis?.total_brands ?? 0;
-  const hhi: number = r.hhi_score ?? 0;
-
-  const top1Share  = r.largest_brand_share ?? 0;
-  const top3Share  = r.top_3_share ?? 0;
-  const top5Share  = r.top_5_share ?? 0;
-  const top10Share = topBrands.slice(0, 10).reduce((s: number, b: any) => s + (b.market_share_pct ?? 0), 0);
-  const leader = topBrands[0] || {};
+  const structure = data.data?.results?.market_structure || {};
+  const topBrands: BrandRanking[] = structure.brand_rankings || [];
+  const landscape: CompetitiveSegment[] = structure.competitive_landscape || [];
+  const hhi: number = data.data?.results?.hhi_score ?? 0;
+  const totalRevenue: number = structure.total_market_revenue ?? 0;
+  const totalBrands: number = structure.active_brand_count ?? 0;
+  const top1Share = Number(structure.top_1_share ?? 0);
+  const top3Share = Number(structure.top_3_share ?? 0);
+  const top5Share = Number(structure.top_5_share ?? 0);
+  const concentrationType: string = structure.concentration_type ?? 'N/A';
+  const productCountSource: string = structure.product_count_source ?? 'N/A';
+  const totalProducts: number = structure.total_products ?? 0;
+  const top10Share = topBrands.slice(0, 10).reduce((s: number, b) => s + (b.revenue_share ?? 0), 0);
+  const leader = topBrands[0] || null;
 
   const top10Brands = topBrands.slice(0, 10);
-  const othersRevenue = topBrands.slice(10).reduce((s: number, b: any) => s + (b.revenue ?? 0), 0);
-  const othersShare   = topBrands.slice(10).reduce((s: number, b: any) => s + (b.market_share_pct ?? 0), 0);
+  const othersRevenue = topBrands.slice(10).reduce((s: number, b) => s + (b.parent_revenue ?? 0), 0);
+  const othersShare = topBrands.slice(10).reduce((s: number, b) => s + (b.revenue_share ?? 0), 0);
   const barData = [
-    ...top10Brands.map((b: any) => ({
+    ...top10Brands.map((b) => ({
       ...b,
       brand:    b.brand?.length > 20 ? b.brand.slice(0, 18) + '…' : b.brand,
       fullBrand: b.brand,
     })),
     ...(othersShare > 0 ? [{
       rank: 99, brand: 'Others', fullBrand: 'Others (aggregated)',
-      revenue: othersRevenue,
-      market_share_pct: parseFloat(othersShare.toFixed(2)),
-      tier: 'Long Tail',
+      parent_revenue: othersRevenue,
+      revenue_share: parseFloat(othersShare.toFixed(2)),
+      segment: 'Long Tail',
     }] : []),
   ];
 
-  const columns: ColumnDef<any>[] = [
+  const columns: ColumnDef<BrandRanking>[] = [
     {
       header: 'Rank',
       cell: (row) => (
@@ -147,11 +167,11 @@ export default function MarketConcentration() {
       ),
     },
     { header: 'Brand', cell: (row) => <span className="font-bold text-foreground/90">{row.brand}</span> },
-    { header: 'Revenue', cell: (row) => row.revenue != null ? <span className="font-medium text-foreground/80">{formatCurrency(row.revenue)}</span> : '—' },
+    { header: 'Parent Revenue', cell: (row) => row.parent_revenue != null ? <span className="font-medium text-foreground/80">{formatCurrency(row.parent_revenue)}</span> : '—' },
     {
-      header: 'Market Share',
+      header: 'Revenue Share',
       cell: (row) => {
-        const pct = row.market_share_pct ?? 0;
+        const pct = row.revenue_share ?? 0;
         return (
           <div className="flex items-center gap-3 w-48">
             <span className="font-mono text-sm font-semibold w-12">{pct.toFixed(1)}%</span>
@@ -163,10 +183,11 @@ export default function MarketConcentration() {
       },
     },
     {
-      header: 'Tier',
-      cell: (row) => <Badge variant="outline" className={tierBadgeClass(row.tier)}>{row.tier}</Badge>,
+      header: 'Products',
+      cell: (row) => <span className="text-sm">{row.product_count.toLocaleString()}</span>,
     },
-    { header: 'Position', cell: (row) => <span className="text-sm text-muted-foreground">{row.competitive_position}</span> },
+    { header: 'Avg Revenue/Product', cell: (row) => <span className="text-sm">{formatCurrency(row.avg_revenue_per_product || 0)}</span> },
+    { header: 'Segment', cell: (row) => <Badge variant="outline" className={segmentBadgeClass(row.segment)}>{row.segment}</Badge> },
   ];
 
   return (
@@ -178,12 +199,13 @@ export default function MarketConcentration() {
           <Badge className="bg-primary/20 text-primary hover:bg-primary/30 mb-3 border-none">Ownership & Dominance</Badge>
           <h1 className="text-4xl font-bold tracking-tight text-foreground">Market Structure</h1>
           <p className="text-muted-foreground mt-2 max-w-2xl text-lg">
-            Map competitive hierarchy, visualize brand dominance, and assess category consolidation risks.
+            Revenue-based market structure from Parent Level Revenue by brand.
           </p>
         </div>
         <div className="text-right">
           <p className="text-sm font-semibold uppercase tracking-wider text-muted-foreground mb-1">Active Brands</p>
           <p className="text-3xl font-black text-foreground">{totalBrands.toLocaleString()}</p>
+          <p className="text-xs text-muted-foreground mt-1">Products: {totalProducts.toLocaleString()} ({productCountSource})</p>
         </div>
       </div>
 
@@ -198,18 +220,18 @@ export default function MarketConcentration() {
                 <Shield className="w-5 h-5 text-primary" />
                 <p className="text-sm font-bold uppercase tracking-widest text-primary">Market Leader Spotlight</p>
               </div>
-              <h2 className="text-5xl font-black mb-2">{leader.brand || 'N/A'}</h2>
+              <h2 className="text-5xl font-black mb-2">{leader?.brand || 'N/A'}</h2>
               <p className="text-xl text-foreground/80 font-medium mb-6">
-                Commands <strong className="text-primary">{top1Share.toFixed(1)}%</strong> of the entire category revenue.
+                Commands <strong className="text-primary">{top1Share.toFixed(1)}%</strong> of total Parent Revenue.
               </p>
               <div className="flex gap-6 mt-8 border-t border-primary/20 pt-6">
                 <div>
-                  <p className="text-sm text-muted-foreground uppercase tracking-wider font-medium mb-1">Total Revenue</p>
-                  <p className="text-2xl font-bold text-foreground/90">{formatCurrency(leader.revenue || 0)}</p>
+                  <p className="text-sm text-muted-foreground uppercase tracking-wider font-medium mb-1">Brand Revenue</p>
+                  <p className="text-2xl font-bold text-foreground/90">{formatCurrency(leader?.parent_revenue || 0)}</p>
                 </div>
                 <div>
-                  <p className="text-sm text-muted-foreground uppercase tracking-wider font-medium mb-1">Competitive Position</p>
-                  <p className="text-xl font-bold text-primary">{leader.competitive_position || 'Dominant'}</p>
+                  <p className="text-sm text-muted-foreground uppercase tracking-wider font-medium mb-1">Total Market Revenue</p>
+                  <p className="text-xl font-bold text-primary">{formatCurrency(totalRevenue)}</p>
                 </div>
               </div>
             </div>
@@ -222,7 +244,7 @@ export default function MarketConcentration() {
             <Network className={cn('w-12 h-12 mb-4', hhiColor(hhi))} />
             <h3 className="text-sm font-bold uppercase tracking-widest text-muted-foreground mb-2">Concentration Index</h3>
             <p className={cn('text-5xl font-black mb-2 font-mono', hhiColor(hhi))}>{hhi.toLocaleString()}</p>
-            <Badge variant="outline" className={cn('mt-2 text-sm py-1 px-3', hhiColor(hhi))}>{r.market_structure ?? 'Unknown'}</Badge>
+            <Badge variant="outline" className={cn('mt-2 text-sm py-1 px-3', hhiColor(hhi))}>{concentrationType}</Badge>
             <p className="text-sm text-muted-foreground mt-4 leading-relaxed max-w-[250px]">
               {hhi < 1500 ? 'Highly fragmented market, easy for new entrants.'
                 : hhi <= 2500 ? 'Moderately concentrated. Some established players exist.'
@@ -248,8 +270,8 @@ export default function MarketConcentration() {
       <section className="pt-4">
         <Card className="border-border/50">
           <CardHeader>
-            <CardTitle>Market Share Distribution</CardTitle>
-            <CardDescription>Revenue share mapping of the top 10 brands versus the rest of the market.</CardDescription>
+            <CardTitle>Revenue Distribution by Brand</CardTitle>
+            <CardDescription>Revenue share mapping of top brands and long tail using Parent Level Revenue.</CardDescription>
           </CardHeader>
           <CardContent>
             <ResponsiveContainer width="100%" height={400}>
@@ -257,8 +279,8 @@ export default function MarketConcentration() {
                 <XAxis type="number" tickFormatter={(v) => `${v}%`} tick={{ fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false} />
                 <YAxis type="category" dataKey="brand" width={140} tick={{ fill: 'hsl(var(--foreground))', fontWeight: 500 }} axisLine={false} tickLine={false} />
                 <Tooltip content={<BarTip />} cursor={{ fill: 'hsl(var(--muted)/0.3)' }} />
-                <Bar dataKey="market_share_pct" radius={[0, 6, 6, 0]} maxBarSize={32}>
-                  {barData.map((entry: any, index: number) => (
+                <Bar dataKey="revenue_share" radius={[0, 6, 6, 0]} maxBarSize={32}>
+                  {barData.map((entry, index) => (
                     <Cell key={`cell-${index}`} fill={entry.rank === 1 ? 'hsl(var(--primary))' : entry.rank <= 3 ? 'hsl(var(--primary)/0.8)' : entry.rank <= 5 ? 'hsl(var(--primary)/0.6)' : entry.rank <= 10 ? 'hsl(var(--primary)/0.4)' : 'hsl(var(--muted))'} />
                   ))}
                 </Bar>
@@ -268,28 +290,32 @@ export default function MarketConcentration() {
         </Card>
       </section>
 
-      {/* Tier 4: Strategic Insights & Deep Dive Table */}
+      {/* Tier 4: Competitive Landscape by Revenue */}
       <section className="pt-4 space-y-6">
-        {insights.length > 0 && (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {insights.map((insight, i) => (
-              <Card key={i} className="bg-card/50 border-border/50 hover:border-primary/30 transition-colors">
-                <CardContent className="p-5 flex gap-4">
-                  <div className="mt-1"><Lightbulb className="w-5 h-5 text-primary" /></div>
-                  <div>
-                    <h4 className="text-xs font-bold uppercase tracking-wider text-primary mb-1">{insight.category}</h4>
-                    <p className="text-sm text-foreground/90 leading-relaxed">{insight.text}</p>
-                  </div>
-                </CardContent>
-              </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Competitive Landscape by Revenue</CardTitle>
+            <CardDescription>Segmented using brand revenue share distribution, not momentum score.</CardDescription>
+          </CardHeader>
+          <CardContent className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+            {landscape.map((seg) => (
+              <div key={seg.segment} className="rounded-xl border border-border p-4 space-y-2">
+                <div className="flex items-center justify-between">
+                  <Badge variant="outline" className={segmentBadgeClass(seg.segment)}>{seg.segment}</Badge>
+                  <span className="text-xs text-muted-foreground">{seg.brand_count} brands</span>
+                </div>
+                <p className="text-sm font-semibold">{formatCurrency(seg.combined_revenue)}</p>
+                <p className="text-xs text-muted-foreground">{seg.combined_share.toFixed(1)}% combined share</p>
+                <p className="text-xs text-foreground/80">Top: {seg.top_brands.slice(0, 3).join(', ') || 'N/A'}</p>
+              </div>
             ))}
-          </div>
-        )}
+          </CardContent>
+        </Card>
 
         <div className="pt-4">
           <DataTable 
-            title="Brand Dominance Database"
-            description="Complete ranking of all active brands and their market share metrics."
+            title="Brand Revenue Ranking"
+            description="Sorted by Parent Level Revenue with share and per-product efficiency."
             columns={columns} 
             data={topBrands} 
             keyExtractor={(r) => r.brand}

@@ -15,6 +15,7 @@ from dataset-driven engine outputs only.
 from __future__ import annotations
 
 import time
+import re
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
@@ -22,6 +23,12 @@ import pandas as pd
 from app.utils.logger import get_logger
 
 logger = get_logger("report_builder")
+
+_CURRENCY_CLEAN_RE = re.compile(r"[^\d\.\-]")
+_STOPWORDS = {
+    "for", "with", "and", "the", "a", "an", "of", "to", "in", "on",
+    "gift", "gifts", "pack", "set", "from", "by", "at", "or"
+}
 
 _PILLAR_WEIGHTS = {
     "demand": 0.35,
@@ -105,6 +112,171 @@ def _dataset_diagnostics(df: Any, expected_columns: List[str], dataset_label: st
         "missing_expected_columns": missing_expected_columns,
         "duplicate_rows_removed": duplicate_rows_removed,
         "blank_rows_removed": blank_rows_removed,
+    }
+
+
+def _find_column(df: Any, candidates: List[str]) -> Optional[str]:
+    if df is None or not hasattr(df, "columns"):
+        return None
+    cols = [str(c) for c in df.columns]
+    lowered = {c.lower().strip(): c for c in cols}
+    for candidate in candidates:
+        key = candidate.lower().strip()
+        if key in lowered:
+            return lowered[key]
+    for candidate in candidates:
+        key = candidate.lower().strip()
+        for col in cols:
+            col_l = col.lower().strip()
+            if key in col_l or col_l in key:
+                return col
+    return None
+
+
+def _to_numeric_series(series: pd.Series) -> pd.Series:
+    if series is None:
+        return pd.Series(dtype="float64")
+    cleaned = (
+        series.astype(str)
+        .str.replace(_CURRENCY_CLEAN_RE, "", regex=True)
+        .str.strip()
+        .replace({"": pd.NA, "nan": pd.NA, "none": pd.NA, "null": pd.NA, "-": pd.NA})
+    )
+    return pd.to_numeric(cleaned, errors="coerce")
+
+
+def _normalize_text(value: Any) -> str:
+    if value is None:
+        return ""
+    text = str(value).lower()
+    text = re.sub(r"[^\w\s]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _singularize(token: str) -> str:
+    if len(token) > 3 and token.endswith("ies"):
+        return token[:-3] + "y"
+    if len(token) > 3 and token.endswith("es"):
+        return token[:-2]
+    if len(token) > 3 and token.endswith("s"):
+        return token[:-1]
+    return token
+
+
+def _safe_brand_label(value: Any) -> str:
+    label = str(value).strip() if value is not None else ""
+    return label if label else "Unknown Brand"
+
+
+def _build_demand_hotspot(magnet_df: Any) -> Dict[str, Any]:
+    if magnet_df is None or getattr(magnet_df, "empty", True):
+        return {"cluster_name": "N/A", "cluster_search_volume": 0.0, "keyword_count": 0}
+
+    phrase_col = _find_column(magnet_df, ["Keyword Phrase", "Keyword", "Search Term", "Query"])
+    sv_col = _find_column(magnet_df, ["Search Volume", "SV", "Search Volume (30 days)"])
+    if not phrase_col or not sv_col:
+        return {"cluster_name": "N/A", "cluster_search_volume": 0.0, "keyword_count": 0}
+
+    work = magnet_df[[phrase_col, sv_col]].copy()
+    work["phrase"] = work[phrase_col].astype(str).map(_normalize_text)
+    work["search_volume"] = _to_numeric_series(work[sv_col]).fillna(0.0)
+    work = work[(work["phrase"] != "") & (work["search_volume"] > 0)].drop_duplicates(subset=["phrase"])
+    if work.empty:
+        return {"cluster_name": "N/A", "cluster_search_volume": 0.0, "keyword_count": 0}
+
+    tokenized: Dict[str, List[str]] = {}
+    for phrase in work["phrase"].tolist():
+        raw_tokens = [t for t in phrase.split(" ") if t]
+        tokens = [_singularize(t) for t in raw_tokens if t and t not in _STOPWORDS and len(t) > 2]
+        tokenized[phrase] = tokens
+
+    candidate_stats: Dict[str, Dict[str, Any]] = {}
+
+    def _add_candidate(term: str, phrase: str, volume: float) -> None:
+        if not term:
+            return
+        stat = candidate_stats.setdefault(term, {"phrases": set(), "volume": 0.0})
+        if phrase not in stat["phrases"]:
+            stat["phrases"].add(phrase)
+            stat["volume"] += float(volume)
+
+    for _, row in work.iterrows():
+        phrase = row["phrase"]
+        volume = float(row["search_volume"])
+        tokens = tokenized.get(phrase, [])
+        unique_tokens = list(dict.fromkeys(tokens))
+        for token in unique_tokens:
+            _add_candidate(token, phrase, volume)
+        for i in range(len(tokens) - 1):
+            gram = f"{tokens[i]} {tokens[i+1]}"
+            _add_candidate(gram, phrase, volume)
+        for i in range(len(tokens) - 2):
+            gram = f"{tokens[i]} {tokens[i+1]} {tokens[i+2]}"
+            _add_candidate(gram, phrase, volume)
+
+    valid_candidates = []
+    for term, stat in candidate_stats.items():
+        phrase_count = len(stat["phrases"])
+        if phrase_count < 2:
+            continue
+        words = term.split()
+        quality = len(words) * 1000000 + phrase_count
+        valid_candidates.append((term, stat["volume"], phrase_count, quality))
+
+    if not valid_candidates:
+        top_row = work.sort_values("search_volume", ascending=False).iloc[0]
+        return {
+            "cluster_name": top_row["phrase"],
+            "cluster_search_volume": float(top_row["search_volume"]),
+            "keyword_count": 1,
+        }
+
+    valid_candidates.sort(key=lambda x: (x[1], x[3], x[2]), reverse=True)
+    best_term, best_volume, best_count, _ = valid_candidates[0]
+    return {
+        "cluster_name": best_term,
+        "cluster_search_volume": float(best_volume),
+        "keyword_count": int(best_count),
+    }
+
+
+def _build_primary_price_cluster(blackbox_df: Any, total_revenue: float) -> Dict[str, Any]:
+    if blackbox_df is None or getattr(blackbox_df, "empty", True):
+        return {"dominant_range": "N/A", "revenue_share": "N/A", "product_count": 0, "range_revenue": 0.0}
+
+    price_col = _find_column(blackbox_df, ["Price", "Listing Price", "Current Price"])
+    revenue_col = _find_column(blackbox_df, ["Parent Level Revenue", "Revenue"])
+    if not price_col or not revenue_col:
+        return {"dominant_range": "N/A", "revenue_share": "N/A", "product_count": 0, "range_revenue": 0.0}
+
+    work = blackbox_df[[price_col, revenue_col]].copy()
+    work["price"] = _to_numeric_series(work[price_col])
+    work["revenue"] = _to_numeric_series(work[revenue_col])
+    work = work[(work["price"].notna()) & (work["price"] >= 0) & (work["revenue"].notna()) & (work["revenue"] > 0)]
+    if work.empty:
+        return {"dominant_range": "N/A", "revenue_share": "N/A", "product_count": 0, "range_revenue": 0.0}
+
+    bins = [0, 10, 20, 30, 40, 50, float("inf")]
+    labels = ["0-10", "10-20", "20-30", "30-40", "40-50", "50+"]
+    work["price_bucket"] = pd.cut(work["price"], bins=bins, labels=labels, right=False, include_lowest=True)
+    grouped = (
+        work.dropna(subset=["price_bucket"])
+        .groupby("price_bucket", observed=False)
+        .agg(range_revenue=("revenue", "sum"), product_count=("revenue", "size"))
+        .reset_index()
+    )
+    grouped = grouped[grouped["range_revenue"] > 0]
+    if grouped.empty:
+        return {"dominant_range": "N/A", "revenue_share": "N/A", "product_count": 0, "range_revenue": 0.0}
+
+    winner = grouped.sort_values("range_revenue", ascending=False).iloc[0]
+    share = (float(winner["range_revenue"]) / float(total_revenue) * 100.0) if total_revenue > 0 else 0.0
+    return {
+        "dominant_range": str(winner["price_bucket"]),
+        "revenue_share": f"{share:.1f}%" if share > 0 else "N/A",
+        "product_count": int(winner["product_count"]),
+        "range_revenue": float(winner["range_revenue"]),
     }
 
 
@@ -211,9 +383,57 @@ def build_report(
     efficient_products  = _get(bsr_result,    "results", "efficient_products") or []
     inefficient_products= _get(bsr_result,    "results", "inefficient_products") or []
 
-    total_market_revenue = _get(revenue_result, "results", "total_market_revenue") or 0.0
-    total_products       = _get(bsr_result,     "results", "total_products_analysed") or 0
-    total_brands         = _get(sales_result,   "results", "total_brands_analysed") or 0
+    parent_revenue_col = _find_column(blackbox_df, ["Parent Level Revenue", "Revenue"])
+    brand_col = _find_column(blackbox_df, ["Brand", "Brand Name"])
+    asin_col = _find_column(blackbox_df, ["ASIN"])
+    title_col = _find_column(blackbox_df, ["Title", "Product Title", "Product Name"])
+
+    total_market_revenue = 0.0
+    total_products = 0
+    total_brands = 0
+    market_leader = "N/A"
+    market_leader_share = 0.0
+    market_leader_revenue = 0.0
+    top_3_share = 0.0
+
+    if blackbox_df is not None and not getattr(blackbox_df, "empty", True) and parent_revenue_col:
+        revenue_series = _to_numeric_series(blackbox_df[parent_revenue_col]).fillna(0.0)
+        total_market_revenue = float(revenue_series[revenue_series > 0].sum())
+
+        work_for_brand = blackbox_df.copy()
+        work_for_brand["_parent_revenue"] = revenue_series
+        work_for_brand = work_for_brand[work_for_brand["_parent_revenue"] > 0]
+        if brand_col and not work_for_brand.empty:
+            work_for_brand["_brand"] = work_for_brand[brand_col].map(_safe_brand_label)
+            brand_revenue = (
+                work_for_brand.groupby("_brand", observed=False)["_parent_revenue"]
+                .sum()
+                .sort_values(ascending=False)
+            )
+            if not brand_revenue.empty and total_market_revenue > 0:
+                market_leader = str(brand_revenue.index[0])
+                market_leader_revenue = float(brand_revenue.iloc[0])
+                market_leader_share = (market_leader_revenue / total_market_revenue) * 100.0
+                top_3_share = float((brand_revenue.head(3).sum() / total_market_revenue) * 100.0)
+
+        if asin_col and asin_col in blackbox_df.columns:
+            asin_values = (
+                blackbox_df[asin_col]
+                .astype(str)
+                .str.strip()
+                .replace({"": pd.NA, "nan": pd.NA, "none": pd.NA, "null": pd.NA})
+                .dropna()
+            )
+            total_products = int(asin_values.nunique())
+        elif title_col and title_col in blackbox_df.columns:
+            titles = blackbox_df[title_col].map(_normalize_text)
+            titles = titles[titles != ""]
+            total_products = int(titles.nunique())
+
+        if brand_col and brand_col in blackbox_df.columns:
+            brands = blackbox_df[brand_col].astype(str).str.strip()
+            brands = brands.replace({"": pd.NA, "nan": pd.NA, "none": pd.NA, "null": pd.NA}).dropna()
+            total_brands = int(brands.nunique())
 
     # -----------------------------------------------------------------------
     # Opportunity findings (data-driven, no hallucination)
@@ -254,7 +474,8 @@ def build_report(
     # -----------------------------------------------------------------------
     # Dynamic Executive Verdict & Evidence
     # -----------------------------------------------------------------------
-    top_3_share = _get(hhi_result, "results", "top_3_share") or 0.0
+    if top_3_share <= 0:
+        top_3_share = _get(hhi_result, "results", "top_3_share") or 0.0
     top_kw_sv = 0
     top_kw = ""
     if top_demand_keywords:
@@ -316,7 +537,6 @@ def build_report(
         total_cells = 0
         non_null_cells = 0
         
-        import pandas as pd
         
         for req_c in required_cols:
             bb_match = [c for c in blackbox_df.columns if req_c.lower() in str(c).lower()]
@@ -357,9 +577,9 @@ def build_report(
     if top_3_share > 60:
         risks.append(f"Incumbent Dominance: The top 3 brands control {top_3_share:.1f}% of total revenue, severely limiting share for new entrants.")
         
-    market_leader = top_rev_brands[0].get("brand", "") if top_rev_brands else ""
-    market_leader_share = 0.0
-    if top_rev_brands and total_market_revenue > 0:
+    if market_leader == "N/A":
+        market_leader = top_rev_brands[0].get("brand", "") if top_rev_brands else ""
+    if market_leader_share <= 0 and top_rev_brands and total_market_revenue > 0:
         market_leader_share = (top_rev_brands[0].get("total_revenue", 0) / total_market_revenue) * 100
         
     if market_leader_share > 40:
@@ -429,14 +649,10 @@ def build_report(
     # Get median price for market snapshot
     median_price = _get(price_elasticity_result, "results", "kpis", "median_price") or 0.0
     
-    # Get market leader (top brand by revenue share)
-    market_leader = top_rev_brand if top_rev_brand and top_rev_brand != "N/A" else ""
-    
-    # Calculate market leader share if available
-    market_leader_share = 0.0
-    if top_rev_brands and len(top_rev_brands) > 0:
-        top_brand_rev = top_rev_brands[0].get("total_revenue", 0)
-        market_leader_share = round((float(top_brand_rev) / float(total_market_revenue) * 100) if total_market_revenue > 0 else 0, 1)
+    # Ensure fallback from revenue momentum if direct computation unavailable
+    if (not market_leader or market_leader == "N/A") and top_rev_brand and top_rev_brand != "N/A":
+        market_leader = top_rev_brand
+    market_leader_share = round(float(market_leader_share), 1) if market_leader_share > 0 else 0.0
     
     # -----------------------------------------------------------------------
     # Market Snapshot Section
@@ -451,8 +667,14 @@ def build_report(
         "median_price": f"${median_price:.2f}" if median_price > 0 else "N/A",
         "market_leader": market_leader if market_leader else "N/A",
         "market_leader_share": f"{market_leader_share:.1f}%" if market_leader_share > 0 else "N/A",
+        "market_leader_revenue": f"${market_leader_revenue:,.0f}" if market_leader_revenue > 0 else "N/A",
     }
     
+    demand_hotspot = _build_demand_hotspot(magnet_df)
+    hotspot_name = demand_hotspot.get("cluster_name", "N/A")
+    hotspot_volume = float(demand_hotspot.get("cluster_search_volume", 0.0) or 0.0)
+    hotspot_count = int(demand_hotspot.get("keyword_count", 0) or 0)
+
     # -----------------------------------------------------------------------
     # Key Insights Generation
     # -----------------------------------------------------------------------
@@ -478,14 +700,11 @@ def build_report(
         else:
             key_insights.append(f"The {best_price} price band drives majority of market revenue—primary value cluster.")
     
-    # Insight 4: Demand Distribution
-    if top_demand_keywords:
-        top_kw_sv = top_demand_keywords[0].get("search_volume", 0) if top_demand_keywords else 0
-        if top_kw_sv > 0:
-            total_sv = sum(kw.get("search_volume", 0) for kw in top_demand_keywords) if top_demand_keywords else 0
-            if total_sv > 0:
-                top_kw_pct = round((float(top_kw_sv) / float(total_sv) * 100), 1)
-                key_insights.append(f"Demand is concentrated: top keyword '{top_kw}' represents {top_kw_pct}% of top demand keywords.")
+    # Insight 4: Demand Distribution (clustered)
+    if hotspot_name and hotspot_name != "N/A" and hotspot_volume > 0:
+        key_insights.append(
+            f"Demand clusters around '{hotspot_name}' with {hotspot_volume:,.0f} combined search volume across {hotspot_count} phrases."
+        )
     
     # Insight 5: BSR Efficiency
     if bsr_score >= 60:
@@ -515,12 +734,11 @@ def build_report(
     # Opportunity Summary Mapping (filter N/A values)
     # -----------------------------------------------------------------------
     opp_summary = []
-    if top_opp_kw and top_opp_kw != "N/A":
-        top_kw_sv = top_demand_keywords[0].get("search_volume", 0) if top_demand_keywords else 0
+    if hotspot_name and hotspot_name != "N/A":
         opp_summary.append({
             "type": "Demand Opportunity",
-            "title": top_opp_kw,
-            "evidence": f"Search volume: {top_kw_sv:,} — highest demand keyword."
+            "title": hotspot_name,
+            "evidence": f"Combined search volume: {hotspot_volume:,.0f} across {hotspot_count} keyword phrases."
         })
     if efficient_products and len(efficient_products) > 0:
         prod_title = efficient_products[0].get("title") or efficient_products[0].get("asin", "")
@@ -533,14 +751,17 @@ def build_report(
             "evidence": f"BSR efficiency score {efficient_products[0].get('efficiency_score', 0)}/100 — benchmark for conversion."
         })
     
-    revenue_band_share = _get(price_elasticity_result, "results", "kpis", "best_selling_price_band_revenue_share") or 0.0
-    band_prod_count = _get(price_elasticity_result, "results", "kpis", "best_selling_price_band_product_count") or 0
-    
+    computed_price_cluster = _build_primary_price_cluster(blackbox_df, total_market_revenue)
+    best_price = computed_price_cluster.get("dominant_range", "N/A")
+    revenue_band_share = float(str(computed_price_cluster.get("revenue_share", "0")).replace("%", "") or 0)
+    band_prod_count = int(computed_price_cluster.get("product_count", 0) or 0)
+    best_price_revenue = float(computed_price_cluster.get("range_revenue", 0.0) or 0.0)
+
     if best_price and best_price != "N/A":
         opp_summary.append({
             "type": "Price Opportunity",
             "title": best_price,
-            "evidence": f"Dominant price band—{revenue_band_share:.1f}% of revenue across {band_prod_count} products."
+            "evidence": f"Highest revenue band—${best_price_revenue:,.0f} ({revenue_band_share:.1f}% share) across {band_prod_count} products."
         })
     if fastest_brands and len(fastest_brands) > 0:
         opp_summary.append({
@@ -568,8 +789,11 @@ def build_report(
     primary_price_cluster = {
         "dominant_range": best_price or "N/A",
         "revenue_share": f"{revenue_band_share:.1f}%" if revenue_band_share > 0 else "N/A",
-        "product_count": band_prod_count or 0
+        "product_count": band_prod_count or 0,
+        "range_revenue": f"${best_price_revenue:,.0f}" if best_price_revenue > 0 else "N/A",
     }
+
+    product_count_source = "ASIN" if asin_col and asin_col in getattr(blackbox_df, "columns", []) else "normalized_title"
 
     # -----------------------------------------------------------------------
     # Deterministic report sections (requested structure)
@@ -583,7 +807,7 @@ def build_report(
         "market_attractiveness": {
             "revenue_potential": {
                 "value": f"${total_market_revenue:,.2f}",
-                "formula": "SUM(Revenue)",
+                "formula": "SUM(Parent Level Revenue)",
                 "reason": "Total revenue across all analyzed products."
             },
             "competition_intensity": {
@@ -619,6 +843,27 @@ def build_report(
             "products_analyzed": total_products,
             "brands_analyzed": total_brands,
             "keywords_analyzed": len(magnet_df) if magnet_df is not None else 0
+        },
+        "overview_verification": {
+            "revenue_total_parent_level": total_market_revenue,
+            "product_count": total_products,
+            "product_count_source": product_count_source,
+            "market_leader": {
+                "brand": market_leader if market_leader else "N/A",
+                "revenue": market_leader_revenue,
+                "share_pct": market_leader_share,
+            },
+            "demand_hotspot": {
+                "cluster_name": hotspot_name,
+                "combined_search_volume": hotspot_volume,
+                "phrase_count": hotspot_count,
+            },
+            "primary_price_cluster": {
+                "range": best_price or "N/A",
+                "revenue": best_price_revenue,
+                "product_count": band_prod_count,
+                "share_pct": revenue_band_share,
+            },
         },
         "dataset_diagnostics": {
             "datasets_loaded": datasets_loaded,

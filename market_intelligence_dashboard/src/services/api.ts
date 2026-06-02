@@ -34,11 +34,6 @@ export const api = {
     return response.data;
   },
   
-  getSalesMomentum: async (topN = 10) => {
-    const response = await apiClient.post(`/sales-momentum?top_n=${topN}`);
-    return response.data;
-  },
-  
   getRevenueMomentum: async (topN = 10) => {
     const response = await apiClient.post(`/revenue-momentum?top_n=${topN}`);
     return response.data;

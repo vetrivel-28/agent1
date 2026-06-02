@@ -17,9 +17,11 @@ interface DataTableProps<T> {
   pageSize?: number;
   searchable?: boolean;
   rowClassName?: (row: T, index: number) => string;
+  rowKey?: (row: T, index: number) => string;
+  onRowClick?: (row: T, index: number) => void;
 }
 
-export function DataTable<T>({ columns, data, pageSize = 10, searchable = true, rowClassName }: DataTableProps<T>) {
+export function DataTable<T>({ columns, data, pageSize = 10, searchable = true, rowClassName, rowKey, onRowClick }: DataTableProps<T>) {
   const [sortConfig, setSortConfig] = useState<{ key: string; direction: 'asc' | 'desc' } | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
@@ -125,7 +127,15 @@ export function DataTable<T>({ columns, data, pageSize = 10, searchable = true, 
             <tbody>
               {paginatedData.length > 0 ? (
                 paginatedData.map((row, i) => (
-                  <tr key={i} className={cn("border-b last:border-b-0 hover:bg-muted/50 transition-colors", rowClassName ? rowClassName(row, i) : "")}>
+                  <tr
+                    key={rowKey ? rowKey(row, i) : String(i)}
+                    className={cn(
+                      "border-b last:border-b-0 hover:bg-muted/50 transition-colors",
+                      onRowClick ? "cursor-pointer" : "",
+                      rowClassName ? rowClassName(row, i) : ""
+                    )}
+                    onClick={() => onRowClick?.(row, i)}
+                  >
                     {columns.map((col, j) => (
                       <td key={j} className="px-4 py-3">
                         {col.cell ? col.cell(row) : String((row as any)[col.accessorKey] ?? '-')}

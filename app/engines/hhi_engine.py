@@ -1,257 +1,77 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, Optional
+import re
+from typing import Any, Dict, Optional, List
 
 import numpy as np
 import pandas as pd
 
 from app.utils.column_mapper import find_column
 from app.utils.logger import get_logger
-from app.utils.numeric_cleaner import clean_numeric_series
 
 logger = get_logger("hhi_engine")
 
-_BRAND_CANDIDATES = ["Brand", "Seller"]
-_REVENUE_CANDIDATES = ["ASIN Revenue", "Revenue", "Parent Level Revenue", "Monthly Revenue"]
-
-
-# ---------------------------------------------------------------------------
-# Scoring helpers
-# ---------------------------------------------------------------------------
-
-def _concentration_score(hhi: float) -> float:
-    """Convert HHI (0-10000) to a 0-100 concentration score."""
-    return round((hhi / 10_000.0) * 100.0, 2)
-
-
-def _concentration_classification(score: float) -> str:
-    """Numeric-only label for the concentration score bar — not used as market label."""
-    if score <= 20:
-        return "Low Concentration"
-    elif score <= 40:
-        return "Moderate Concentration"
-    elif score <= 60:
-        return "High Concentration"
-    elif score <= 80:
-        return "Very High Concentration"
-    else:
-        return "Extreme Concentration"
+_BRAND_CANDIDATES = ["Brand", "Brand Name", "Seller"]
+_REVENUE_CANDIDATES = ["Parent Level Revenue", "Revenue", "ASIN Revenue", "Monthly Revenue"]
+_ASIN_CANDIDATES = ["ASIN"]
+_TITLE_CANDIDATES = ["Title", "Product Title", "Product Name"]
+_NUMERIC_CLEAN_RE = re.compile(r"[^\d\.\-]")
 
 
 def _market_structure(hhi: float) -> str:
-    """Single source of truth for market structure label — driven by HHI."""
     if hhi < 1500:
         return "Fragmented"
-    elif hhi <= 2500:
+    if hhi <= 2500:
         return "Moderately Concentrated"
-    elif hhi <= 4000:
+    if hhi <= 4000:
         return "Concentrated"
-    else:
-        return "Highly Dominated"
+    return "Highly Dominated"
 
 
-def _market_shape(largest_share: float, top3_share: float, hhi: float, long_tail_share: float) -> str:
-    """Intuitive market shape label for executive readability."""
-    if largest_share > 40:
-        return "Leader Dominated"
-    elif top3_share > 70:
-        return "Oligopoly"
-    elif hhi < 1500:
-        return "Fragmented Market"
-    elif long_tail_share > 40:
-        return "Open Market"
-    else:
-        return "Competitive Market"
-
-
-def _entry_difficulty_score(
-    concentration_score: float,
-    top5_share: float,
-    total_revenue: float,
-    total_brands: int,
-    total_products: int,
-) -> float:
-    """
-    Entry Difficulty Score (0-100).
-    40% Concentration Score
-    30% Top-5 Market Share (normalised to 0-100)
-    20% Revenue Density  (log-normalised proxy)
-    10% Active Brand Density (inverse — more brands = harder)
-    """
-    top5_component = min(top5_share, 100.0)  # already 0-100 pct
-
-    # Revenue density: log scale, cap at 100
-    rev_density_raw = np.log1p(total_revenue / max(total_brands, 1))
-    rev_density = min(rev_density_raw / np.log1p(1_000_000) * 100.0, 100.0)
-
-    # Brand density: more brands → harder to stand out (normalise 0-100)
-    brand_density = min(total_brands / 200.0 * 100.0, 100.0)
-
-    score = (
-        0.40 * concentration_score
-        + 0.30 * top5_component
-        + 0.20 * rev_density
-        + 0.10 * brand_density
+def _clean_numeric_series(series: pd.Series) -> pd.Series:
+    cleaned = (
+        series.astype(str)
+        .str.replace(_NUMERIC_CLEAN_RE, "", regex=True)
+        .str.strip()
+        .replace({"": pd.NA, "nan": pd.NA, "none": pd.NA, "null": pd.NA, "-": pd.NA})
     )
-    return round(min(max(score, 0.0), 100.0), 2)
+    return pd.to_numeric(cleaned, errors="coerce")
 
 
-def _entry_difficulty_classification(score: float) -> str:
-    if score <= 25:
-        return "Easy Entry"
-    elif score <= 50:
-        return "Moderate Entry"
-    elif score <= 75:
-        return "Difficult Entry"
-    else:
-        return "Highly Defended Market"
+def _normalize_text(value: Any) -> str:
+    text = str(value).lower() if value is not None else ""
+    text = re.sub(r"[^\w\s]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
 
 
-def _dominant_player_risk(largest_share_pct: float) -> str:
-    if largest_share_pct < 20:
-        return "Low Risk"
-    elif largest_share_pct < 35:
-        return "Moderate Risk"
-    elif largest_share_pct < 50:
-        return "High Risk"
-    else:
-        return "Extreme Risk"
+def _cluster_thresholds(brand_count: int) -> Dict[str, float]:
+    if brand_count <= 5:
+        return {"leader": 12.0, "strong": 4.0, "niche": 1.5}
+    if brand_count <= 15:
+        return {"leader": 10.0, "strong": 3.0, "niche": 1.0}
+    return {"leader": 10.0, "strong": 3.0, "niche": 1.0}
 
 
-def _brand_tier(share_pct: float) -> str:
-    if share_pct > 20:
-        return "Market Leader"
-    elif share_pct >= 10:
-        return "Major Player"
-    elif share_pct >= 5:
-        return "Strong Challenger"
-    elif share_pct >= 1:
-        return "Emerging Player"
-    else:
-        return "Long Tail"
+def _segment_name(share: float, rank: int, thresholds: Dict[str, float]) -> str:
+    if rank <= 3 or share >= thresholds["leader"]:
+        return "Market Leaders"
+    if share >= thresholds["strong"]:
+        return "Strong Competitors"
+    if share >= thresholds["niche"]:
+        return "Niche Players"
+    return "Long Tail"
 
 
-def _competitive_position(rank: int, share_pct: float) -> str:
-    if rank == 1:
-        return "Category Dominant"
-    elif rank <= 3:
-        return "Top Competitor"
-    elif rank <= 5:
-        return "Strong Contender"
-    elif share_pct >= 5:
-        return "Active Challenger"
-    elif share_pct >= 1:
-        return "Niche Player"
-    else:
-        return "Fringe Participant"
-
-
-def _generate_insights(
-    hhi: float,
-    market_structure: str,
-    market_shape: str,
-    top3_share: float,
-    top5_share: float,
-    largest_brand: str,
-    largest_share: float,
-    entry_difficulty: float,
-    entry_class: str,
-    accessibility_score: float,
-    accessibility_class: str,
-    dominant_risk: str,
-    total_brands: int,
-) -> list[dict]:
-    """
-    Returns structured insights grouped by category:
-    key_finding, market_structure, entry_conditions, opportunity, risk
-    """
-    insights = []
-
-    # KEY FINDING — dominant player
-    if largest_share > 0:
-        insights.append({
-            "category": "Key Finding",
-            "text": (
-                f"{largest_brand} controls {largest_share:.1f}% of category revenue "
-                f"and is the {market_shape.lower()} market leader."
-            ),
-        })
-
-    # MARKET STRUCTURE
-    insights.append({
-        "category": "Market Structure",
-        "text": (
-            f"The market is {market_structure.lower()} (HHI {hhi:,.0f}). "
-            f"The top three brands collectively control {top3_share:.1f}% of total revenue."
-        ),
-    })
-
-    # ENTRY CONDITIONS
-    if entry_difficulty >= 75:
-        entry_text = (
-            "Entry barriers are very high. Established players hold deep market penetration "
-            "and revenue concentration makes displacement difficult."
-        )
-    elif entry_difficulty >= 50:
-        entry_text = (
-            "Entry barriers are elevated due to concentrated revenue ownership. "
-            "Differentiated positioning is essential for new entrants."
-        )
-    elif entry_difficulty >= 25:
-        entry_text = (
-            "Entry barriers are moderate. The market is accessible but competitive. "
-            "A clear value proposition is needed to gain traction."
-        )
-    else:
-        entry_text = (
-            "Entry barriers are low. The market is fragmented and accessible to new entrants "
-            "with limited incumbent advantage."
-        )
-    insights.append({"category": "Entry Conditions", "text": entry_text})
-
-    # OPPORTUNITY
-    if accessibility_score >= 75:
-        opp_text = (
-            "Significant whitespace remains. The fragmented structure favours new entrants "
-            "with strong product differentiation and targeted positioning."
-        )
-    elif accessibility_score >= 50:
-        opp_text = (
-            "Accessible whitespace remains in niche and underserved segments. "
-            "Targeting specific price tiers or use cases can yield meaningful share."
-        )
-    else:
-        opp_text = (
-            "Limited whitespace for undifferentiated entry. Superior product quality "
-            "or niche positioning is required to compete effectively."
-        )
-    insights.append({"category": "Opportunity", "text": opp_text})
-
-    # RISK
-    if dominant_risk == "Extreme Risk":
-        risk_text = (
-            f"The market exhibits extreme dependency on {largest_brand} ({largest_share:.1f}%). "
-            "Any disruption to this player would significantly reshape the competitive landscape."
-        )
-    elif dominant_risk == "High Risk":
-        risk_text = (
-            f"The market exhibits high dependency on a single dominant player ({largest_brand}, "
-            f"{largest_share:.1f}%). Competitive strategy should account for this concentration risk."
-        )
-    elif dominant_risk == "Moderate Risk":
-        risk_text = (
-            f"{largest_brand} holds a meaningful lead at {largest_share:.1f}% but the market "
-            "is not fully dependent on a single player."
-        )
-    else:
-        risk_text = (
-            "No single brand dominates the market. Competitive risk is distributed across "
-            "multiple players, reducing dependency on any one participant."
-        )
-    insights.append({"category": "Risk", "text": risk_text})
-
-    return insights
+def _concentration_interpretation(top3_share: float, top5_share: float, brand_count: int) -> str:
+    if top3_share >= 70:
+        return "Highly Concentrated"
+    if top3_share >= 50 or top5_share >= 75:
+        return "Concentrated"
+    if brand_count >= 25 and top3_share < 40:
+        return "Fragmented"
+    return "Moderately Concentrated"
 
 
 # ---------------------------------------------------------------------------
@@ -270,17 +90,25 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
 
     if brand_col is None or revenue_col is None:
         return _error_response(
-            "Required Brand or ASIN Revenue columns are missing.",
+            "Required Brand or Parent Level Revenue columns are missing.",
             ["blackbox"],
             [c for c in [brand_col, revenue_col] if c],
             t0,
             rows_before_cleaning,
         )
 
+    asin_col = find_column(blackbox_df, _ASIN_CANDIDATES)
+    title_col = find_column(blackbox_df, _TITLE_CANDIDATES)
+
     work = pd.DataFrame(index=blackbox_df.index)
-    work["brand"] = blackbox_df[brand_col].astype(str).str.strip()
-    work["revenue"], _ = clean_numeric_series(blackbox_df[revenue_col], revenue_col)
+    work["brand"] = blackbox_df[brand_col].astype(str).str.strip().replace({"": "Unknown Brand"})
+    work["revenue"] = _clean_numeric_series(blackbox_df[revenue_col])
+    if asin_col:
+        work["asin"] = blackbox_df[asin_col].astype(str).str.strip()
+    if title_col:
+        work["title_norm"] = blackbox_df[title_col].map(_normalize_text)
     work = work.dropna(subset=["revenue"])
+    work = work[work["revenue"] > 0]
     work = work[work["brand"] != ""]
 
     if work.empty:
@@ -292,9 +120,38 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
             rows_before_cleaning,
         )
 
+    if "asin" in work.columns:
+        asin_values = work["asin"].replace({"": pd.NA, "nan": pd.NA, "none": pd.NA, "null": pd.NA}).dropna()
+        total_products = int(asin_values.nunique())
+        product_count_source = "ASIN"
+    elif "title_norm" in work.columns:
+        title_values = work["title_norm"]
+        title_values = title_values[title_values != ""]
+        total_products = int(title_values.nunique())
+        product_count_source = "normalized_title"
+    else:
+        total_products = int(work.shape[0])
+        product_count_source = "row_count"
+
+    product_key = None
+    if "asin" in work.columns:
+        product_key = "asin"
+    elif "title_norm" in work.columns:
+        product_key = "title_norm"
+
     brand_revenue = work.groupby("brand", as_index=False, sort=False)["revenue"].sum()
+    if product_key:
+        brand_products = (
+            work.loc[work[product_key].notna() & (work[product_key] != "")]
+            .groupby("brand", as_index=False)[product_key]
+            .nunique()
+            .rename(columns={product_key: "product_count"})
+        )
+        brand_revenue = brand_revenue.merge(brand_products, on="brand", how="left")
+    else:
+        brand_revenue["product_count"] = work.groupby("brand", as_index=False).size()["size"]
+    brand_revenue["product_count"] = brand_revenue["product_count"].fillna(0).astype(int)
     total_revenue = float(brand_revenue["revenue"].sum())
-    total_products = int(work.shape[0])
 
     if total_revenue == 0:
         return _error_response(
@@ -305,7 +162,6 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
             rows_before_cleaning,
         )
 
-    # Core calculations
     brand_revenue["market_share_pct"] = brand_revenue["revenue"] / total_revenue * 100.0
     brand_revenue["hhi_component"] = np.square(brand_revenue["market_share_pct"])
     hhi_score = float(brand_revenue["hhi_component"].sum())
@@ -313,83 +169,49 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
     brand_revenue_sorted = brand_revenue.sort_values("market_share_pct", ascending=False).reset_index(drop=True)
     total_brands = int(brand_revenue_sorted.shape[0])
 
-    # Derived scores
-    conc_score = _concentration_score(hhi_score)
-    conc_class = _concentration_classification(conc_score)
     market_structure = _market_structure(hhi_score)
-
     top3_share = float(brand_revenue_sorted["market_share_pct"].head(3).sum())
     top5_share = float(brand_revenue_sorted["market_share_pct"].head(5).sum())
+    top1_share = float(brand_revenue_sorted["market_share_pct"].head(1).sum())
     largest_share = float(brand_revenue_sorted["market_share_pct"].iloc[0]) if total_brands > 0 else 0.0
     largest_brand = str(brand_revenue_sorted["brand"].iloc[0]) if total_brands > 0 else "N/A"
+    concentration_type = _concentration_interpretation(top3_share, top5_share, total_brands)
 
-    entry_diff = _entry_difficulty_score(conc_score, top5_share, total_revenue, total_brands, total_products)
-    entry_class = _entry_difficulty_classification(entry_diff)
-    market_accessibility_score = round(100.0 - entry_diff, 2)
-    dominant_risk = _dominant_player_risk(largest_share)
-
-    # Market accessibility classification
-    if market_accessibility_score >= 75:
-        accessibility_class = "Highly Accessible"
-    elif market_accessibility_score >= 50:
-        accessibility_class = "Moderately Accessible"
-    elif market_accessibility_score >= 25:
-        accessibility_class = "Difficult to Access"
-    else:
-        accessibility_class = "Highly Defended"
-
-    # Long tail share (brands with < 1% share)
-    long_tail_share = float(
-        brand_revenue_sorted.loc[brand_revenue_sorted["market_share_pct"] < 1.0, "market_share_pct"].sum()
-    )
-
-    # Market shape
-    market_shape = _market_shape(largest_share, top3_share, hhi_score, long_tail_share)
-
-    # Build top brands list with enriched fields
-    top_brands_list = []
-    for rank_idx, row in brand_revenue_sorted.head(max(top_n, 15)).iterrows():
+    top_brands_list: List[Dict[str, Any]] = []
+    thresholds = _cluster_thresholds(total_brands)
+    for rank_idx, row in brand_revenue_sorted.head(max(top_n, 25)).iterrows():
         rank = rank_idx + 1
         share = float(row["market_share_pct"])
-        gap = round(share - largest_share, 2)  # negative for all non-leaders
+        product_count = int(row.get("product_count", 0) or 0)
+        avg_revenue_per_product = float(row["revenue"]) / float(product_count) if product_count > 0 else 0.0
+        segment = _segment_name(share, rank, thresholds)
         top_brands_list.append({
             "rank": rank,
             "brand": str(row["brand"]),
-            "revenue": round(float(row["revenue"]), 2),
-            "market_share_pct": round(share, 4),
-            "hhi_component": round(float(row["hhi_component"]), 4),
-            "tier": _brand_tier(share),
-            "competitive_position": _competitive_position(rank, share),
-            "gap_to_leader": gap if rank > 1 else None,
+            "parent_revenue": round(float(row["revenue"]), 2),
+            "revenue_share": round(share, 4),
+            "product_count": product_count,
+            "avg_revenue_per_product": round(avg_revenue_per_product, 2),
+            "segment": segment,
         })
 
-    # Concentration distribution
-    p25 = float(brand_revenue_sorted["market_share_pct"].quantile(0.25))
-    p75 = float(brand_revenue_sorted["market_share_pct"].quantile(0.75))
-    concentration_distribution = {
-        "brands_below_p25_share": int((brand_revenue_sorted["market_share_pct"] <= p25).sum()),
-        "brands_between_p25_p75_share": int(
-            ((brand_revenue_sorted["market_share_pct"] > p25) & (brand_revenue_sorted["market_share_pct"] < p75)).sum()
-        ),
-        "brands_above_p75_share": int((brand_revenue_sorted["market_share_pct"] >= p75).sum()),
-    }
-
-    # Strategic insights
-    insights = _generate_insights(
-        hhi=hhi_score,
-        market_structure=market_structure,
-        market_shape=market_shape,
-        top3_share=top3_share,
-        top5_share=top5_share,
-        largest_brand=largest_brand,
-        largest_share=largest_share,
-        entry_difficulty=entry_diff,
-        entry_class=entry_class,
-        accessibility_score=market_accessibility_score,
-        accessibility_class=accessibility_class,
-        dominant_risk=dominant_risk,
-        total_brands=total_brands,
-    )
+    segment_order = ["Market Leaders", "Strong Competitors", "Niche Players", "Long Tail"]
+    segment_entries: List[Dict[str, Any]] = []
+    segment_df = pd.DataFrame(top_brands_list)
+    for seg in segment_order:
+        seg_rows = segment_df[segment_df["segment"] == seg]
+        if seg_rows.empty:
+            continue
+        combined_revenue = float(seg_rows["parent_revenue"].sum())
+        combined_share = float(seg_rows["revenue_share"].sum())
+        top_brands = seg_rows.sort_values("parent_revenue", ascending=False)["brand"].head(5).tolist()
+        segment_entries.append({
+            "segment": seg,
+            "brand_count": int(seg_rows.shape[0]),
+            "combined_revenue": round(combined_revenue, 2),
+            "combined_share": round(combined_share, 4),
+            "top_brands": top_brands,
+        })
 
     rows_after_cleaning = int(work.shape[0])
     rows_skipped = max(rows_before_cleaning - rows_after_cleaning, 0)
@@ -398,64 +220,45 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
         "status": "success",
         "metric_name": "Market Concentration Index (HHI)",
         "summary": (
-            f"HHI {hhi_score:,.0f} — {market_structure} ({market_shape}). "
-            f"Concentration Score: {conc_score}/100. "
-            f"Entry Difficulty: {entry_diff}/100 ({entry_class}). "
-            f"Market Accessibility: {market_accessibility_score}/100 ({accessibility_class})."
+            f"Revenue-based market structure computed from Parent Level Revenue. "
+            f"Top 3 brands control {top3_share:.1f}% of ${total_revenue:,.0f} total revenue."
         ),
         "datasets_used": ["blackbox"],
         "columns_used": [brand_col, revenue_col],
         "formula_used": (
-            "Concentration Score = (HHI / 10000) × 100; "
-            "Entry Difficulty = 40%×Concentration + 30%×Top5Share + 20%×RevDensity + 10%×BrandDensity; "
-            "Market Accessibility = 100 − Entry Difficulty."
+            "Total Market Revenue = SUM(Parent Level Revenue); "
+            "Brand Revenue = SUM(Parent Level Revenue) by Brand; "
+            "Brand Revenue Share = Brand Revenue / Total Market Revenue × 100."
         ),
         "results": {
-            # Core HHI
             "hhi_score": round(hhi_score, 2),
-            "hhi_normalized_score": round(min(hhi_score / 100.0, 100.0), 2),  # backward compat
-            "market_structure_type": market_structure,  # backward compat
-
-            # Concentration
-            "concentration_score": conc_score,
-            "concentration_classification": conc_class,
-            "market_structure": market_structure,
-            "market_shape": market_shape,
-
-            # Control metrics
+            "market_structure_type": market_structure,
             "top_3_share": round(top3_share, 2),
             "top_5_share": round(top5_share, 2),
-
-            # Entry & accessibility
-            "entry_difficulty_score": entry_diff,
-            "entry_difficulty_classification": entry_class,
-            "market_accessibility_score": market_accessibility_score,
-            "market_accessibility_classification": accessibility_class,
-
-            # Backward-compat aliases
-            "opportunity_score": market_accessibility_score,
-            "opportunity_classification": accessibility_class,
-
-            # Dominant player risk
-            "dominant_player_risk": dominant_risk,
             "largest_brand_share": round(largest_share, 2),
             "largest_brand_name": largest_brand,
-            "market_leader_name": largest_brand,
-            "market_leader_share": round(largest_share, 2),
-
-            # Brand table
-            "top_brands_by_market_share": top_brands_list,
-
-            # Supporting data
-            "concentration_distribution": concentration_distribution,
-            "fragmentation_analysis": {
-                "total_brands": total_brands,
+            "top_brands_by_market_share": [
+                {
+                    "rank": b["rank"],
+                    "brand": b["brand"],
+                    "revenue": b["parent_revenue"],
+                    "market_share_pct": b["revenue_share"],
+                    "tier": b["segment"],
+                }
+                for b in top_brands_list
+            ],
+            "market_structure": {
                 "total_market_revenue": round(total_revenue, 2),
-                "largest_brand_share_pct": round(largest_share, 4),
+                "active_brand_count": total_brands,
+                "top_1_share": round(top1_share, 4),
+                "top_3_share": round(top3_share, 4),
+                "top_5_share": round(top5_share, 4),
+                "concentration_type": concentration_type,
+                "product_count_source": product_count_source,
+                "total_products": total_products,
+                "brand_rankings": top_brands_list,
+                "competitive_landscape": segment_entries,
             },
-
-            # Strategic insights (structured)
-            "strategic_insights": insights,
         },
         "validation": {
             "rows_before_cleaning": rows_before_cleaning,

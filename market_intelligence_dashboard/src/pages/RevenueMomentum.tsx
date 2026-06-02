@@ -1,500 +1,261 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../services/api';
-import { Card, CardContent, CardHeader, CardTitle, } from '../components/ui/Card';
-import { DataTable, type ColumnDef } from '../components/ui/DataTable';
+import { Card, CardContent } from '../components/ui/Card';
+import { DataTable, type Column } from '../components/tables/DataTable';
 import { Badge } from '../components/ui/Badge';
-import { cn } from '../utils/cn';
+import { Button } from '../components/ui/Button';
+import { Drawer } from '../components/ui/Drawer';
+import { EvidenceDrawer, type MetricEvidence } from '../components/ui/EvidenceDrawer';
 import { isEngineOk, getEngineErrorMessage } from '../utils/analysisStatus';
-import {
-  AlertCircle, Loader2, TrendingUp, TrendingDown, Activity, 
-  Rocket, ShieldAlert, Zap, BarChart2, Target, AlertTriangle
-} from 'lucide-react';
+import { AlertCircle, Loader2, Activity } from 'lucide-react';
 import { motion } from 'framer-motion';
 
+type LedgerRow = {
+  row_number?: number;
+  brand: string;
+  momentum_score: number;
+  primary_engine?: string;
+  classification: string;
+  parent_revenue: number;
+  revenue_share: number;
+  evidence?: MetricEvidence;
+};
+
+type SegmentBlock = {
+  count: number;
+  preview_brands?: string[];
+  items: LedgerRow[];
+  tinyllama_strategy?: string | null;
+  tinyllama_status?: string;
+  rule_based_strategy?: string;
+  evidence?: MetricEvidence;
+};
+
+type RevenueMomentumPayload = {
+  metrics: {
+    market_leaders: SegmentBlock;
+    emerging_brands: SegmentBlock;
+    premium_brands: SegmentBlock;
+    niche_players: SegmentBlock;
+  };
+  momentum_ledger: LedgerRow[];
+  classification_rules?: { rule_text?: string };
+};
+
+const GROUP_META: Record<string, { title: string; ruleLabel: string; cardClass: string }> = {
+  market_leaders: {
+    title: 'Market Leaders',
+    ruleLabel: 'HIGH REVENUE  •  HIGH SALES',
+    cardClass: 'border-success/30 bg-success/5 text-success',
+  },
+  emerging_brands: {
+    title: 'Emerging Brands',
+    ruleLabel: 'LOW REVENUE  •  HIGH SALES',
+    cardClass: 'border-primary/30 bg-primary/5 text-primary',
+  },
+  premium_brands: {
+    title: 'Premium Brands',
+    ruleLabel: 'HIGH REVENUE  •  LOW SALES',
+    cardClass: 'border-warning/30 bg-warning/5 text-warning',
+  },
+  niche_players: {
+    title: 'Niche Players',
+    ruleLabel: 'LOW REVENUE  •  LOW SALES',
+    cardClass: 'border-border bg-muted/30 text-muted-foreground',
+  },
+};
+
+function scoreColor(score: number): string {
+  if (score >= 80) return 'text-success';
+  if (score >= 60) return 'text-success/80';
+  if (score >= 40) return 'text-warning';
+  return 'text-danger';
+}
+
+function ScoreBar({ score, onClick }: { score: number; onClick?: (e: React.MouseEvent) => void }) {
+  return (
+    <button type="button" onClick={onClick} className="flex items-center gap-2 w-32 text-left">
+      <span className={`font-mono text-xs font-bold w-8 text-right ${scoreColor(score)}`}>{score.toFixed(0)}</span>
+      <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
+        <div
+          className={`h-full rounded-full ${score >= 60 ? 'bg-success' : score >= 40 ? 'bg-warning' : 'bg-danger'}`}
+          style={{ width: `${Math.min(100, Math.max(0, score))}%` }}
+        />
+      </div>
+    </button>
+  );
+}
+
 export default function RevenueMomentum() {
+  const [selectedGroupKey, setSelectedGroupKey] = useState<keyof RevenueMomentumPayload['metrics'] | null>(null);
+  const [selectedEvidence, setSelectedEvidence] = useState<MetricEvidence | null>(null);
+
   const { data, isLoading, isError } = useQuery({
     queryKey: ['revenue-momentum'],
-    queryFn: () => api.getRevenueMomentum(50),
+    queryFn: () => api.getRevenueMomentum(500),
   });
 
-  const payload = data?.data;
-  const results = payload?.results || {};
+  const rm: RevenueMomentumPayload = data?.data?.results?.revenue_momentum || {
+    metrics: {
+      market_leaders: { count: 0, items: [] },
+      emerging_brands: { count: 0, items: [] },
+      premium_brands: { count: 0, items: [] },
+      niche_players: { count: 0, items: [] },
+    },
+    momentum_ledger: [],
+  };
 
-  const memoized = useMemo(() => {
-    const normalizeBrand = (raw: string) => {
-      if (!raw) return '';
-      let s = String(raw).trim().replace(/\s+/g, ' ');
-      s = s.split(' ').filter((v, i, arr) => !(i > 0 && v.toLowerCase() === arr[i - 1].toLowerCase())).join(' ');
-      return s.toLowerCase().split(' ').map((w) => (w.length ? w[0].toUpperCase() + w.slice(1) : w)).join(' ');
-    };
-
-    const rawBrands = results.all_brands_momentum || [];
-    const brandMap = new Map<string, any>();
-    rawBrands.forEach((b: any) => {
-      const name = normalizeBrand(b.brand || '');
-      if (!name) return;
-      const existing = brandMap.get(name);
-      if (!existing) {
-        brandMap.set(name, { ...b, brand: name });
-        return;
-      }
-      const choose = (a: any, c: any) => ( (c ?? 0) > (a ?? 0) ? c : a );
-      const merged = { ...existing };
-      merged.momentum_score = Math.max(existing.momentum_score ?? 0, b.momentum_score ?? 0);
-      merged.sales_velocity_score = choose(existing.sales_velocity_score, b.sales_velocity_score);
-      merged.review_velocity_score = choose(existing.review_velocity_score, b.review_velocity_score);
-      merged.bsr_momentum_score = choose(existing.bsr_momentum_score, b.bsr_momentum_score);
-      merged.revenue_strength_score = choose(existing.revenue_strength_score, b.revenue_strength_score);
-      merged.total_revenue = Math.max(existing.total_revenue ?? 0, b.total_revenue ?? 0);
-      merged.momentum_category = merged.momentum_category || b.momentum_category || existing.momentum_category;
-      merged.primary_engine = b.primary_engine || existing.primary_engine;
-      merged.drivers = b.drivers || existing.drivers;
-      merged.revenue_share = Math.max(existing.revenue_share ?? 0, b.revenue_share ?? 0);
-      merged.sales_estimate = Math.max(existing.sales_estimate ?? 0, b.sales_estimate ?? 0);
-      merged.total_review_count = Math.max(existing.total_review_count ?? 0, b.total_review_count ?? 0);
-      merged.average_bsr = existing.average_bsr ?? b.average_bsr;
-      merged.avg_sales_trend_pct = existing.avg_sales_trend_pct ?? b.avg_sales_trend_pct;
-      merged.avg_review_growth_pct = existing.avg_review_growth_pct ?? b.avg_review_growth_pct;
-      merged.avg_bsr_trend = existing.avg_bsr_trend ?? b.avg_bsr_trend;
-      brandMap.set(name, merged);
-    });
-
-    const uniqueBrands = Array.from(brandMap.values());
-
-    uniqueBrands.forEach((b: any) => {
-      const rev = Number(b.revenue_strength_score ?? 0);
-      
-      // Use backend primary_engine if available, else fallback
-      if (b.primary_engine) {
-        b.primary_driver = b.primary_engine;
-      } else {
-        const sales = Number(b.sales_velocity_score ?? 0);
-        const review = Number(b.review_velocity_score ?? 0);
-        const bsr = Number(b.bsr_momentum_score ?? 0);
-        const drvs = [
-          { key: 'Sales Velocity', val: sales },
-          { key: 'Review Velocity', val: review },
-          { key: 'BSR Momentum', val: bsr },
-          { key: 'Revenue Strength', val: rev },
-        ];
-        drvs.sort((x, y) => y.val - x.val);
-        b.primary_driver = drvs[0].key;
-        b.weakest_driver = drvs[drvs.length - 1].key;
-      }
-      
-      const momentum = Number(b.momentum_score ?? 0);
-      if (rev >= 60 && momentum >= 60) b.market_position = 'Market Leader';
-      else if (rev < 60 && momentum >= 60) b.market_position = 'Emerging Challenger';
-      else if (rev >= 60 && momentum < 60) b.market_position = 'Mature Incumbent';
-      else b.market_position = 'Weak Player';
-    });
-
-    const marketLeaders = uniqueBrands.filter((b: any) => b.market_position === 'Market Leader');
-    const emerging = uniqueBrands.filter((b: any) => b.market_position === 'Emerging Challenger');
-    const incumbents = uniqueBrands.filter((b: any) => b.market_position === 'Mature Incumbent');
-    const weak = uniqueBrands.filter((b: any) => b.market_position === 'Weak Player');
-
-    const computedOpportunities = uniqueBrands
-      .filter((b: any) => (b.momentum_score ?? 0) > 75 && (b.revenue_strength_score ?? 0) < 40)
-      .sort((a: any, b: any) => (b.momentum_score ?? 0) - (a.momentum_score ?? 0))
-      .slice(0, 5);
-
-    const comps = ['sales_velocity_score', 'review_velocity_score', 'bsr_momentum_score', 'revenue_strength_score'];
-    const compAverages: Record<string, number> = {};
-    comps.forEach((k) => {
-      compAverages[k] = uniqueBrands.length ? uniqueBrands.reduce((s: any, b: any) => s + (Number(b[k] ?? 0)), 0) / uniqueBrands.length : 0;
-    });
-    const compLabel = (k: string) => {
-      if (k === 'sales_velocity_score') return 'Sales Velocity';
-      if (k === 'review_velocity_score') return 'Review Velocity';
-      if (k === 'bsr_momentum_score') return 'BSR Momentum';
-      return 'Revenue Strength';
-    };
-    const marketDriverKey = Object.keys(compAverages).sort((a, b) => compAverages[b] - compAverages[a])[0];
-    const marketMomentumDriver = compLabel(marketDriverKey || 'sales_velocity_score');
-
-    const averageMarketMomentum = results.market_mean_score ?? (uniqueBrands.length ? uniqueBrands.reduce((s: any, b: any) => s + (b.momentum_score ?? 0), 0) / uniqueBrands.length : 0);
-    const highestMomentumBrand = uniqueBrands.sort((a: any, b: any) => (b.momentum_score ?? 0) - (a.momentum_score ?? 0))[0] || {};
-
-    const topTenBrands = uniqueBrands
-      .slice()
-      .sort((a: any, b: any) => (b.momentum_score ?? 0) - (a.momentum_score ?? 0))
-      .map((brand: any, index: number) => ({
-        ...brand,
-        rank: index + 1,
-        brand: brand.brand,
-        momentum_score: Number(brand.momentum_score ?? 0),
-        momentum_category: brand.momentum_category || '—',
-        primary_driver: brand.primary_driver || 'Revenue Strength',
-        market_position: brand.market_position || 'Weak Player',
-        revenue_strength_score: Number(brand.revenue_strength_score ?? 0),
-      }));
-
-    return {
-      uniqueBrands, marketLeaders, emerging, incumbents, weak,
-      computedOpportunities, compAverages, marketMomentumDriver,
-      averageMarketMomentum, highestMomentumBrand, topTenBrands
-    };
-  }, [results]);
+  const groupCards = useMemo(
+    () =>
+      (Object.keys(rm.metrics) as Array<keyof RevenueMomentumPayload['metrics']>).map((k) => ({
+        key: k,
+        meta: GROUP_META[k],
+        block: rm.metrics[k],
+      })),
+    [rm.metrics]
+  );
 
   if (isLoading) {
     return (
-      <div className="flex h-[80vh] items-center justify-center flex-col gap-3 theme-revenue">
+      <div className="flex h-[80vh] items-center justify-center flex-col gap-3">
         <Loader2 className="w-8 h-8 animate-spin text-primary" />
-        <p className="text-sm text-muted-foreground font-mono uppercase tracking-widest">Calculating Momentum Matrix...</p>
       </div>
     );
   }
 
   if (isError || !isEngineOk(data)) {
     return (
-      <Card className="border-danger/50 bg-danger/5 mt-10 theme-revenue">
+      <Card className="border-danger/50 bg-danger/5 mt-10">
         <CardContent className="p-8 flex flex-col items-center text-center">
           <AlertCircle className="w-12 h-12 text-danger mb-4" />
-          <h2 className="text-xl font-bold text-danger mb-2 font-mono">GROWTH VELOCITY UNAVAILABLE</h2>
-          <p className="text-danger/80 max-w-lg">
-            {getEngineErrorMessage(data, 'Requires BlackBox with revenue, sales, review, and rank data.')}
-          </p>
+          <h2 className="text-xl font-bold text-danger mb-2">Revenue Momentum Unavailable</h2>
+          <p className="text-danger/80">{getEngineErrorMessage(data, 'Requires BlackBox with Parent Level Revenue and Brand columns.')}</p>
         </CardContent>
       </Card>
     );
   }
 
-  const {
-    marketLeaders, emerging, incumbents, weak,
-    computedOpportunities, marketMomentumDriver,
-    averageMarketMomentum, highestMomentumBrand, topTenBrands
-  } = memoized;
+  const selectedGroup = selectedGroupKey ? rm.metrics[selectedGroupKey] : null;
+  const selectedGroupMeta = selectedGroupKey ? GROUP_META[selectedGroupKey] : null;
 
-  const getMomentumColor = (score: number) => {
-    if (score >= 80) return 'text-success';
-    if (score >= 60) return 'text-success/80';
-    if (score >= 40) return 'text-warning';
-    return 'text-danger';
-  };
+  const drillColumns: Column<LedgerRow>[] = [
+    { header: 'Brand', accessorKey: 'brand', cell: (r) => <span className="font-semibold">{r.brand}</span> },
+    { header: 'Parent Level Revenue', accessorKey: 'parent_revenue', cell: (r) => `$${Number(r.parent_revenue || 0).toLocaleString()}` },
+    { header: 'Revenue Share', accessorKey: 'revenue_share', cell: (r) => `${Number(r.revenue_share || 0).toFixed(2)}%` },
+    { header: 'Revenue Percentile', accessorKey: 'revenue_percentile', cell: (r) => <span className="font-mono text-muted-foreground">{Number((r as any).revenue_percentile || 0).toFixed(1)}</span> },
+    { header: 'Sales Percentile', accessorKey: 'sales_percentile', cell: (r) => <span className="font-mono text-muted-foreground">{Number((r as any).sales_percentile || 0).toFixed(1)}</span> },
+    { header: 'Momentum Score', accessorKey: 'momentum_score', cell: (r) => <ScoreBar score={Number(r.momentum_score || 0)} onClick={() => setSelectedEvidence(r.evidence || null)} /> },
+    { header: 'Primary Engine', accessorKey: 'primary_engine', cell: (r) => <Badge variant="outline">{r.primary_engine || 'N/A'}</Badge> },
+    { header: 'Classification', accessorKey: 'classification', cell: (r) => <Badge variant="outline">{r.classification}</Badge> },
+    { header: 'View Calculation / Evidence', accessorKey: 'evidence', cell: (r) => <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); setSelectedEvidence(r.evidence || null); }}>View</Button> },
+  ];
 
-  const ScoreBar = ({ score }: { score: number }) => (
-    <div className="flex items-center gap-2 w-32">
-      <span className={cn("font-mono text-xs font-bold w-8 text-right", getMomentumColor(score))}>
-        {score.toFixed(0)}
-      </span>
-      <div className="flex-1 h-1.5 bg-muted rounded-full overflow-hidden">
-        <div className={cn("h-full rounded-full transition-all duration-500", 
-          score >= 60 ? 'bg-success' : score >= 40 ? 'bg-warning' : 'bg-danger'
-        )} style={{ width: `${Math.min(100, Math.max(0, score))}%` }} />
-      </div>
-    </div>
-  );
-
-  const topBrandColumns: ColumnDef<any>[] = [
-    { header: '#', cell: (r) => <span className="font-mono text-muted-foreground">{r.rank}</span> },
-    { header: 'Ticker / Brand', cell: (r) => <span className="font-bold text-foreground uppercase tracking-wide">{r.brand}</span> },
-    { header: 'Momentum', cell: (r) => <ScoreBar score={r.momentum_score} /> },
-    { header: 'Rev Strength', cell: (r) => <ScoreBar score={r.revenue_strength_score} /> },
-    {
-      header: 'Primary Engine',
-      cell: (r) => {
-        const drv = r.primary_driver;
-        const icon = drv === 'Sales Velocity' ? <Activity className="w-3 h-3 text-primary" /> 
-                   : drv === 'Review Velocity' ? <Target className="w-3 h-3 text-warning" />
-                   : drv === 'BSR Momentum' ? <TrendingUp className="w-3 h-3 text-success" />
-                   : <BarChart2 className="w-3 h-3 text-blue-500" />;
-        const drivers = r.drivers || {};
-        const audit = payload?.audit_flags || {};
-
-        const m_sales = drivers.sales_velocity ?? r.sales_velocity_score ?? 0;
-        const m_review = drivers.review_velocity ?? r.review_velocity_score ?? 0;
-        const m_bsr = drivers.bsr_momentum ?? r.bsr_momentum_score ?? 0;
-        const m_rev = drivers.revenue_strength ?? r.revenue_strength_score ?? 0;
-        const momentumScore = ((0.4 * m_sales) + (0.3 * m_review) + (0.2 * m_bsr) + (0.1 * m_rev)).toFixed(1);
-
-        const formatPercent = (v: any) => v != null ? `${Number(v).toFixed(1)}%` : 'N/A';
-        const formatNumber = (v: any) => v != null ? Number(v).toLocaleString() : 'N/A';
-        const formatMoney = (v: any) => v != null ? `$${Number(v).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}` : 'N/A';
-
-        const missingMetrics = [];
-        if (audit.sales_trend_available === false) missingMetrics.push('Sales Trend');
-        if (audit.sales_yoy_available === false) missingMetrics.push('Sales YoY');
-        if (audit.review_growth_available === false) missingMetrics.push('Review Growth');
-        if (audit.bsr_trend_available === false) missingMetrics.push('BSR Trend');
-        
-        const isAuditValid = Math.abs(Number(momentumScore) - Number(r.momentum_score)) < 0.2;
-
-        return (
-          <div className="relative group flex items-center gap-1.5 border border-border/50 bg-muted/20 px-2 py-0.5 rounded text-xs font-medium w-max cursor-help">
-            {icon} {drv}
-            
-            <div className="hidden group-hover:block absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-96 bg-background/95 backdrop-blur-md border border-border/50 shadow-xl rounded-lg p-4 z-[999] text-left cursor-default">
-              <p className="font-bold text-sm mb-1 text-foreground">Primary Engine: <span className="text-primary">{drv}</span></p>
-              
-              <div className="space-y-4 mt-3">
-                {!isAuditValid && (
-                  <div className="bg-danger/10 border border-danger/20 p-2 rounded flex gap-2 items-start text-[10px]">
-                    <AlertTriangle className="w-3 h-3 text-danger shrink-0 mt-0.5" />
-                    <p className="text-danger">
-                      <strong>Audit Error:</strong> Computed Momentum ({momentumScore}) does not match Displayed Momentum ({Number(r.momentum_score).toFixed(1)}).
-                    </p>
-                  </div>
-                )}
-                
-                {missingMetrics.length > 0 && (
-                  <div className="bg-warning/10 border border-warning/20 p-2 rounded flex gap-2 items-start text-[10px]">
-                    <AlertTriangle className="w-3 h-3 text-warning shrink-0 mt-0.5" />
-                    <p className="text-warning">
-                      <strong>Data Audit:</strong> Historical metrics ({missingMetrics.join(', ')}) are missing from the snapshot and marked as <em>Not Available</em>.
-                    </p>
-                  </div>
-                )}
-                
-                <div className="grid grid-cols-2 gap-x-4 gap-y-2">
-                  <div>
-                    <p className="text-[10px] uppercase font-mono tracking-wider text-muted-foreground mb-1 border-b border-border/50 pb-0.5">Raw Inputs</p>
-                    <ul className="text-xs space-y-1">
-                      <li className="flex justify-between"><span>Revenue:</span> <span className="font-mono">{formatMoney(r.total_revenue)}</span></li>
-                      <li className="flex justify-between"><span>Rev Share:</span> <span className="font-mono">{formatPercent(r.revenue_share)}</span></li>
-                      <li className="flex justify-between"><span>Sales Est:</span> <span className="font-mono">{formatNumber(r.sales_estimate)}</span></li>
-                      <li className="flex justify-between"><span>Reviews:</span> <span className="font-mono">{formatNumber(r.total_review_count)}</span></li>
-                      <li className="flex justify-between text-muted-foreground"><span>Sales Trend:</span> <span className="font-mono">{audit.sales_trend_available !== false ? formatPercent(r.avg_sales_trend_pct) : 'N/A'}</span></li>
-                      <li className="flex justify-between text-muted-foreground"><span>Rev Growth:</span> <span className="font-mono">{audit.review_growth_available !== false ? formatPercent(r.avg_review_growth_pct) : 'N/A'}</span></li>
-                      <li className="flex justify-between text-muted-foreground"><span>BSR Change:</span> <span className="font-mono">{audit.bsr_trend_available !== false ? formatPercent(r.avg_bsr_trend) : 'N/A'}</span></li>
-                      <li className="flex justify-between text-muted-foreground"><span>Avg BSR:</span> <span className="font-mono">{formatNumber(r.average_bsr)}</span></li>
-                    </ul>
-                  </div>
-                  <div>
-                    <p className="text-[10px] uppercase font-mono tracking-wider text-muted-foreground mb-1 border-b border-border/50 pb-0.5">Normalized Scores</p>
-                    <ul className="text-xs space-y-1">
-                      <li className="flex justify-between"><span>Sales Vel:</span> <span className="font-mono">{Number(m_sales).toFixed(1)}</span></li>
-                      <li className="flex justify-between"><span>Review Vel:</span> <span className="font-mono">{Number(m_review).toFixed(1)}</span></li>
-                      <li className="flex justify-between"><span>BSR Mom:</span> <span className="font-mono">{Number(m_bsr).toFixed(1)}</span></li>
-                      <li className="flex justify-between"><span>Rev Str:</span> <span className="font-mono">{Number(m_rev).toFixed(1)}</span></li>
-                    </ul>
-                  </div>
-                </div>
-
-                <div>
-                  <p className="text-[10px] uppercase font-mono tracking-wider text-muted-foreground mb-1 border-b border-border/50 pb-0.5">Final Calculation</p>
-                  <div className="text-[10px] bg-muted/30 p-2 rounded border border-border/30 font-mono text-muted-foreground leading-relaxed">
-                    <p>Momentum Score =</p>
-                    <p className="pl-2">(0.40 × {Number(m_sales).toFixed(1)})</p>
-                    <p className="pl-2">+ (0.30 × {Number(m_review).toFixed(1)})</p>
-                    <p className="pl-2">+ (0.20 × {Number(m_bsr).toFixed(1)})</p>
-                    <p className="pl-2">+ (0.10 × {Number(m_rev).toFixed(1)})</p>
-                    <p className="border-t border-border/50 mt-1 pt-1 font-bold text-foreground">= {momentumScore}</p>
-                  </div>
-                </div>
-              </div>
-              
-              <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-border/50" />
-            </div>
-          </div>
-        );
-      },
-    },
-    {
-      header: 'Classification',
-      cell: (r) => {
-        const pos = r.market_position;
-        const variant = pos === 'Market Leader' ? 'default' : pos === 'Emerging Challenger' ? 'warning' : pos === 'Mature Incumbent' ? 'outline' : 'danger';
-        return <Badge variant={variant} className="uppercase text-[10px] tracking-wider font-mono">{pos}</Badge>;
-      },
-    },
+  const ledgerColumns: Column<LedgerRow>[] = [
+    { header: '#', accessorKey: 'row_number', cell: (r) => <span className="font-mono text-muted-foreground">{r.row_number ?? '-'}</span> },
+    { header: 'Ticker / Brand', accessorKey: 'brand', cell: (r) => <span className="font-bold text-foreground uppercase tracking-wide">{r.brand}</span> },
+    { header: 'Momentum', accessorKey: 'momentum_score', cell: (r) => <ScoreBar score={Number(r.momentum_score || 0)} onClick={(e) => { e?.stopPropagation(); setSelectedEvidence(r.evidence || null); }} /> },
+    { header: 'Primary Engine', accessorKey: 'primary_engine', cell: (r) => <Badge variant="outline">{r.primary_engine || 'N/A'}</Badge> },
+    { header: 'Classification', accessorKey: 'classification', cell: (r) => <Badge variant="outline">{r.classification}</Badge> },
+    { header: 'Calculation / Evidence', accessorKey: 'evidence', cell: (r) => <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); setSelectedEvidence(r.evidence || null); }}>View</Button> },
   ];
 
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-8 pb-10 theme-revenue">
-      
-      {/* Header — Terminal Style */}
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 border-b border-border/50 pb-6">
-        <div>
-          <Badge className="bg-primary/10 text-primary hover:bg-primary/20 mb-3 border border-primary/20 font-mono tracking-widest uppercase">
-            ● Live Momentum Feed
-          </Badge>
-          <h1 className="text-4xl font-bold tracking-tight text-foreground">Revenue Momentum</h1>
-          <p className="text-muted-foreground mt-2 max-w-2xl text-lg">
-            Track growth velocity, emerging threats, and shifting market dominance.
-          </p>
-        </div>
-        <div className="text-right flex items-end gap-6">
-          <div>
-            <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1 font-mono">Market Avg Index</p>
-            <p className={cn("text-3xl font-black font-mono flex items-center justify-end gap-2", averageMarketMomentum >= 50 ? 'text-success' : 'text-danger')}>
-              {averageMarketMomentum >= 50 ? <TrendingUp className="w-6 h-6" /> : <TrendingDown className="w-6 h-6" />}
-              {averageMarketMomentum.toFixed(1)}
-            </p>
-          </div>
-        </div>
+      <div className="flex flex-col gap-3 border-b border-border/50 pb-6">
+        <Badge className="bg-primary/10 text-primary border-primary/20 w-fit font-mono text-[10px] tracking-widest uppercase rounded-sm px-2.5 py-1">
+          Live Momentum Feed
+        </Badge>
+        <h1 className="text-4xl font-bold tracking-tight text-foreground">Revenue Momentum</h1>
+        <p className="text-muted-foreground text-base max-w-2xl">Track growth velocity, emerging threats, and shifting market dominance.</p>
       </div>
 
-      {/* Tier 1: Terminal Matrix (4 Major Blocks) */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <TerminalBlock 
-          title="Growth Leader" 
-          value={highestMomentumBrand.brand || 'N/A'} 
-          metric={highestMomentumBrand.momentum_score?.toFixed(1) || '0.0'}
-          sub="Highest velocity score"
-          icon={<Rocket className="w-5 h-5 text-success" />}
-          trend="up"
-        />
-        <TerminalBlock 
-          title="Market Engine" 
-          value={marketMomentumDriver} 
-          metric=""
-          sub="Primary driver across category"
-          icon={<Zap className="w-5 h-5 text-warning" />}
-          trend="neutral"
-        />
-        <TerminalBlock 
-          title="Challengers" 
-          value={emerging.length.toString()} 
-          metric="Brands"
-          sub="High momentum, low revenue"
-          icon={<Target className="w-5 h-5 text-primary" />}
-          trend="up"
-        />
-        <TerminalBlock 
-          title="At Risk" 
-          value={incumbents.length.toString()} 
-          metric="Incumbents"
-          sub="High revenue, weak momentum"
-          icon={<ShieldAlert className="w-5 h-5 text-danger" />}
-          trend="down"
-        />
-      </div>
-
-      {/* Tier 2: Momentum Matrix Quadrants */}
-      <section className="pt-4">
+      <section className="pt-1">
         <div className="flex items-center gap-2 mb-4">
           <Activity className="w-5 h-5 text-primary" />
           <h2 className="text-xl font-bold tracking-tight">Market Momentum Matrix</h2>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <QuadrantCard 
-            title="Market Leaders" 
-            count={marketLeaders.length}
-            desc="High Revenue • High Momentum"
-            brands={marketLeaders.slice(0, 3)}
-            colorClass="bg-success/5 border-success/20 text-success"
-          />
-          <QuadrantCard 
-            title="Emerging Challengers" 
-            count={emerging.length}
-            desc="Low Revenue • High Momentum"
-            brands={emerging.slice(0, 3)}
-            colorClass="bg-primary/5 border-primary/20 text-primary"
-            highlight
-          />
-          <QuadrantCard 
-            title="Mature Incumbents" 
-            count={incumbents.length}
-            desc="High Revenue • Low Momentum"
-            brands={incumbents.slice(0, 3)}
-            colorClass="bg-warning/5 border-warning/20 text-warning"
-          />
-          <QuadrantCard 
-            title="Weak Players" 
-            count={weak.length}
-            desc="Low Revenue • Low Momentum"
-            brands={weak.slice(0, 3)}
-            colorClass="bg-muted/30 border-border text-muted-foreground"
-          />
-        </div>
-      </section>
-
-      {/* Tier 3: Breakout Alerts */}
-      {computedOpportunities.length > 0 && (
-        <Card className="border-primary/30 bg-primary/5 relative overflow-hidden">
-          <div className="absolute top-0 right-0 p-6 opacity-10"><Zap className="w-24 h-24 text-primary" /></div>
-          <CardContent className="p-6 relative z-10">
-            <div className="flex items-center gap-2 mb-4">
-              <span className="relative flex h-3 w-3">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-3 w-3 bg-primary"></span>
-              </span>
-              <h3 className="text-sm font-bold uppercase tracking-widest text-primary font-mono">Breakout Alerts</h3>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
-              {computedOpportunities.map((b: any, i: number) => (
-                <div key={i} className="bg-background/80 backdrop-blur border border-border/50 rounded-lg p-4">
-                  <p className="font-bold text-foreground uppercase truncate mb-1" title={b.brand}>{b.brand}</p>
-                  <div className="flex justify-between items-end">
-                    <div>
-                      <p className="text-[10px] uppercase text-muted-foreground font-mono">Momentum</p>
-                      <p className="font-mono font-bold text-success">{b.momentum_score?.toFixed(1)}</p>
-                    </div>
-                    <TrendingUp className="w-4 h-4 text-success opacity-50" />
-                  </div>
+          {groupCards.map((g) => (
+            <button
+              key={g.key}
+              type="button"
+              className={`border rounded-xl p-5 flex flex-col h-full transition-all text-left ${g.meta.cardClass}`}
+              onClick={() => setSelectedGroupKey(g.key)}
+            >
+              <div className="flex justify-between items-start mb-4">
+                <div>
+                  <h3 className="font-bold text-lg">{g.meta.title}</h3>
+                  <p className="text-xs opacity-80 uppercase tracking-wider font-mono mt-0.5">{g.meta.ruleLabel}</p>
                 </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
+                <div className="text-3xl font-black font-mono">{g.block.count}</div>
+              </div>
+              <div className="mt-auto pt-4 border-t border-current/10">
+                <p className="text-[10px] uppercase tracking-widest opacity-70 mb-2 font-mono">Top Brands</p>
+                <div className="flex flex-wrap gap-2">
+                  {(g.block.preview_brands || []).slice(0, 3).map((b) => (
+                    <span key={b} className="text-xs font-semibold bg-background/50 backdrop-blur px-2 py-1 rounded-md border border-current/20 truncate max-w-[120px]">
+                      {b}
+                    </span>
+                  ))}
+                  {(g.block.preview_brands || []).length === 0 && <span className="text-xs opacity-50 italic">None</span>}
+                </div>
+              </div>
+            </button>
+          ))}
+        </div>
+      </section>
 
-      {/* Tier 4: Terminal Data Table */}
-      <section className="pt-4">
+      <section className="pt-1">
         <Card className="border-border/50 bg-card/50 glass">
-          <CardHeader>
-            <CardTitle className="font-mono uppercase tracking-widest text-sm text-muted-foreground">Momentum Ledger</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <DataTable columns={topBrandColumns} data={topTenBrands} pageSize={15} />
+          <CardContent className="pt-6">
+            <div className="mb-4">
+              <h3 className="text-sm font-bold uppercase tracking-widest text-muted-foreground font-mono">Momentum Ledger</h3>
+            </div>
+            <DataTable
+              columns={ledgerColumns}
+              data={rm.momentum_ledger}
+              pageSize={15}
+              rowKey={(row, i) => `${row.brand}-${row.row_number ?? i}`}
+              onRowClick={(row) => setSelectedEvidence(row.evidence || null)}
+            />
           </CardContent>
         </Card>
       </section>
 
-    </motion.div>
-  );
-}
+      <Drawer
+        isOpen={Boolean(selectedGroupKey && selectedGroupMeta && selectedGroup)}
+        onClose={() => setSelectedGroupKey(null)}
+        title={selectedGroupMeta ? `${selectedGroupMeta.title} (${selectedGroup?.count || 0})` : 'Momentum Group'}
+      >
+        {selectedGroup && selectedGroupMeta && (
+          <div className="space-y-5">
+            <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-2">
+              <p className="text-xs uppercase tracking-wider text-muted-foreground">{selectedGroupMeta.ruleLabel}</p>
+              <p className="text-sm">
+                {selectedGroup.tinyllama_strategy
+                  ? selectedGroup.tinyllama_strategy
+                  : `${selectedGroup.tinyllama_status || 'TinyLlama unavailable, showing rule-based insight.'} ${selectedGroup.rule_based_strategy || ''}`}
+              </p>
+              <div className="flex gap-2">
+                <Button size="sm" variant="outline" onClick={() => setSelectedEvidence(selectedGroup.evidence || null)}>
+                  View Group Evidence
+                </Button>
+              </div>
+            </div>
 
-// ---------------------------------------------------------------------------
-// Subcomponents
-// ---------------------------------------------------------------------------
-
-function TerminalBlock({ title, value, metric, sub, icon, trend }: { title: string, value: string, metric: string, sub: string, icon: React.ReactNode, trend: 'up' | 'down' | 'neutral' }) {
-  const trendColor = trend === 'up' ? 'border-t-success' : trend === 'down' ? 'border-t-danger' : 'border-t-primary';
-  
-  return (
-    <Card className={cn("border-t-4 bg-card/40 glass-card rounded-xl", trendColor)}>
-      <CardContent className="p-5 flex flex-col h-full">
-        <div className="flex justify-between items-start mb-4">
-          <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground font-mono">{title}</p>
-          <div className="p-1.5 bg-background rounded-md border border-border/50">{icon}</div>
-        </div>
-        <div className="mt-auto">
-          <div className="flex items-baseline gap-2 mb-1">
-            <h3 className="text-2xl font-black uppercase tracking-tight truncate" title={value}>{value}</h3>
-            {metric && <span className="text-sm font-mono text-muted-foreground font-semibold">{metric}</span>}
+            <DataTable
+              columns={drillColumns}
+              data={selectedGroup.items}
+              pageSize={20}
+              rowKey={(row, i) => `${row.brand}-${row.row_number ?? i}`}
+              onRowClick={(row) => setSelectedEvidence(row.evidence || null)}
+            />
           </div>
-          <p className="text-xs text-muted-foreground leading-tight">{sub}</p>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
+        )}
+      </Drawer>
 
-function QuadrantCard({ title, count, desc, brands, colorClass, highlight = false }: { title: string, count: number, desc: string, brands: any[], colorClass: string, highlight?: boolean }) {
-  return (
-    <div className={cn("border rounded-xl p-5 flex flex-col h-full transition-all", colorClass, highlight ? 'ring-1 ring-primary/30 shadow-lg shadow-primary/5 scale-[1.02]' : '')}>
-      <div className="flex justify-between items-start mb-4">
-        <div>
-          <h3 className="font-bold text-lg">{title}</h3>
-          <p className="text-xs opacity-80 uppercase tracking-wider font-mono mt-0.5">{desc}</p>
-        </div>
-        <div className="text-3xl font-black font-mono">{count}</div>
-      </div>
-      <div className="mt-auto pt-4 border-t border-current/10">
-        <p className="text-[10px] uppercase tracking-widest opacity-70 mb-2 font-mono">Top Brands</p>
-        <div className="flex flex-wrap gap-2">
-          {brands.length > 0 ? brands.map((b, i) => (
-            <span key={i} className="text-xs font-semibold bg-background/50 backdrop-blur px-2 py-1 rounded-md border border-current/20 truncate max-w-[120px]">
-              {b.brand}
-            </span>
-          )) : (
-            <span className="text-xs opacity-50 italic">None</span>
-          )}
-        </div>
-      </div>
-    </div>
+      <EvidenceDrawer evidence={selectedEvidence} onClose={() => setSelectedEvidence(null)} />
+    </motion.div>
   );
 }

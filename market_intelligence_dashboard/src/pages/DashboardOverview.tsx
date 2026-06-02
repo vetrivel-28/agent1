@@ -3,12 +3,11 @@ import { api } from '../services/api';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
-import { formatNumber, cn } from '../utils/cn';
+import { formatNumber } from '../utils/cn';
 import { Link } from 'react-router-dom';
 import {
   Zap, Database, ArrowRight, Target, AlertTriangle, Lightbulb, 
-  ShieldAlert, Info, Key, Package, DollarSign, Users, Layers,
-  CheckCircle2, XCircle, TrendingUp, Compass, BarChart3
+  Info, Key, Package, DollarSign, Users, TrendingUp, BarChart3
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { isEngineOk, getEngineErrorMessage } from '../utils/analysisStatus';
@@ -175,8 +174,6 @@ export default function DashboardOverview() {
   const insights = results.key_insights || [];
   const opportunities = results.opportunity_summary || [];
   const risks = results.market_risks || [];
-  const entryStrategy = results.entry_strategy || {};
-  const assessment = results.market_entry_assessment || {};
   const priceCluster = results.primary_price_cluster || {};
   const audit = results.data_audit || {};
 
@@ -192,7 +189,7 @@ export default function DashboardOverview() {
           Market Intelligence Overview
         </h1>
         <p className="text-muted-foreground text-base max-w-2xl">
-          Five questions answered with dataset evidence. No placeholders. No arbitrary labels.
+          Four questions answered with dataset evidence. No placeholders. No arbitrary labels.
         </p>
       </motion.div>
 
@@ -245,6 +242,7 @@ export default function DashboardOverview() {
               <p className="text-2xl font-black text-foreground truncate">{snapshot.market_leader || 'N/A'}</p>
               <p className="text-xs text-foreground/70">
                 {snapshot.market_leader_share && `Controls ${snapshot.market_leader_share} of market`}
+                {snapshot.market_leader_revenue && snapshot.market_leader_revenue !== 'N/A' && ` • Revenue ${snapshot.market_leader_revenue}`}
               </p>
             </CardContent>
           </Card>
@@ -368,126 +366,6 @@ export default function DashboardOverview() {
             </Card>
           )}
         </div>
-      </motion.section>
-
-      {/* ====================================================================
-          7. ENTRY STRATEGY RECOMMENDATION (What should a new entrant do?)
-          ==================================================================== */}
-      <motion.section variants={fadeUp} className="space-y-4">
-        <div className="flex items-center gap-2">
-          <Compass className="w-4 h-4 text-indigo-500" />
-          <h2 className="text-sm font-bold uppercase tracking-widest text-muted-foreground">
-            Question 5: Entry Strategy
-          </h2>
-        </div>
-        <Card className="border-indigo-500/20 bg-indigo-500/5 md:p-8 p-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-            <div>
-              <h3 className="text-[10px] font-bold uppercase tracking-widest text-indigo-600 mb-3">Target Segment</h3>
-              <p className="text-lg font-bold text-foreground mb-4">{entryStrategy.target_segment || 'Market Leader Segment'}</p>
-
-              <h3 className="text-[10px] font-bold uppercase tracking-widest text-indigo-600 mb-3 mt-6">Target Price</h3>
-              <p className="text-lg font-bold text-foreground mb-4">{entryStrategy.target_price_band || 'Median Market Price'}</p>
-
-              <h3 className="text-[10px] font-bold uppercase tracking-widest text-indigo-600 mb-3 mt-6">Competition</h3>
-              <Badge className={cn(
-                "text-[10px] font-bold",
-                entryStrategy.competition_level === 'High' ? 'bg-rose-500/20 text-rose-700 border-rose-500/30' :
-                entryStrategy.competition_level === 'Moderate' ? 'bg-amber-500/20 text-amber-700 border-amber-500/30' :
-                'bg-emerald-500/20 text-emerald-700 border-emerald-500/30'
-              )}>
-                {entryStrategy.competition_level || 'Unknown'}
-              </Badge>
-            </div>
-
-            <div>
-              <h3 className="text-[10px] font-bold uppercase tracking-widest text-indigo-600 mb-3">Target Keywords</h3>
-              <div className="space-y-2 mb-6">
-                {entryStrategy.target_keywords && entryStrategy.target_keywords.length > 0 ? (
-                  entryStrategy.target_keywords.map((kw: string, idx: number) => (
-                    <Badge key={idx} variant="outline" className="block w-full text-left">
-                      {kw}
-                    </Badge>
-                  ))
-                ) : (
-                  <p className="text-sm text-muted-foreground">No keywords available.</p>
-                )}
-              </div>
-
-              <h3 className="text-[10px] font-bold uppercase tracking-widest text-indigo-600 mb-3">Recommendation</h3>
-              <p className="text-sm text-foreground/80 leading-relaxed">
-                {entryStrategy.recommended_action || 'Insufficient data for entry recommendation.'}
-              </p>
-            </div>
-          </div>
-        </Card>
-      </motion.section>
-
-      {/* ====================================================================
-          8. MARKET ENTRY ASSESSMENT (Final Go/No-Go)
-          ==================================================================== */}
-      <motion.section variants={fadeUp} className="space-y-4">
-        <div className="flex items-center gap-2">
-          <ShieldAlert className="w-4 h-4 text-emerald-600" />
-          <h2 className="text-sm font-bold uppercase tracking-widest text-muted-foreground">
-            Question 6: Final Market Assessment
-          </h2>
-        </div>
-        <Card className={cn(
-          "border",
-          assessment.attractiveness === 'High' ? "border-emerald-500/30 bg-emerald-500/5" :
-          assessment.attractiveness === 'Moderate' ? "border-amber-500/30 bg-amber-500/5" :
-          "border-rose-500/30 bg-rose-500/5"
-        )}>
-          <CardContent className="p-8">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-              
-              {/* Verdict Label */}
-              <div className="flex flex-col items-start justify-center space-y-4 md:border-r border-border/30 md:pr-8">
-                <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Attractiveness</p>
-                <Badge className={cn(
-                  "px-4 py-2 text-xl font-black tracking-tight",
-                  assessment.attractiveness === 'High' ? 'bg-emerald-500 text-white' :
-                  assessment.attractiveness === 'Moderate' ? 'bg-amber-500 text-white' :
-                  'bg-rose-500 text-white'
-                )}>
-                  {assessment.attractiveness}
-                </Badge>
-              </div>
-              
-              {/* Pros/Cons */}
-              <div className="col-span-2 grid grid-cols-1 sm:grid-cols-2 gap-6">
-                <div>
-                  <h3 className="text-[10px] font-bold uppercase tracking-widest text-emerald-600 mb-3 flex items-center gap-1"><CheckCircle2 className="w-3 h-3"/> Key Advantages</h3>
-                  <ul className="space-y-2">
-                    {assessment.key_advantages?.map((adv: string, idx: number) => (
-                      <li key={idx} className="text-sm text-foreground/80 flex items-start gap-2">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 mt-1.5 shrink-0"/> {adv}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-                <div>
-                  <h3 className="text-[10px] font-bold uppercase tracking-widest text-rose-600 mb-3 flex items-center gap-1"><XCircle className="w-3 h-3"/> Key Risks</h3>
-                  <ul className="space-y-2">
-                    {assessment.key_risks?.map((risk: string, idx: number) => (
-                      <li key={idx} className="text-sm text-foreground/80 flex items-start gap-2">
-                        <span className="w-1.5 h-1.5 rounded-full bg-rose-500 mt-1.5 shrink-0"/> {risk}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-                
-                {/* Recommended Approach */}
-                <div className="sm:col-span-2 pt-4 border-t border-border/30 mt-2">
-                  <h3 className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-2">Recommended Approach</h3>
-                  <p className="text-sm font-semibold text-foreground/90 leading-relaxed">{assessment.recommended_approach}</p>
-                </div>
-              </div>
-              
-            </div>
-          </CardContent>
-        </Card>
       </motion.section>
 
       {/* DATA AUDIT FOOTER */}
