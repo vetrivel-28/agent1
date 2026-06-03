@@ -492,7 +492,7 @@ def build_report(
     if top_kw:
         verdict_lines.append(f"Demand is heavily concentrated in '{top_kw}'.")
 
-    best_price = _get(price_elasticity_result, "results", "kpis", "best_selling_price_band")
+    best_price = _get(price_elasticity_result, "results", "market_sweet_spot", "range_label")
     if best_price:
         verdict_lines.append(f"Primary revenue cluster exists at {best_price}.")
 
@@ -647,7 +647,7 @@ def build_report(
     top_cluster = _get(direct_comp_result, "results", "market_clusters", 0, "subcategory") or _get(direct_comp_result, "results", "market_clusters", 0, "category") or "N/A"
     
     # Get median price for market snapshot
-    median_price = _get(price_elasticity_result, "results", "kpis", "median_price") or 0.0
+    median_price = 0.0
     
     # Ensure fallback from revenue momentum if direct computation unavailable
     if (not market_leader or market_leader == "N/A") and top_rev_brand and top_rev_brand != "N/A":
@@ -694,7 +694,8 @@ def build_report(
     
     # Insight 3: Price Band Concentration
     if best_price:
-        revenue_band_share = _get(price_elasticity_result, "results", "kpis", "best_selling_price_band_revenue_share") or 0.0
+        sweet_spot_value = _get(price_elasticity_result, "results", "market_sweet_spot", "value") or 0.0
+        revenue_band_share = (sweet_spot_value / total_market_revenue * 100) if total_market_revenue > 0 else 0.0
         if revenue_band_share > 0:
             key_insights.append(f"Revenue is concentrated in the {best_price} price band ({revenue_band_share:.1f}% share)—dominant pricing strategy.")
         else:
@@ -892,7 +893,7 @@ def build_report(
             "complement_intelligence": complement_result.get("results", {}) if complement_result else {},
             "bundle_opportunities": bundle_result.get("results", {}) if bundle_result else {},
         },
-        "price_elasticity": price_elasticity_result.get("results", {}) if price_elasticity_result else {},
+        "pricing_intelligence": price_elasticity_result if price_elasticity_result else {},
         "demand_velocity": demand_vel_result.get("results", {}) if demand_vel_result else {},
         "demand_analysis": {
             "top_demand_keywords": top_demand_keywords[:top_n],

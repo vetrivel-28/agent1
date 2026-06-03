@@ -292,6 +292,7 @@ def demand_strength(top_n: int = 10):
 
     magnet_df = registry.get_magnet()
     blackbox_df = registry.get_blackbox()
+    kc_df = registry.get_keyword_classification()
 
     if is_empty_dataframe(magnet_df) and is_empty_dataframe(blackbox_df):
         return _datasets_not_loaded("Demand Strength", "magnet and/or blackbox")
@@ -299,7 +300,7 @@ def demand_strength(top_n: int = 10):
     cached = analysis_cache.get_engine("demand")
     if cached:
         return format_response(cached)
-    result = demand_engine.run(magnet_df, blackbox_df, top_n=top_n)
+    result = demand_engine.run(magnet_df, blackbox_df, top_n=top_n, keyword_classification_df=kc_df)
     logger.info(
         f"Demand Strength complete — status={result['status']}, "
         f"score={result.get('results', {}).get('overall_demand_score', 'n/a')}"

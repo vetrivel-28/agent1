@@ -2,13 +2,13 @@ import re
 from typing import List
 
 CATEGORY_RULES = {
-    "Bags": ["bag", "bags"],
-    "Totes": ["tote", "totes"],
-    "Purses": ["purse", "purses"],
-    "Gifts": ["gift", "gifts"],
-    "Backpacks": ["backpack", "backpacks"],
-    "Handbags": ["handbag", "handbags"],
-    "Crossbody": ["crossbody"]
+    "Bags": ["bags", "bag"],
+    "Totes": ["totes", "tote"],
+    "Purses": ["purses", "purse"],
+    "Backpacks": ["backpacks", "backpack"],
+    "Handbags": ["handbags", "handbag"],
+    "Crossbody": ["crossbody"],
+    "Gifts": ["gifts", "gift", "birthday", "mother", "easter", "christmas", "holiday", "valentine"]
 }
 
 def get_matching_categories(keyword: str) -> List[str]:

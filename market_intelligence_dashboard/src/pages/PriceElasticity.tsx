@@ -6,80 +6,154 @@ import { DataTable, type Column } from '../components/tables/DataTable';
 import { Badge } from '../components/ui/Badge';
 import { formatCurrency, formatNumber, cn } from '../utils/cn';
 import { getEngineErrorMessage } from '../utils/analysisStatus';
-import { Drawer } from '../components/ui/Drawer';
+import { Modal } from '../components/ui/Modal';
 import {
-  AlertCircle, Loader2, DollarSign, Target, BarChart3, TrendingUp,
-  Layers, Crown, Zap, AlertTriangle, Scale, Activity, Maximize, Target as TargetIcon, Info, Star, Package, Tag, Hash, Trophy
+  AlertCircle, Loader2, Target, Layers, Crown, Activity, Maximize, Target as TargetIcon, Info, Package, Database, Code, ChevronRight, Scale
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  CartesianGrid, ScatterChart, Scatter, Cell, ReferenceLine, ZAxis
+  CartesianGrid, ScatterChart, Scatter, Cell, Legend
 } from 'recharts';
 import { motion } from 'framer-motion';
 
-// Types
-type TopProduct = {
-  title: string;
-  asin: string;
-  brand: string;
-  revenue: number;
+// --- Types ---
+type Evidence = {
+  source_dataset: string;
+  source_columns: string[];
+  formula: string;
+  source_values: string;
+  rows_included: number;
+  rows_excluded: number;
+  calculation_steps: string[];
+  final_value: string | number;
+  interpretation: string;
 };
 
-type PriceBand = {
-  price_band: string;
-  price_range: string;
+type PriceRange = {
+  range_label: string;
+  min_price: number;
+  max_price: number;
+  tier: string;
+  color_key: string;
   product_count: number;
-  revenue: number;
-  revenue_share_pct: number;
-  review_share_pct: number;
-  market_share_pct: number;
-  avg_reviews: number;
-  avg_rating: number;
-  revenue_per_listing: number;
-  opportunity_score: number;
-  quadrant: string;
-  is_valid_sample: boolean;
-  is_white_space: boolean;
-  top_product: TopProduct;
-  top_brand: string;
+  parent_revenue: number;
+  parent_sales: number;
+  products: any[];
+  revenue_share?: number;
+  evidence: Evidence;
 };
 
-type MarketStructure = {
-  floor: number;
-  ceiling: number;
-  spread_str: string;
-  spread_val: number;
-  median: number;
-  average: number;
-  p25: number;
-  p75: number;
+type MarketPriceStructure = {
+  price_floor: number;
+  price_ceiling: number;
+  price_spread: number;
+  evidence: Evidence;
 };
 
-type PremiumViability = {
-  revenue_share_pct: number;
-  product_share_pct: number;
-  revenue_efficiency: number;
+type MarketSweetSpot = {
+  range_label: string;
+  tier: string;
+  parent_revenue: number;
+  parent_sales: number;
+  product_count: number;
+  insight: string;
+  formula: string;
+  evidence: Evidence;
 };
 
-type RecommendedEntry = {
-  price_band: string | null;
-  price_range?: string;
-  confidence_score: string;
-  reasoning: string;
+type EntryPriceRecommendation = {
+  recommended_range: string;
+  tier: string;
+  strategy: string;
+  llm_strategy: string | null;
+  rule_based_strategy: string;
+  evidence: Evidence;
 };
 
 type PositioningData = {
   title: string;
-  asin: string;
   brand: string;
-  bsr: number;
+  asin: string;
   price: number;
-  revenue: number;
-  reviews: number;
-  rating: number;
-  price_band: string;
-  market_share_pct: number;
+  parent_revenue: number;
+  parent_sales: number;
+  tier: string;
+  color_key: string;
+  evidence: Evidence;
 };
+
+type TopOpportunity = {
+  price_range: string;
+  tier: string;
+  color_key: string;
+  parent_revenue: number;
+  parent_sales: number;
+  product_count: number;
+  competition_density: number;
+  opportunity_score: number;
+  evidence: Evidence;
+};
+
+type BrandBreakdown = {
+  brand: string;
+  parent_revenue: number;
+  parent_sales: number;
+  product_count: number;
+  brand_share: number;
+  top_products: any[];
+};
+
+type BrandPosition = {
+  price_range: string;
+  tier: string;
+  color_key: string;
+  total_parent_revenue: number;
+  total_parent_sales: number;
+  product_count: number;
+  brand_count: number;
+  leading_brand: string;
+  leading_brand_revenue: number;
+  leading_brand_share: number;
+  concentration_note: string;
+  brand_breakdown: BrandBreakdown[];
+  evidence: Evidence;
+};
+
+type CrossTierCompetitor = {
+  brand: string;
+  price_ranges_present: number;
+  total_parent_revenue: number;
+  total_parent_sales: number;
+  strongest_price_range: string;
+  strategic_note: string;
+  evidence: Evidence;
+};
+
+type PricingIntelligenceData = {
+  price_tiers: PriceRange[];
+  color_map: Record<string, string>;
+  market_price_structure: MarketPriceStructure;
+  market_sweet_spot: MarketSweetSpot;
+  entry_price_recommendation: EntryPriceRecommendation;
+  product_positioning_map: PositioningData[];
+  revenue_distribution: any[];
+  competition_density: any[];
+  top_pricing_opportunities: TopOpportunity[];
+  brand_position_by_price_range: BrandPosition[];
+  cross_tier_competitors: CrossTierCompetitor[];
+};
+
+// --- Color Mapping ---
+const COLOR_MAP: Record<string, string> = {
+  "tier_budget": "#2563eb",
+  "tier_mass_market": "#16a34a",
+  "tier_mass_premium": "#f59e0b",
+  "tier_premium": "#7c3aed",
+  "tier_luxury": "#dc2626",
+  "tier_ultra_luxury": "#0891b2"
+};
+
+// --- Components ---
 
 function Tip({ text, children }: { text: string; children: React.ReactNode }) {
   return (
@@ -95,6 +169,181 @@ function Tip({ text, children }: { text: string; children: React.ReactNode }) {
   );
 }
 
+function TierModalContent({ tier }: { tier: PriceRange }) {
+  return (
+    <div className="space-y-6">
+      <div className="bg-muted/30 p-4 rounded-xl border border-border" style={{ borderLeftWidth: '4px', borderLeftColor: COLOR_MAP[tier.color_key] }}>
+        <h3 className="text-xl font-bold leading-tight text-foreground mb-2" style={{ color: COLOR_MAP[tier.color_key] }}>
+          {tier.tier} ({tier.range_label})
+        </h3>
+        <div className="flex flex-wrap gap-6 mt-4">
+          <div>
+            <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Products</p>
+            <p className="text-xl font-mono font-black">{formatNumber(tier.product_count)}</p>
+          </div>
+          <div>
+            <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Parent Revenue</p>
+            <p className="text-xl font-mono font-black text-emerald-500">{formatCurrency(tier.parent_revenue)}</p>
+          </div>
+          <div>
+            <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">Parent Sales</p>
+            <p className="text-xl font-mono font-black text-blue-500">{formatNumber(tier.parent_sales)}</p>
+          </div>
+        </div>
+      </div>
+      <div className="bg-card border border-border rounded-xl p-4 shadow-sm">
+        <h4 className="text-sm font-bold uppercase tracking-widest text-muted-foreground mb-3">Products Included</h4>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm text-left">
+            <thead className="text-[10px] uppercase tracking-widest text-muted-foreground bg-muted/50">
+              <tr>
+                <th className="px-3 py-2">Product</th>
+                <th className="px-3 py-2">ASIN</th>
+                <th className="px-3 py-2">Brand</th>
+                <th className="px-3 py-2 text-right">Price</th>
+                <th className="px-3 py-2 text-right">Revenue</th>
+                <th className="px-3 py-2 text-right">Sales</th>
+              </tr>
+            </thead>
+            <tbody>
+              {tier.products?.map((p, i) => (
+                <tr key={i} className="border-b last:border-b-0 hover:bg-muted/50 transition-colors">
+                  <td className="px-3 py-2 font-medium truncate max-w-[200px]" title={p.title}>{p.title}</td>
+                  <td className="px-3 py-2 font-mono text-xs">{p.asin}</td>
+                  <td className="px-3 py-2 text-muted-foreground">{p.brand}</td>
+                  <td className="px-3 py-2 font-mono text-right">{formatCurrency(p.price)}</td>
+                  <td className="px-3 py-2 font-mono text-emerald-500 text-right">{formatCurrency(p.parent_revenue)}</td>
+                  <td className="px-3 py-2 font-mono text-blue-500 text-right">{formatNumber(p.parent_sales)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EvidenceModalContent({ evidence, title }: { evidence: Evidence; title: string }) {
+  if (!evidence) return <div className="p-4 text-muted-foreground">Evidence unavailable.</div>;
+  return (
+    <div className="space-y-6">
+      <div className="bg-muted/30 p-4 rounded-xl border border-border">
+        <h3 className="text-xl font-bold leading-tight text-foreground mb-2">{title}</h3>
+        <p className="text-sm text-foreground/80 leading-relaxed bg-card p-3 rounded border border-border shadow-sm">
+          {evidence.interpretation}
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="bg-card border border-border rounded-xl p-4 shadow-sm flex flex-col">
+          <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest mb-2 flex items-center gap-1">
+            <Database className="w-3 h-3 text-blue-500" /> Source Data
+          </span>
+          <div className="space-y-2 text-sm">
+            <p><span className="text-muted-foreground">Dataset:</span> <span className="font-mono">{evidence.source_dataset}</span></p>
+            <p><span className="text-muted-foreground">Columns:</span> <span className="font-mono">{evidence.source_columns.join(', ')}</span></p>
+            <p><span className="text-muted-foreground">Rows Included:</span> <span className="font-mono">{formatNumber(evidence.rows_included)}</span></p>
+            <p><span className="text-muted-foreground">Rows Excluded:</span> <span className="font-mono">{formatNumber(evidence.rows_excluded)}</span></p>
+          </div>
+        </div>
+
+        <div className="bg-card border border-border rounded-xl p-4 shadow-sm flex flex-col">
+          <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest mb-2 flex items-center gap-1">
+            <Code className="w-3 h-3 text-emerald-500" /> Formula & Values
+          </span>
+          <div className="space-y-3">
+            <div className="bg-muted/50 p-2 rounded border border-border/50 font-mono text-xs text-emerald-600 break-words">
+              {evidence.formula}
+            </div>
+            <p className="text-xs text-muted-foreground">Source Values:</p>
+            <p className="font-mono text-sm">{evidence.source_values}</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-card border border-border rounded-xl p-4 shadow-sm">
+        <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest mb-3 flex items-center gap-1">
+          <ChevronRight className="w-3 h-3 text-primary" /> Calculation Steps
+        </span>
+        <ol className="list-decimal list-inside space-y-2 text-sm text-foreground/80 font-mono">
+          {evidence.calculation_steps.map((step, idx) => (
+            <li key={idx} className="pb-1 border-b border-border/50 last:border-0">{step}</li>
+          ))}
+        </ol>
+      </div>
+      
+      <div className="bg-primary/10 border border-primary/20 rounded-xl p-4 shadow-sm flex items-center justify-between">
+        <span className="text-sm font-bold uppercase tracking-widest text-primary">Final Computed Value</span>
+        <span className="text-2xl font-black font-mono text-primary">{evidence.final_value}</span>
+      </div>
+    </div>
+  );
+}
+
+function BrandDetailsModalContent({ tier, brandBreakdown }: { tier: string; brandBreakdown: BrandBreakdown[] }) {
+  return (
+    <div className="space-y-6">
+      <div className="bg-muted/30 p-4 rounded-xl border border-border">
+        <h3 className="text-xl font-bold leading-tight text-foreground mb-2">Brands in {tier} Tier</h3>
+        <p className="text-sm text-foreground/80 leading-relaxed bg-card p-3 rounded border border-border shadow-sm">
+          A breakdown of all brands actively selling within this specific price tier, ranked by their Parent Level Revenue share.
+        </p>
+      </div>
+
+      <div className="bg-card border border-border rounded-xl p-4 shadow-sm">
+        <div className="overflow-x-auto max-h-[50vh]">
+          <table className="w-full text-sm text-left">
+            <thead className="text-[10px] uppercase tracking-widest text-muted-foreground bg-muted/50 sticky top-0 z-10">
+              <tr>
+                <th className="px-3 py-2">Brand</th>
+                <th className="px-3 py-2 text-right">Revenue</th>
+                <th className="px-3 py-2 text-right">Sales</th>
+                <th className="px-3 py-2 text-right">Products</th>
+                <th className="px-3 py-2 text-right">Share %</th>
+              </tr>
+            </thead>
+            <tbody>
+              {brandBreakdown.map((b, i) => (
+                <tr key={i} className="border-b last:border-b-0 hover:bg-muted/50 transition-colors">
+                  <td className="px-3 py-2 font-bold truncate max-w-[200px]" title={b.brand}>{b.brand}</td>
+                  <td className="px-3 py-2 font-mono text-emerald-500 text-right font-bold">{formatCurrency(b.parent_revenue)}</td>
+                  <td className="px-3 py-2 font-mono text-blue-500 text-right">{formatNumber(b.parent_sales)}</td>
+                  <td className="px-3 py-2 font-mono text-right">{formatNumber(b.product_count)}</td>
+                  <td className="px-3 py-2 font-mono text-right font-bold">{b.brand_share.toFixed(1)}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProductDetailModalContent({ data, onShowEvidence }: { data: PositioningData, onShowEvidence: () => void }) {
+  return (
+    <div className="p-1 space-y-4">
+      <div className="space-y-3 font-mono text-sm">
+        <p className="text-muted-foreground flex justify-between gap-4">Tier: <span className="font-bold text-right uppercase tracking-widest" style={{ color: COLOR_MAP[data.color_key] }}>{data.tier}</span></p>
+        <p className="text-muted-foreground flex justify-between gap-4">Brand: <span className="text-foreground text-right">{data.brand}</span></p>
+        <p className="text-muted-foreground flex justify-between gap-4">Price: <span className="text-foreground font-bold">{formatCurrency(data.price)}</span></p>
+        <p className="text-muted-foreground flex justify-between gap-4">Parent Revenue: <span className="text-emerald-500 font-bold">{formatCurrency(data.parent_revenue)}</span></p>
+        <p className="text-muted-foreground flex justify-between gap-4">Units Sold: <span className="text-blue-500 font-bold">{formatNumber(data.parent_sales)}</span></p>
+        {data.asin && (
+            <p className="text-muted-foreground flex justify-between gap-4 text-xs">ASIN: <span className="text-foreground">{data.asin}</span></p>
+        )}
+      </div>
+      <button 
+        onClick={onShowEvidence}
+        className="w-full mt-2 py-2 px-4 border border-border rounded-md text-[10px] font-bold uppercase tracking-widest text-muted-foreground hover:bg-muted transition-colors flex items-center justify-center gap-2"
+      >
+        <Database className="w-3 h-3" /> View Details
+      </button>
+    </div>
+  );
+}
+
 interface KpiProps {
   title: string;
   value: string | React.ReactNode;
@@ -103,11 +352,15 @@ interface KpiProps {
   color?: string;
   bg?: string;
   tooltip?: string;
+  onClick?: () => void;
 }
 
-function KpiCard({ title, value, sub, icon, color = 'text-primary', bg = 'bg-primary/10 border-primary/20', tooltip }: KpiProps) {
+function KpiCard({ title, value, sub, icon, color = 'text-primary', bg = 'bg-primary/10 border-primary/20', tooltip, onClick }: KpiProps) {
   return (
-    <Card className="hover-card-anim border-t-4 border-t-primary/20 bg-card/50 glass">
+    <Card 
+      onClick={onClick}
+      className={cn("border-t-4 border-t-primary/20 bg-card/50 glass", onClick ? "cursor-pointer hover:border-primary transition-all hover:-translate-y-1" : "hover-card-anim")}
+    >
       <CardContent className="p-5">
         <div className="flex items-start justify-between mb-3">
           <div className="flex items-center gap-1.5">
@@ -129,57 +382,45 @@ function KpiCard({ title, value, sub, icon, color = 'text-primary', bg = 'bg-pri
   );
 }
 
-function UnavailableCard({ message, missing }: { message: string; missing?: string[] }) {
+function UnavailableCard({ message }: { message: string }) {
   return (
     <Card className="border-red-500/20 bg-red-500/5 mt-10">
       <CardContent className="p-8 flex flex-col items-center text-center">
         <AlertCircle className="w-12 h-12 text-red-500 mb-4" />
         <h2 className="text-xl font-bold mb-2 font-serif">Pricing Economics Unavailable</h2>
         <p className="text-red-500/80 max-w-lg">{message}</p>
-        {missing && missing.length > 0 && (
-          <p className="text-red-500/60 text-sm mt-4 font-mono uppercase text-[10px] tracking-widest">Required Attributes: {missing.join(', ')}</p>
-        )}
       </CardContent>
     </Card>
   );
 }
 
+type ModalState = 
+  | { type: 'evidence'; title: string; evidence: Evidence }
+  | { type: 'tier'; tier: PriceRange }
+  | { type: 'brand_details'; title: string; tier: string; brand_breakdown: BrandBreakdown[]; evidence: Evidence }
+  | { type: 'product_detail'; data: PositioningData }
+  | null;
+
 export default function PriceElasticity() {
-  const [selectedProduct, setSelectedProduct] = useState<PositioningData | null>(null);
+  const [modalState, setModalState] = useState<ModalState>(null);
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ['price-intelligence'],
-    queryFn: () => api.getPriceElasticity(6),
+    queryFn: () => api.getPriceElasticity(6), // We mock project_id 6
   });
 
-  const memoized = useMemo(() => {
-    if (!data?.data?.results) return null;
-    const res = data.data.results;
-    
-    const struct: MarketStructure = res.market_structure || {};
-    const bands: PriceBand[] = res.price_bands || [];
-    const topOpportunities: PriceBand[] = res.top_opportunity_bands || [];
-    const powerBands: PriceBand[] = res.highest_revenue_per_listing_bands || [];
-    const entry: RecommendedEntry = res.recommended_entry || {};
-    const premium: PremiumViability = res.premium_viability || { revenue_share_pct: 0, product_share_pct: 0, revenue_efficiency: 0 };
-    const sweetSpot: PriceBand | null = res.market_sweet_spot || null;
-    const whiteSpace: PriceBand[] = res.white_space_opportunities || [];
-    const positioningData: PositioningData[] = res.positioning_map_data || [];
-    
-    // Sort bands for bar charts based on price value
-    const sortedBands = [...bands].sort((a, b) => {
-        const aNum = parseFloat(a.price_band.replace(/[^0-9.-]/g, '').split('-')[0]) || 0;
-        const bNum = parseFloat(b.price_band.replace(/[^0-9.-]/g, '').split('-')[0]) || 0;
-        return aNum - bNum;
-    });
-
-    const highestRevenueBand = [...bands].sort((a, b) => b.revenue - a.revenue)[0];
-
-    return {
-      struct, bands, sortedBands, topOpportunities, powerBands,
-      entry, premium, sweetSpot, whiteSpace, positioningData, highestRevenueBand
-    };
+  const engineResponse = useMemo(() => {
+    return data;
   }, [data]);
+
+  const memoized = useMemo(() => {
+    const engineData = engineResponse?.data;
+    if (engineData?.status === 'unavailable') return null;
+    
+    const results = engineData?.results;
+    if (!results || Object.keys(results).length === 0) return null;
+    return results as PricingIntelligenceData;
+  }, [engineResponse]);
 
   if (isLoading) {
     return (
@@ -190,93 +431,152 @@ export default function PriceElasticity() {
     );
   }
 
-  if (isError || !memoized) {
-    return <UnavailableCard message={getEngineErrorMessage(data, 'Could not calculate price economics.')} />;
+  if (isError || engineResponse?.data?.status === 'unavailable' || !memoized) {
+    const fallbackMsg = 'Could not calculate price economics. Ensure Parent Level Revenue and Price are mapped.';
+    const specificReason = engineResponse?.data?.summary;
+    let msg = specificReason || getEngineErrorMessage(data, fallbackMsg);
+    
+    if (msg.toLowerCase() === 'success' || !msg) {
+        msg = fallbackMsg;
+    }
+    
+    return <UnavailableCard message={msg} />;
   }
 
-  const {
-    struct, bands, sortedBands, topOpportunities, powerBands,
-    entry, premium, sweetSpot, whiteSpace, positioningData, highestRevenueBand
-  } = memoized;
+  const pi = memoized;
+  const struct = pi.market_price_structure;
 
-  if (bands.length === 0) {
-    return <UnavailableCard message="No price bands could be calculated from the uploaded catalog." />;
-  }
-
-  // --- TABLES ---
-  const bandAnalysisColumns: Column<PriceBand>[] = [
+  // Render Table Columns
+  const topOpportunitiesColumns: Column<TopOpportunity>[] = [
     { 
       header: 'Price Range', 
-      accessorKey: 'price_band', 
-      cell: (r) => <span className="font-mono font-bold block whitespace-nowrap">{r.price_band}</span>
+      accessorKey: 'price_range', 
+      cell: (r) => <span className="font-mono font-bold block">{r.price_range}</span>
     },
     { 
-      header: 'Sample Size', 
-      accessorKey: 'product_count', 
-      cell: (r) => (
-        <div className="flex flex-col gap-1">
-          <span className="font-mono text-sm">{formatNumber(r.product_count)}</span>
-          {!r.is_valid_sample && <Badge variant="outline" className="text-[9px] uppercase tracking-wider text-red-500 border-red-500/20 w-fit">Insufficient</Badge>}
-        </div>
-      )
-    },
-    { header: 'Revenue', accessorKey: 'revenue', cell: (r) => <span className="font-mono font-medium text-emerald-600">{formatCurrency(r.revenue)}</span> },
-    { 
-      header: 'Revenue Share', 
-      accessorKey: 'revenue_share_pct',
-      cell: (r) => (
-        <div className="flex items-center gap-2">
-          <span className="font-mono text-sm w-12 font-bold">{r.revenue_share_pct.toFixed(1)}%</span>
-          <div className="w-16 h-1.5 bg-muted rounded-full overflow-hidden">
-            <div className="h-full bg-emerald-500 rounded-full" style={{ width: `${r.revenue_share_pct}%` }} />
-          </div>
-        </div>
-      )
+        header: 'Tier', 
+        accessorKey: 'tier', 
+        cell: (r) => <Badge variant="outline" className="text-[10px] font-mono tracking-widest uppercase" style={{ color: COLOR_MAP[r.color_key], borderColor: COLOR_MAP[r.color_key] }}>{r.tier}</Badge>
     },
     { 
-      header: 'Top Product', 
-      accessorKey: 'top_product', 
-      cell: (r) => (
-        <div className="max-w-[200px]">
-          <span className="font-bold text-xs block truncate text-foreground" title={r.top_product.title}>{r.top_product.title}</span>
-          <div className="flex items-center justify-between mt-1">
-            <span className="text-[10px] font-mono text-muted-foreground">{r.top_product.asin}</span>
-            <span className="text-[10px] font-mono text-emerald-600">{formatCurrency(r.top_product.revenue)}</span>
-          </div>
-        </div>
-      )
+        header: 'Parent Level Revenue', 
+        accessorKey: 'parent_revenue', 
+        cell: (r) => <span className="font-mono font-bold" style={{ color: COLOR_MAP[r.color_key] }}>{formatCurrency(r.parent_revenue)}</span>
     },
-    { header: 'Avg Rating', accessorKey: 'avg_rating', cell: (r) => <span className="font-mono">{r.avg_rating > 0 ? r.avg_rating.toFixed(2) : 'N/A'}</span> },
-  ];
-
-  const topOpportunitiesColumns: Column<PriceBand>[] = [
     { 
-      header: 'Price Range', 
-      accessorKey: 'price_band', 
-      cell: (r) => <span className="font-mono font-bold block">{r.price_band}</span>
+        header: 'Units Sold', 
+        accessorKey: 'parent_sales', 
+        cell: (r) => <span className="font-mono font-bold">{formatNumber(r.parent_sales)}</span>
     },
-    { header: 'Revenue Share', accessorKey: 'revenue_share_pct', cell: (r) => <span className="font-mono text-emerald-600 font-bold">{r.revenue_share_pct.toFixed(1)}%</span> },
     { 
-      header: 'Top Product', 
-      accessorKey: 'top_product', 
-      cell: (r) => (
-        <div className="max-w-[150px]">
-          <span className="font-bold text-xs block truncate text-foreground">{r.top_product.title}</span>
-        </div>
-      )
+        header: 'Product Count', 
+        accessorKey: 'product_count', 
+        cell: (r) => <span className="font-mono">{formatNumber(r.product_count)}</span>
     },
-    { header: 'Median Rev / Listing', accessorKey: 'revenue_per_listing', cell: (r) => <span className="font-mono">{formatCurrency(r.revenue_per_listing)}</span> },
+    { 
+        header: 'Competition Density', 
+        accessorKey: 'competition_density', 
+        cell: (r) => <span className="font-mono">{r.competition_density.toFixed(1)}%</span>
+    },
     { 
       header: 'Opportunity Score', 
       accessorKey: 'opportunity_score',
       cell: (r) => (
-        <div className="flex items-center gap-2">
-          <span className="font-mono text-sm w-12 font-black text-primary">{r.opportunity_score.toFixed(0)}</span>
-          <div className="w-16 h-1.5 bg-muted rounded-full overflow-hidden">
-            <div className="h-full bg-primary rounded-full" style={{ width: `${r.opportunity_score}%` }} />
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-sm w-10 font-black" style={{ color: COLOR_MAP[r.color_key] }}>{r.opportunity_score.toFixed(0)}</span>
+            <div className="w-16 h-1.5 bg-muted rounded-full overflow-hidden hidden md:block">
+              <div className="h-full rounded-full" style={{ width: `${r.opportunity_score}%`, backgroundColor: COLOR_MAP[r.color_key] }} />
+            </div>
           </div>
         </div>
       )
+    },
+  ];
+
+  const brandPositionColumns: Column<BrandPosition>[] = [
+    { 
+      header: 'Price Range', 
+      accessorKey: 'price_range', 
+      cell: (r) => <span className="font-mono font-bold block">{r.price_range}</span>
+    },
+    { 
+        header: 'Tier', 
+        accessorKey: 'tier', 
+        cell: (r) => <Badge variant="outline" className="text-[10px] font-mono tracking-widest uppercase" style={{ color: COLOR_MAP[r.color_key], borderColor: COLOR_MAP[r.color_key] }}>{r.tier}</Badge>
+    },
+    { 
+        header: 'Total Revenue', 
+        accessorKey: 'total_parent_revenue', 
+        cell: (r) => <span className="font-mono text-emerald-600 font-bold">{formatCurrency(r.total_parent_revenue)}</span>
+    },
+    { 
+        header: 'Total Sales', 
+        accessorKey: 'total_parent_sales', 
+        cell: (r) => <span className="font-mono text-blue-500 font-bold">{formatNumber(r.total_parent_sales)}</span>
+    },
+    { 
+        header: 'Products', 
+        accessorKey: 'product_count', 
+        cell: (r) => <span className="font-mono">{formatNumber(r.product_count)}</span>
+    },
+    { 
+        header: 'Brands', 
+        accessorKey: 'brand_count', 
+        cell: (r) => <span className="font-mono">{r.brand_count}</span>
+    },
+    { 
+        header: 'Leading Brand', 
+        accessorKey: 'leading_brand', 
+        cell: (r) => <span className="font-bold block truncate max-w-[150px]">{r.leading_brand}</span>
+    },
+    { 
+        header: 'Leader Revenue', 
+        accessorKey: 'leading_brand_revenue', 
+        cell: (r) => <span className="font-mono text-emerald-600 font-medium">{formatCurrency(r.leading_brand_revenue)}</span>
+    },
+    { 
+        header: 'Leader Share', 
+        accessorKey: 'leading_brand_share', 
+        cell: (r) => <span className="font-mono font-bold">{r.leading_brand_share.toFixed(1)}%</span>
+    },
+    { 
+        header: 'Competition Note', 
+        accessorKey: 'concentration_note', 
+        cell: (r) => <span className="text-xs text-muted-foreground block max-w-[200px]">{r.concentration_note}</span>
+    },
+  ];
+
+  const crossTierColumns: Column<CrossTierCompetitor>[] = [
+    { 
+        header: 'Brand', 
+        accessorKey: 'brand', 
+        cell: (r) => <span className="font-bold">{r.brand}</span>
+    },
+    { 
+        header: 'Tiers Present', 
+        accessorKey: 'price_ranges_present', 
+        cell: (r) => <span className="font-mono">{r.price_ranges_present}</span>
+    },
+    { 
+        header: 'Total Revenue', 
+        accessorKey: 'total_parent_revenue', 
+        cell: (r) => <span className="font-mono text-emerald-600 font-medium">{formatCurrency(r.total_parent_revenue)}</span>
+    },
+    { 
+        header: 'Total Sales', 
+        accessorKey: 'total_parent_sales', 
+        cell: (r) => <span className="font-mono text-blue-500 font-medium">{formatNumber(r.total_parent_sales)}</span>
+    },
+    { 
+        header: 'Strongest Tier', 
+        accessorKey: 'strongest_price_range', 
+        cell: (r) => <Badge variant="outline" className="font-mono text-[10px]">{r.strongest_price_range}</Badge>
+    },
+    { 
+        header: 'Insight', 
+        accessorKey: 'strategic_note', 
+        cell: (r) => <span className="text-xs text-muted-foreground block max-w-xs">{r.strategic_note}</span>
     },
   ];
 
@@ -288,28 +588,52 @@ export default function PriceElasticity() {
       <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 border-b border-border/50 pb-6">
         <div>
           <Badge className="bg-primary/10 text-primary hover:bg-primary/20 mb-3 border border-primary/20 font-mono tracking-widest uppercase rounded-none">
-            PRICE INTELLIGENCE
+            DATA-DRIVEN PRICING INTELLIGENCE
           </Badge>
           <h1 className="text-4xl font-black tracking-tight text-foreground font-serif">Price Economics & Strategy</h1>
-          <p className="text-muted-foreground mt-2 max-w-2xl text-lg">
-            Structural analysis of revenue concentration, competition density, and strategic pricing power based on dynamic price ranges.
+          <p className="text-muted-foreground mt-2 max-w-3xl text-lg">
+            Structural analysis strictly utilizing Parent Level Revenue to calculate distribution, sweet spots, and entry recommendations across refined market tiers.
           </p>
         </div>
       </div>
 
+      {/* TIER DEFINITIONS */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+        {pi.price_tiers.map((tier, idx) => (
+          <Card 
+            key={idx} 
+            className="cursor-pointer transition-all hover:-translate-y-1 bg-card/50 shadow-sm border-border"
+            style={{ borderTopColor: COLOR_MAP[tier.color_key], borderTopWidth: '4px' }}
+            onClick={() => setModalState({ type: 'tier', tier })}
+          >
+            <CardContent className="p-4 flex flex-col items-center justify-center text-center">
+              <span className="text-xs uppercase tracking-widest font-bold mb-1" style={{ color: COLOR_MAP[tier.color_key] }}>{tier.tier}</span>
+              <span className="font-mono font-black text-sm text-foreground mb-2">{tier.range_label}</span>
+              <div className="flex gap-3 text-[10px] text-muted-foreground uppercase font-mono tracking-wider">
+                  <span title="Revenue">{formatCurrency(tier.parent_revenue)}</span>
+                  <span title="Units Sold">{formatNumber(tier.parent_sales)}</span>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
       {/* SECTION 1: MARKET PRICE STRUCTURE */}
-      <div>
-        <h2 className="text-lg font-bold font-serif mb-4 flex items-center gap-2">
-          <Scale className="w-5 h-5 text-primary" /> Market Price Structure
-        </h2>
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
-          <KpiCard title="Median Price" value={formatCurrency(struct.median)} icon={<DollarSign className="w-4 h-4" />} />
-          <KpiCard title="Average Price" value={formatCurrency(struct.average)} icon={<Activity className="w-4 h-4" />} color="text-emerald-500" bg="bg-emerald-500/10 border-emerald-500/20" />
-          <KpiCard title="25th Percentile" value={formatCurrency(struct.p25)} icon={<TrendingUp className="w-4 h-4" />} color="text-amber-500" bg="bg-amber-500/10 border-amber-500/20" />
-          <KpiCard title="75th Percentile" value={formatCurrency(struct.p75)} icon={<TrendingUp className="w-4 h-4" />} color="text-amber-500" bg="bg-amber-500/10 border-amber-500/20" />
-          <KpiCard title="Price Floor" value={formatCurrency(struct.floor)} icon={<Maximize className="w-4 h-4" />} color="text-muted-foreground" bg="bg-muted border-border" />
-          <KpiCard title="Price Ceiling" value={formatCurrency(struct.ceiling)} icon={<Maximize className="w-4 h-4" />} color="text-muted-foreground" bg="bg-muted border-border" />
-          <KpiCard title="Price Spread" value={formatCurrency(struct.spread_val)} sub={struct.spread_str} icon={<Layers className="w-4 h-4" />} color="text-blue-500" bg="bg-blue-500/10 border-blue-500/20" />
+      <div 
+        className="cursor-pointer group" 
+        onClick={() => setModalState({ type: 'evidence', title: "Market Price Structure", evidence: struct.evidence })}
+      >
+        <div className="flex items-center justify-between mb-4 mt-8">
+            <h2 className="text-lg font-bold font-serif flex items-center gap-2 group-hover:text-primary transition-colors">
+            <Scale className="w-5 h-5 text-primary" /> Market Price Structure
+            </h2>
+            <span className="text-[10px] uppercase tracking-widest text-muted-foreground group-hover:text-primary transition-colors opacity-50 group-hover:opacity-100 flex items-center gap-1"><Database className="w-3 h-3" /> View Evidence</span>
+        </div>
+        
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <KpiCard title="Price Floor" value={formatCurrency(struct.price_floor)} icon={<Maximize className="w-4 h-4" />} color="text-muted-foreground" bg="bg-muted border-border" />
+          <KpiCard title="Price Ceiling" value={formatCurrency(struct.price_ceiling)} icon={<Maximize className="w-4 h-4" />} color="text-muted-foreground" bg="bg-muted border-border" />
+          <KpiCard title="Price Spread" value={formatCurrency(struct.price_spread)} icon={<Layers className="w-4 h-4" />} color="text-blue-500" bg="bg-blue-500/10 border-blue-500/20" />
         </div>
       </div>
 
@@ -318,11 +642,11 @@ export default function PriceElasticity() {
         <CardHeader className="bg-muted/10 border-b border-border/50 flex flex-row items-center justify-between">
           <div>
             <CardTitle className="font-serif">Product Positioning Map</CardTitle>
-            <CardDescription>Primary pricing chart: Top 200 items plotted by Price vs. Revenue. Bubble size indicates total reviews. Click a bubble for details.</CardDescription>
+            <CardDescription>Top 200 items plotted by Price vs. Parent Level Revenue.</CardDescription>
           </div>
         </CardHeader>
         <CardContent className="p-6">
-          <div className="h-[500px] relative">
+          <div className="h-[400px] relative">
             <ResponsiveContainer width="100%" height="100%">
               <ScatterChart margin={{ top: 20, right: 20, bottom: 40, left: 40 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.5} />
@@ -335,12 +659,11 @@ export default function PriceElasticity() {
                 />
                 <YAxis 
                   type="number" 
-                  dataKey="revenue" 
-                  name="Revenue" 
+                  dataKey="parent_revenue" 
+                  name="Parent Level Revenue" 
                   tickFormatter={v => `$${formatNumber(v)}`} 
-                  label={{ value: 'Revenue', angle: -90, position: 'insideLeft', fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
+                  label={{ value: 'Parent Level Revenue', angle: -90, position: 'insideLeft', fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
                 />
-                <ZAxis type="number" dataKey="reviews" range={[20, 400]} name="Reviews" />
                 <Tooltip 
                   cursor={{ strokeDasharray: '3 3' }}
                   content={({ active, payload }) => {
@@ -349,27 +672,25 @@ export default function PriceElasticity() {
                     return (
                       <div className="bg-card/95 backdrop-blur-md border border-border rounded-lg p-3 shadow-xl text-sm font-mono space-y-1 z-50 min-w-[250px]">
                         <p className="font-bold border-b border-border/50 pb-2 mb-2 truncate text-foreground">{d.title}</p>
-                        <p className="text-muted-foreground flex justify-between gap-4">ASIN: <span className="text-foreground">{d.asin}</span></p>
+                        <p className="text-muted-foreground flex justify-between gap-4">Tier: <span style={{ color: COLOR_MAP[d.color_key] }}>{d.tier}</span></p>
                         <p className="text-muted-foreground flex justify-between gap-4">Brand: <span className="text-foreground truncate max-w-[100px] text-right">{d.brand}</span></p>
                         <p className="text-muted-foreground flex justify-between gap-4">Price: <span className="text-foreground font-bold">{formatCurrency(d.price)}</span></p>
-                        <p className="text-muted-foreground flex justify-between gap-4">Revenue: <span className="text-emerald-500 font-bold">{formatCurrency(d.revenue)}</span></p>
-                        <p className="text-muted-foreground flex justify-between gap-4">Reviews: <span className="text-blue-500 font-bold">{formatNumber(d.reviews)}</span></p>
-                        <p className="text-muted-foreground flex justify-between gap-4">BSR: <span className="text-foreground font-bold">{formatNumber(d.bsr)}</span></p>
+                        <p className="text-muted-foreground flex justify-between gap-4">Parent Revenue: <span className="text-emerald-500 font-bold">{formatCurrency(d.parent_revenue)}</span></p>
+                        <p className="text-muted-foreground flex justify-between gap-4">Units Sold: <span className="text-blue-500 font-bold">{formatNumber(d.parent_sales)}</span></p>
                       </div>
                     );
                   }}
                 />
-                <ReferenceLine x={struct.median} stroke="hsl(var(--primary))" strokeDasharray="4 4" strokeOpacity={0.5} label={{ position: 'top', value: 'Median Price', fill: 'hsl(var(--primary))', fontSize: 10 }} />
-                
                 <Scatter 
-                  data={positioningData} 
+                  data={pi.product_positioning_map}
                   onClick={(e: any) => {
-                    if (e && e.payload) setSelectedProduct(e.payload as PositioningData);
+                    const data = e?.payload || e;
+                    setModalState({ type: 'product_detail', data });
                   }}
                   className="cursor-pointer"
                 >
-                  {positioningData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={'hsl(var(--primary))'} fillOpacity={0.6} stroke="hsl(var(--background))" strokeWidth={1} className="hover:fill-primary hover:opacity-100 transition-all duration-200" />
+                  {pi.product_positioning_map.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={COLOR_MAP[entry.color_key] || 'hsl(var(--primary))'} fillOpacity={0.8} stroke="hsl(var(--background))" strokeWidth={1} />
                   ))}
                 </Scatter>
               </ScatterChart>
@@ -381,114 +702,75 @@ export default function PriceElasticity() {
       {/* STRATEGIC INSIGHTS */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         
-        {/* Market Sweet Spot (Expanded) */}
-        <Card className="border-border/50 shadow-sm bg-primary/5 border-primary/20">
-          <CardHeader className="border-b border-primary/10 pb-3">
+        {/* Market Sweet Spot */}
+        <Card 
+          className="border-border/50 shadow-sm bg-primary/5 cursor-pointer transition-all hover:-translate-y-1"
+          onClick={() => setModalState({ type: 'evidence', title: "Market Sweet Spot", evidence: pi.market_sweet_spot.evidence })}
+        >
+          <CardHeader className="border-b border-primary/10 pb-3 flex flex-row items-center justify-between">
             <CardTitle className="text-sm font-bold uppercase tracking-widest text-primary flex items-center gap-2">
               <TargetIcon className="w-4 h-4 text-primary" /> Market Sweet Spot
             </CardTitle>
+            <span className="text-[10px] uppercase tracking-widest text-primary/50 flex items-center gap-1"><Database className="w-3 h-3" /> Evidence</span>
           </CardHeader>
-          <CardContent className="pt-4 flex flex-col justify-between h-full space-y-4">
-            {sweetSpot ? (
-                <>
-                <div className="grid grid-cols-2 gap-4">
-                    <div>
-                        <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest">Price Range</p>
-                        <p className="text-2xl font-black font-mono text-primary leading-tight">{sweetSpot.price_band}</p>
-                    </div>
-                    <div>
-                        <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest">Products</p>
-                        <p className="text-2xl font-black font-mono text-foreground leading-tight">{formatNumber(sweetSpot.product_count)}</p>
-                    </div>
-                    <div>
-                        <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest">Revenue Share</p>
-                        <p className="text-2xl font-black font-mono text-emerald-600 leading-tight">{sweetSpot.revenue_share_pct.toFixed(1)}%</p>
-                    </div>
-                    <div>
-                        <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest">Top Brand</p>
-                        <p className="text-xl font-bold font-sans text-foreground leading-tight truncate">{sweetSpot.top_brand}</p>
-                    </div>
+          <CardContent className="pt-6 flex flex-col justify-center h-full space-y-4">
+            <div className="text-center">
+                <p className="text-4xl font-black font-mono text-primary leading-tight mb-2">{pi.market_sweet_spot.range_label}</p>
+                <Badge variant="outline" className="border-primary/30 text-primary uppercase tracking-widest text-[10px] mb-6">{pi.market_sweet_spot.tier}</Badge>
+                
+                <div className="flex justify-center gap-4 mb-4">
+                  <div className="bg-card border border-primary/20 p-4 rounded-xl shadow-sm inline-block">
+                      <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest mb-1 flex items-center gap-1 justify-center"><Activity className="w-3 h-3 text-emerald-500" /> Parent Revenue</p>
+                      <p className="font-mono text-emerald-600 font-black text-xl">{formatCurrency(pi.market_sweet_spot.parent_revenue)}</p>
+                  </div>
+                  <div className="bg-card border border-primary/20 p-4 rounded-xl shadow-sm inline-block">
+                      <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest mb-1 flex items-center gap-1 justify-center"><Package className="w-3 h-3 text-blue-500" /> Units Sold</p>
+                      <p className="font-mono text-blue-600 font-black text-xl">{formatNumber(pi.market_sweet_spot.parent_sales)}</p>
+                  </div>
                 </div>
-
-                <div className="bg-card border border-border p-3 rounded-lg shadow-sm">
-                    <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest mb-1 flex items-center gap-1"><Trophy className="w-3 h-3 text-amber-500" /> Top Product</p>
-                    <p className="font-bold text-sm text-foreground line-clamp-2 leading-snug">{sweetSpot.top_product.title}</p>
-                    <div className="flex justify-between items-center mt-2">
-                        <Badge variant="outline" className="text-[9px] font-mono">{sweetSpot.top_product.asin}</Badge>
-                        <span className="font-mono text-emerald-600 font-bold text-sm">{formatCurrency(sweetSpot.top_product.revenue)}</span>
-                    </div>
-                </div>
-                <p className="text-xs text-foreground/80 leading-relaxed font-medium">
-                  Highest revenue concentration with statistically meaningful sample size.
+                
+                <p className="text-xs text-muted-foreground/80 leading-relaxed font-medium bg-background/50 p-3 rounded border border-primary/10 max-w-sm mx-auto">
+                  {pi.market_sweet_spot.insight}
                 </p>
-                </>
-            ) : (
-                <div className="flex flex-col items-center justify-center text-center py-6 opacity-70">
-                    <AlertCircle className="w-8 h-8 text-muted-foreground mb-2" />
-                    <p className="text-sm font-bold">No Sweet Spot Identified</p>
-                </div>
-            )}
+            </div>
           </CardContent>
         </Card>
 
         <div className="flex flex-col gap-6">
-            {/* Section 7: Premium Viability Analysis */}
-            <Card className="border-border/50 shadow-sm flex-1">
-            <CardHeader className="bg-muted/10 border-b border-border/50 pb-3">
-                <CardTitle className="text-sm font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-2">
-                <Crown className="w-4 h-4 text-purple-500" /> Premium Viability
-                </CardTitle>
-            </CardHeader>
-            <CardContent className="pt-4">
-                <div className="flex justify-between items-end mb-4">
-                    <div>
-                        <p className="text-xs text-muted-foreground mb-1">Premium Revenue Share</p>
-                        <p className="text-4xl font-black font-mono text-purple-600 leading-none">{premium.revenue_share_pct.toFixed(1)}%</p>
-                    </div>
-                    <div className="text-right">
-                        <p className="text-[10px] uppercase text-muted-foreground mb-1 font-bold">Product Share</p>
-                        <p className="text-lg font-black font-mono text-foreground leading-none">{premium.product_share_pct.toFixed(1)}%</p>
-                    </div>
-                </div>
-                <div className="bg-muted/30 p-2 rounded flex justify-between items-center border border-border/50">
-                    <span className="text-xs text-muted-foreground">Revenue Efficiency:</span>
-                    <span className={cn("font-mono font-bold text-sm", premium.revenue_efficiency > 1 ? 'text-emerald-500' : 'text-amber-500')}>{premium.revenue_efficiency.toFixed(2)}x</span>
-                </div>
-                <p className="text-[10px] text-muted-foreground mt-2 leading-relaxed text-center">
-                Evaluating products priced &gt; {formatCurrency(struct.median)}.
-                </p>
-            </CardContent>
-            </Card>
 
-            {/* Section 8: Entry Price Recommendation */}
-            <Card className="border-border/50 shadow-sm flex-1">
-            <CardHeader className="border-b border-border/50 pb-3 bg-muted/10">
+            {/* Entry Recommendation */}
+            <Card 
+              className="border-border/50 shadow-sm flex-1 cursor-pointer transition-all hover:-translate-y-1"
+              onClick={() => setModalState({ type: 'evidence', title: "Entry Recommendation", evidence: pi.entry_price_recommendation.evidence })}
+            >
+            <CardHeader className="border-b border-border/50 pb-3 bg-muted/10 flex flex-row items-center justify-between">
                 <CardTitle className="text-sm font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-2">
                 <TargetIcon className="w-4 h-4 text-muted-foreground" /> Entry Price Recommendation
                 </CardTitle>
+                <span className="text-[10px] uppercase tracking-widest text-muted-foreground/50 flex items-center gap-1"><Database className="w-3 h-3" /> Evidence</span>
             </CardHeader>
             <CardContent className="pt-4">
-                {entry.price_band ? (
-                <>
-                    <div className="flex justify-between items-start mb-2">
+                <div className="flex justify-between items-start mb-4">
                     <div>
-                        <p className="text-3xl font-black font-mono text-foreground">{entry.price_band}</p>
+                        <p className="text-3xl font-black font-mono text-foreground">{pi.entry_price_recommendation.recommended_range}</p>
                     </div>
-                    <Badge variant="outline" className="uppercase text-[10px] tracking-widest bg-background border-border text-muted-foreground">
-                        {entry.confidence_score} Conf
+                    <Badge variant="outline" className="uppercase text-[10px] tracking-widest bg-background border-border text-foreground">
+                        {pi.entry_price_recommendation.tier}
                     </Badge>
-                    </div>
-                    <p className="text-xs text-foreground/80 leading-relaxed font-medium">
-                    {entry.reasoning}
-                    </p>
-                </>
-                ) : (
-                <div className="flex flex-col items-center justify-center text-center py-2 opacity-70">
-                    <AlertCircle className="w-8 h-8 text-muted-foreground mb-2" />
-                    <p className="text-sm font-bold">{entry.confidence_score}</p>
-                    <p className="text-xs text-muted-foreground mt-1">{entry.reasoning}</p>
                 </div>
-                )}
+                
+                <div className="space-y-3">
+                    {pi.entry_price_recommendation.llm_strategy ? (
+                        <div className="bg-primary/5 p-3 rounded border border-primary/20 text-xs leading-relaxed text-foreground/90">
+                            <span className="font-bold text-primary block mb-1">Analyst Insight:</span>
+                            {pi.entry_price_recommendation.llm_strategy}
+                        </div>
+                    ) : (
+                        <p className="text-xs text-foreground/80 leading-relaxed font-medium bg-muted/30 p-3 rounded border border-border">
+                        {pi.entry_price_recommendation.rule_based_strategy}
+                        </p>
+                    )}
+                </div>
             </CardContent>
             </Card>
         </div>
@@ -497,63 +779,55 @@ export default function PriceElasticity() {
       {/* SECTIONS 3 & 4: CHARTS */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         
-        {/* Section 3: Revenue by Price Range */}
-        <Card className="border-border/50">
-          <CardHeader className="bg-muted/10 border-b border-border/50">
-            <CardTitle className="font-serif text-lg">Revenue by Price Range</CardTitle>
-            <CardDescription>Where revenue is concentrated</CardDescription>
+        {/* Revenue Pricing Chart */}
+        <Card className="border-border/50 transition-colors">
+          <CardHeader className="bg-muted/10 border-b border-border/50 flex flex-row justify-between items-center group">
+            <div>
+                <CardTitle className="font-serif text-lg">Revenue Distribution</CardTitle>
+                <CardDescription>Parent Level Revenue by Price Range</CardDescription>
+            </div>
           </CardHeader>
           <CardContent className="p-6 h-[400px]">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart layout="vertical" data={sortedBands} margin={{ top: 5, right: 30, left: 40, bottom: 5 }}>
+              <BarChart layout="vertical" data={pi.revenue_distribution} margin={{ top: 5, right: 30, left: 40, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} stroke="hsl(var(--border))" />
                 <XAxis type="number" tickFormatter={v => `$${formatNumber(v)}`} stroke="hsl(var(--muted-foreground))" fontSize={10} />
-                <YAxis dataKey="price_band" type="category" stroke="hsl(var(--muted-foreground))" fontSize={10} width={80} />
+                <YAxis dataKey="range_label" type="category" stroke="hsl(var(--muted-foreground))" fontSize={10} width={100} />
                 <Tooltip 
                   cursor={{ fill: 'hsl(var(--muted))', opacity: 0.2 }}
-                  formatter={(value: any) => [formatCurrency(Number(value)), 'Revenue']}
+                  formatter={(value: any) => [formatCurrency(Number(value)), 'Parent Revenue']}
                 />
-                <Bar dataKey="revenue" fill="hsl(var(--emerald-500))" radius={[0, 4, 4, 0]}>
-                  {sortedBands.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.price_band === highestRevenueBand?.price_band ? 'hsl(var(--primary))' : 'hsl(var(--emerald-500))'} opacity={entry.price_band === highestRevenueBand?.price_band ? 1 : 0.6} />
+                <Bar dataKey="parent_revenue" radius={[0, 4, 4, 0]}>
+                  {pi.revenue_distribution.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={COLOR_MAP[entry.color_key] || 'hsl(var(--primary))'} opacity={0.8} />
                   ))}
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
-            <div className="mt-4 text-center">
-              <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
-                Revenue Leader: <span className="text-primary">{highestRevenueBand?.price_band}</span> captures {highestRevenueBand?.revenue_share_pct.toFixed(1)}% of category revenue.
-              </span>
-            </div>
           </CardContent>
         </Card>
 
-        {/* Section 4: Competition Density */}
-        <Card className="border-border/50">
-          <CardHeader className="bg-muted/10 border-b border-border/50 flex flex-row justify-between items-center">
+        {/* Competition Density Chart */}
+        <Card className="border-border/50 transition-colors">
+          <CardHeader className="bg-muted/10 border-b border-border/50 flex flex-row justify-between items-center group">
             <div>
                 <CardTitle className="font-serif text-lg">Competition Density</CardTitle>
-                <CardDescription>Number of products in each price range</CardDescription>
+                <CardDescription>Product count by Price Range</CardDescription>
             </div>
-            {whiteSpace.length > 0 && (
-                <Badge variant="outline" className="border-blue-500/30 text-blue-500 bg-blue-500/5 uppercase text-[10px] tracking-widest">
-                    {whiteSpace.length} White Space Zone(s)
-                </Badge>
-            )}
           </CardHeader>
           <CardContent className="p-6 h-[400px]">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={sortedBands} margin={{ top: 10, right: 10, left: 0, bottom: 20 }}>
+              <BarChart data={pi.competition_density} margin={{ top: 10, right: 10, left: 0, bottom: 40 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
-                <XAxis dataKey="price_band" stroke="hsl(var(--muted-foreground))" fontSize={10} angle={-45} textAnchor="end" height={60} />
+                <XAxis dataKey="range_label" stroke="hsl(var(--muted-foreground))" fontSize={10} angle={-45} textAnchor="end" height={80} />
                 <YAxis stroke="hsl(var(--muted-foreground))" fontSize={10} />
                 <Tooltip 
                   cursor={{ fill: 'hsl(var(--muted))', opacity: 0.2 }}
                   formatter={(value: any) => [formatNumber(Number(value)), 'Products']}
                 />
-                <Bar dataKey="product_count" fill="hsl(var(--blue-500))" radius={[4, 4, 0, 0]} opacity={0.8}>
-                  {sortedBands.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.is_white_space ? 'hsl(var(--primary))' : 'hsl(var(--blue-500))'} opacity={entry.is_white_space ? 1 : 0.8} />
+                <Bar dataKey="product_count" radius={[4, 4, 0, 0]} opacity={0.8}>
+                  {pi.competition_density.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={COLOR_MAP[entry.color_key] || 'hsl(var(--primary))'} opacity={0.8} />
                   ))}
                 </Bar>
               </BarChart>
@@ -567,79 +841,82 @@ export default function PriceElasticity() {
       <Card className="border-border/50 overflow-hidden shadow-sm">
         <CardHeader className="bg-primary/5 border-b border-border/50">
           <CardTitle className="font-serif">Top Pricing Opportunities</CardTitle>
-          <CardDescription>Ranked by composite opportunity score (Revenue Density, Median Revenue Per Listing, Competition Gap)</CardDescription>
+          <CardDescription>Ranked by composite opportunity score (Click any row for evidence)</CardDescription>
         </CardHeader>
         <CardContent className="p-0">
-          <DataTable columns={topOpportunitiesColumns} data={topOpportunities} pageSize={5} />
+          <DataTable 
+            columns={topOpportunitiesColumns} 
+            data={pi.top_pricing_opportunities} 
+            pageSize={5} 
+            onRowClick={(row) => setModalState({ type: 'evidence', title: `Opportunity Score: ${row.price_range}`, evidence: row.evidence })}
+          />
         </CardContent>
       </Card>
 
-      {/* SECTION 2: PRICE RANGE ANALYSIS */}
+      {/* SECTION 10: BRAND POSITION BY PRICE RANGE */}
       <Card className="border-border/50 overflow-hidden shadow-sm">
         <CardHeader className="bg-muted/10 border-b border-border/50">
-          <CardTitle className="font-serif">Price Range Analysis</CardTitle>
-          <CardDescription>Comprehensive metrics across all dynamic price ranges</CardDescription>
+          <CardTitle className="font-serif">Brand Position by Price Range</CardTitle>
+          <CardDescription>Identify which brands dominate each specific price tier segment (Click any row for evidence)</CardDescription>
         </CardHeader>
         <CardContent className="p-0">
-          <DataTable columns={bandAnalysisColumns} data={bands} pageSize={15} />
+          <DataTable 
+            columns={brandPositionColumns} 
+            data={pi.brand_position_by_price_range} 
+            pageSize={10} 
+            onRowClick={(row) => setModalState({ type: 'brand_details', title: `Brand Breakdown: ${row.price_range}`, tier: row.tier, brand_breakdown: row.brand_breakdown, evidence: row.evidence })}
+          />
         </CardContent>
       </Card>
+
+      {/* SECTION 11: CROSS-TIER COMPETITORS */}
+      {pi.cross_tier_competitors.length > 0 && (
+        <Card className="border-border/50 overflow-hidden shadow-sm">
+          <CardHeader className="bg-muted/10 border-b border-border/50">
+            <CardTitle className="font-serif">Cross-tier Competitors</CardTitle>
+            <CardDescription>Identify broad competitors spanning multiple price ranges (Click any row for evidence)</CardDescription>
+          </CardHeader>
+          <CardContent className="p-0">
+            <DataTable 
+              columns={crossTierColumns} 
+              data={pi.cross_tier_competitors} 
+              pageSize={5} 
+              onRowClick={(row) => setModalState({ type: 'evidence', title: `Cross-tier Competitor: ${row.brand}`, evidence: row.evidence })}
+            />
+          </CardContent>
+        </Card>
+      )}
 
     </motion.div>
 
-    {/* PRODUCT DETAIL DRAWER */}
-    <Drawer 
-      isOpen={!!selectedProduct} 
-      onClose={() => setSelectedProduct(null)} 
-      title="Product Positioning Details"
+    {/* MODAL (REPLACES DRAWER) */}
+    <Modal 
+      isOpen={!!modalState} 
+      onClose={() => setModalState(null)} 
+      title={modalState?.type === 'evidence' ? "Calculation Evidence" : modalState?.type === 'tier' ? "Market Tier Details" : modalState?.type === 'brand_details' ? "Brand Breakdown Details" : modalState?.type === 'product_detail' ? (modalState.data.title.length > 30 ? modalState.data.title.substring(0, 30) + '...' : modalState.data.title) : ""}
+      maxWidth={modalState?.type === 'product_detail' ? "max-w-sm" : "max-w-4xl"}
     >
-      {selectedProduct && (
+      {modalState?.type === 'evidence' && (
+        <EvidenceModalContent evidence={modalState.evidence} title={modalState.title} />
+      )}
+      {modalState?.type === 'tier' && (
+        <TierModalContent tier={modalState.tier} />
+      )}
+      {modalState?.type === 'product_detail' && (
+        <ProductDetailModalContent 
+          data={modalState.data} 
+          onShowEvidence={() => setModalState({ type: 'evidence', title: `Point Evidence: ${modalState.data.title}`, evidence: modalState.data.evidence })}
+        />
+      )}
+      {modalState?.type === 'brand_details' && (
         <div className="space-y-6">
-          
-          <div className="bg-muted/30 p-4 rounded-xl border border-border">
-            <h3 className="text-xl font-bold leading-tight text-foreground mb-2">{selectedProduct.title}</h3>
-            <div className="flex flex-wrap gap-2 mb-4">
-              <Badge variant="outline" className="font-mono bg-background border-border"><Tag className="w-3 h-3 mr-1" /> {selectedProduct.brand}</Badge>
-              <Badge variant="outline" className="font-mono bg-background border-border"><Package className="w-3 h-3 mr-1" /> {selectedProduct.asin}</Badge>
+            <BrandDetailsModalContent tier={modalState.tier} brandBreakdown={modalState.brand_breakdown} />
+            <div className="pt-6 border-t border-border">
+                <EvidenceModalContent evidence={modalState.evidence} title="Brand Aggregation Evidence" />
             </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div className="bg-card border border-border rounded-xl p-4 shadow-sm flex flex-col justify-center">
-              <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest mb-1 flex items-center gap-1">
-                <DollarSign className="w-3 h-3 text-emerald-500" /> Price
-              </span>
-              <span className="text-3xl font-black font-mono text-emerald-600">{formatCurrency(selectedProduct.price)}</span>
-              <span className="text-xs text-muted-foreground mt-2">Band: {selectedProduct.price_band}</span>
-            </div>
-
-            <div className="bg-card border border-border rounded-xl p-4 shadow-sm flex flex-col justify-center">
-              <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest mb-1 flex items-center gap-1">
-                <Activity className="w-3 h-3 text-primary" /> Revenue
-              </span>
-              <span className="text-3xl font-black font-mono text-primary">{formatCurrency(selectedProduct.revenue)}</span>
-            </div>
-
-            <div className="bg-card border border-border rounded-xl p-4 shadow-sm flex flex-col justify-center">
-              <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest mb-1 flex items-center gap-1">
-                <Star className="w-3 h-3 text-amber-500" /> Reviews & Rating
-              </span>
-              <span className="text-2xl font-black font-mono text-foreground">{formatNumber(selectedProduct.reviews)}</span>
-              <span className="text-xs text-muted-foreground mt-1">Rating: {selectedProduct.rating > 0 ? selectedProduct.rating.toFixed(1) : 'N/A'}</span>
-            </div>
-
-            <div className="bg-card border border-border rounded-xl p-4 shadow-sm flex flex-col justify-center">
-              <span className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest mb-1 flex items-center gap-1">
-                <Hash className="w-3 h-3 text-blue-500" /> BSR & Market Share
-              </span>
-              <span className="text-2xl font-black font-mono text-foreground">{formatNumber(selectedProduct.bsr)}</span>
-              <span className="text-xs text-muted-foreground mt-1">Market Share: {selectedProduct.market_share_pct.toFixed(2)}%</span>
-            </div>
-          </div>
-          
         </div>
       )}
-    </Drawer>
+    </Modal>
     </>
   );
 }

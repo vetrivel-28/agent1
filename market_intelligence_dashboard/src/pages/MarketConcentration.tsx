@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
 import { api } from '../services/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/Card';
+import { Modal } from '../components/ui/Modal';
 import { DataTable, type ColumnDef } from '../components/ui/DataTable';
 import { Badge } from '../components/ui/Badge';
 import { formatCurrency, cn } from '../utils/cn';
@@ -98,7 +100,147 @@ function BarTip({ active, payload }: any) {
   );
 }
 
+
+function HHIModal({ isOpen, onClose, hhi, topBrands, top5Share, totalBrands }: { isOpen: boolean; onClose: () => void; hhi: number; topBrands: BrandRanking[]; top5Share: number; totalBrands: number }) {
+  const leader = topBrands[0] || { brand: 'N/A', revenue_share: 0 };
+  const hhiType = hhi < 1500 ? 'Highly Fragmented' : hhi <= 2500 ? 'Moderately Concentrated' : hhi <= 4000 ? 'Highly Concentrated' : 'Monopolistic';
+  
+  const leaderContribution = Math.pow(leader.revenue_share || 0, 2);
+  const second = topBrands[1];
+  const secondContribution = second ? Math.pow(second.revenue_share || 0, 2) : 0;
+  
+  let newEntrantAdvice = '';
+  let existingAdvice = '';
+  if (hhi < 1500) {
+    newEntrantAdvice = 'Low barriers to entry. Focus on niche differentiation rather than competing on massive scale.';
+    existingAdvice = 'Market is highly competitive. Seek consolidation opportunities or build strong brand loyalty to protect margins.';
+  } else if (hhi <= 2500) {
+    newEntrantAdvice = 'Moderate barriers. Target specific underserved customer segments rather than broad market appeal.';
+    existingAdvice = 'Defend market share by expanding product lines and optimizing supply chain efficiencies.';
+  } else if (hhi <= 4000) {
+    newEntrantAdvice = 'High barriers to entry. Requires significant capital or a highly disruptive technological advantage.';
+    existingAdvice = 'Focus on protecting core market share. High risk of price wars if challengers attempt to take share.';
+  } else {
+    newEntrantAdvice = 'Extreme barriers. Direct competition is not recommended. Consider alternative markets or strategic partnerships.';
+    existingAdvice = 'Maintain dominance through continuous innovation and leveraging economies of scale.';
+  }
+  
+  const execSummary = `This market exhibits a ${hhiType.toLowerCase()} structure with an HHI score of ${hhi.toLocaleString()}. ` +
+    `The leading brand, ${leader.brand}, controls ${Number(leader.revenue_share).toFixed(1)}% of the market, while the Top 5 brands collectively capture ${top5Share.toFixed(1)}% across ${totalBrands.toLocaleString()} active competitors. ` +
+    (hhi < 2500 ? `This presents a viable opportunity for targeted entry.` : `This structure strongly favors incumbents and poses significant risks for new entrants.`);
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="Market Concentration (HHI) Analysis" maxWidth="max-w-3xl">
+      <div className="space-y-6 text-sm">
+        {/* Section 1: Your Result */}
+        <div className="flex gap-4">
+          <div className="bg-primary/10 border border-primary/20 rounded-lg p-4 flex-1 text-center">
+            <p className="text-xs font-bold uppercase text-muted-foreground mb-1">Your HHI Score</p>
+            <p className={`text-4xl font-black ${hhiColor(hhi)}`}>{hhi.toLocaleString()}</p>
+          </div>
+          <div className="bg-card border border-border/50 rounded-lg p-4 flex-1 text-center flex flex-col justify-center">
+            <p className="text-xs font-bold uppercase text-muted-foreground mb-1">Market Type</p>
+            <p className={`text-xl font-bold ${hhiColor(hhi)}`}>{hhiType}</p>
+          </div>
+        </div>
+
+        {/* Section 2: How We Calculated It */}
+        <div className="border border-border/50 rounded-lg overflow-hidden">
+          <div className="bg-muted/30 px-4 py-2 border-b border-border/50"><h4 className="font-bold text-foreground">How We Calculated It</h4></div>
+          <div className="p-4 space-y-3 bg-card">
+            <div>
+              <span className="text-xs font-bold uppercase text-muted-foreground block mb-1">Formula</span>
+              <code className="bg-muted/50 px-2 py-1 rounded text-primary font-mono text-xs block">
+                HHI = s₁² + s₂² + s₃² + ... + sₙ² (where s is the market share percentage)
+              </code>
+            </div>
+            <div>
+              <span className="text-xs font-bold uppercase text-muted-foreground block mb-1">Top Contributors in Your Market</span>
+              <ul className="space-y-1 font-mono text-xs text-foreground/80 bg-muted/20 p-3 rounded">
+                <li>{leader.brand}: ({Number(leader.revenue_share).toFixed(1)}%)² = {leaderContribution.toFixed(1)}</li>
+                {second && <li>{second.brand}: ({Number(second.revenue_share).toFixed(1)}%)² = {secondContribution.toFixed(1)}</li>}
+                <li className="text-muted-foreground italic">...plus remaining brands</li>
+                <li className="pt-1 mt-1 border-t border-border/50 text-primary font-bold">Total HHI = {hhi.toLocaleString()}</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        {/* Section 3: What This Means */}
+        <div className="border border-border/50 rounded-lg overflow-hidden">
+          <div className="bg-muted/30 px-4 py-2 border-b border-border/50"><h4 className="font-bold text-foreground">What This Means (HHI Scale)</h4></div>
+          <div className="p-0 bg-card">
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className="border-b border-border/50 bg-muted/10">
+                  <th className="p-3 font-bold">HHI Range</th>
+                  <th className="p-3 font-bold">Market Type</th>
+                  <th className="p-3 font-bold">Competition Level</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr className={`border-b border-border/10 ${hhi < 1500 ? 'bg-primary/10 font-medium' : ''}`}>
+                  <td className="p-3">0 - 1,500</td>
+                  <td className="p-3 text-emerald-500">Highly Fragmented</td>
+                  <td className="p-3">Intense. Many small players. Easy entry.</td>
+                </tr>
+                <tr className={`border-b border-border/10 ${hhi >= 1500 && hhi <= 2500 ? 'bg-primary/10 font-medium' : ''}`}>
+                  <td className="p-3">1,500 - 2,500</td>
+                  <td className="p-3 text-amber-500">Moderately Concentrated</td>
+                  <td className="p-3">Moderate. A few established leaders emerging.</td>
+                </tr>
+                <tr className={`border-b border-border/10 ${hhi > 2500 && hhi <= 4000 ? 'bg-primary/10 font-medium' : ''}`}>
+                  <td className="p-3">2,500 - 4,000</td>
+                  <td className="p-3 text-orange-500">Highly Concentrated</td>
+                  <td className="p-3">Low. Dominated by a few major players. Hard entry.</td>
+                </tr>
+                <tr className={`${hhi > 4000 ? 'bg-primary/10 font-medium' : ''}`}>
+                  <td className="p-3">4,000+</td>
+                  <td className="p-3 text-danger">Monopolistic</td>
+                  <td className="p-3">Minimal. One or two giants control the market.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Section 4 & 5: What We Found & Interpretation */}
+        <div className="grid grid-cols-2 gap-4">
+          <div className="border border-border/50 rounded-lg p-4 bg-card">
+            <h4 className="font-bold text-foreground mb-3 pb-2 border-b border-border/50">What We Found</h4>
+            <ul className="space-y-2">
+              <li className="flex justify-between"><span className="text-muted-foreground">Market Leader Share:</span> <span className="font-bold">{Number(leader.revenue_share).toFixed(1)}%</span></li>
+              <li className="flex justify-between"><span className="text-muted-foreground">Top 5 Brands Share:</span> <span className="font-bold">{top5Share.toFixed(1)}%</span></li>
+              <li className="flex justify-between"><span className="text-muted-foreground">Active Brands:</span> <span className="font-bold">{totalBrands.toLocaleString()}</span></li>
+            </ul>
+          </div>
+          <div className="border border-border/50 rounded-lg p-4 bg-card">
+            <h4 className="font-bold text-foreground mb-3 pb-2 border-b border-border/50">Business Interpretation</h4>
+            <div className="space-y-3">
+              <div>
+                <span className="text-[10px] font-bold uppercase text-primary block mb-1">For New Entrants</span>
+                <p className="text-xs text-foreground/80 leading-relaxed">{newEntrantAdvice}</p>
+              </div>
+              <div>
+                <span className="text-[10px] font-bold uppercase text-primary block mb-1">For Existing Competitors</span>
+                <p className="text-xs text-foreground/80 leading-relaxed">{existingAdvice}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Section 6: Final Conclusion */}
+        <div className="bg-muted/20 p-4 rounded-lg border border-border/50 border-l-4 border-l-primary">
+          <h4 className="font-bold text-primary mb-1">Final Conclusion</h4>
+          <p className="text-foreground/90 font-medium leading-relaxed">{execSummary}</p>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 export default function MarketConcentration() {
+  const [isHHIOpen, setIsHHIOpen] = useState(false);
   const { data, isLoading, isError } = useQuery({
     queryKey: ['market-concentration'],
     queryFn: () => api.getMarketConcentration(50),
@@ -239,8 +381,14 @@ export default function MarketConcentration() {
         </Card>
 
         {/* HHI Concentration Dial */}
-        <Card className="bg-card glass-card border-border/50">
-          <CardContent className="p-8 flex flex-col items-center justify-center text-center h-full">
+        <Card 
+          className="bg-card glass-card border-border/50 cursor-pointer hover:border-primary/50 transition-colors group"
+          onClick={() => setIsHHIOpen(true)}
+        >
+          <CardContent className="p-8 flex flex-col items-center justify-center text-center h-full relative">
+            <div className="absolute top-4 right-4 bg-primary/10 text-primary p-1.5 rounded-md opacity-0 group-hover:opacity-100 transition-opacity">
+              <span className="text-[10px] font-bold uppercase tracking-widest">Explain</span>
+            </div>
             <Network className={cn('w-12 h-12 mb-4', hhiColor(hhi))} />
             <h3 className="text-sm font-bold uppercase tracking-widest text-muted-foreground mb-2">Concentration Index</h3>
             <p className={cn('text-5xl font-black mb-2 font-mono', hhiColor(hhi))}>{hhi.toLocaleString()}</p>
@@ -323,6 +471,14 @@ export default function MarketConcentration() {
         </div>
       </section>
 
+      <HHIModal 
+        isOpen={isHHIOpen} 
+        onClose={() => setIsHHIOpen(false)} 
+        hhi={hhi} 
+        topBrands={topBrands} 
+        top5Share={top5Share} 
+        totalBrands={totalBrands} 
+      />
     </motion.div>
   );
 }

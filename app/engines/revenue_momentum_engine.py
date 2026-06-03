@@ -190,10 +190,16 @@ def _segment_block(
     classification_rule: str,
     total_market_revenue: float = 0.0,
     top_5_share: float = 0.0,
+    market_mean: float = 0.0,
+    total_brands: int = 0,
 ) -> Dict[str, Any]:
     singular = " ".join(name.split()[:-1]) if name.endswith("s") else name
     total_revenue = sum(item.get("parent_revenue", 0.0) for item in items)
     total_products = sum(item.get("product_count", 0) for item in items)
+    
+    import statistics
+    quadrant_revenues = [float(item.get("parent_revenue", 0.0)) for item in items]
+    median_revenue = statistics.median(quadrant_revenues) if quadrant_revenues else 0.0
     
     # Generate LLM inputs
     llm_inputs = {
@@ -218,6 +224,10 @@ def _segment_block(
         'growth_drivers': list(set(i.get("primary_engine", "") for i in items[:5])),
         'category_revenue': total_market_revenue,
         'revenue_concentration': top_5_share,
+        'market_mean': market_mean,
+        'total_brands': total_brands,
+        'quadrant_total_revenue': total_revenue,
+        'median_revenue': median_revenue,
     }
     
     llm_insight = generate_quadrant_insight(llm_inputs) if items else "No brands in this segment."
@@ -606,10 +616,10 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
     }
 
     metrics_block = {
-        "market_leaders": _segment_block("Dominant Leaders", market_leaders, [x["evidence"]["source_rows"][0] for x in market_leaders if x["evidence"]["source_rows"]], _CLASSIFICATION_RULE, total_market_revenue, top5_share),
-        "emerging_brands": _segment_block("Growth Challengers", emerging_brands, [x["evidence"]["source_rows"][0] for x in emerging_brands if x["evidence"]["source_rows"]], _CLASSIFICATION_RULE, total_market_revenue, top5_share),
-        "premium_brands": _segment_block("Revenue Heavyweights", premium_brands, [x["evidence"]["source_rows"][0] for x in premium_brands if x["evidence"]["source_rows"]], _CLASSIFICATION_RULE, total_market_revenue, top5_share),
-        "niche_players": _segment_block("Long Tail Players", niche_players, [x["evidence"]["source_rows"][0] for x in niche_players if x["evidence"]["source_rows"]], _CLASSIFICATION_RULE, total_market_revenue, top5_share),
+        "market_leaders": _segment_block("Dominant Leaders", market_leaders, [x["evidence"]["source_rows"][0] for x in market_leaders if x["evidence"]["source_rows"]], _CLASSIFICATION_RULE, total_market_revenue, top5_share, market_mean, total_brands),
+        "emerging_brands": _segment_block("Growth Challengers", emerging_brands, [x["evidence"]["source_rows"][0] for x in emerging_brands if x["evidence"]["source_rows"]], _CLASSIFICATION_RULE, total_market_revenue, top5_share, market_mean, total_brands),
+        "premium_brands": _segment_block("Revenue Heavyweights", premium_brands, [x["evidence"]["source_rows"][0] for x in premium_brands if x["evidence"]["source_rows"]], _CLASSIFICATION_RULE, total_market_revenue, top5_share, market_mean, total_brands),
+        "niche_players": _segment_block("Long Tail Players", niche_players, [x["evidence"]["source_rows"][0] for x in niche_players if x["evidence"]["source_rows"]], _CLASSIFICATION_RULE, total_market_revenue, top5_share, market_mean, total_brands),
     }
 
     trend_chart = {
