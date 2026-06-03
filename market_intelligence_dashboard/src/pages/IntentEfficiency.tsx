@@ -39,11 +39,12 @@ function effColor(score: number): string {
 
 function dotColor(q: string): string {
   switch (q) {
-    case 'Demand Winner':    return '#a855f7';
-    case 'Hidden Gem':       return '#10b981';
-    case 'Friction Keyword': return '#ef4444';
-    case 'Low Priority':     return '#64748b';
-    default:                 return '#94a3b8';
+    case 'Demand Winners':    return '#a855f7';
+    case 'Hidden Gems':       return '#10b981';
+    case 'Friction Keywords': return '#ef4444';
+    case 'Low Priority':      return '#64748b';
+    case 'Monitor':           return '#f59e0b';
+    default:                  return '#94a3b8';
   }
 }
 
@@ -181,9 +182,9 @@ function KeywordsAnalyzedBody({
         <div className="p-4 bg-primary/5 border border-primary/20 rounded-xl">
           <p className="text-xs font-bold text-primary uppercase tracking-wide mb-1">What does "Keywords Analyzed" mean?</p>
           <p className="text-sm leading-relaxed">
-            This is the count of keyword rows from the Magnet dataset that passed all validation checks.
-            Each valid row represents one Keyword Phrase with a positive Search Volume and a parseable Keyword Sales value.
-            All revenue efficiency and demand metrics are calculated only from these valid rows.
+            This is the number of valid Magnet keyword rows after removing blank keywords and invalid search-volume rows.
+            All revenue efficiency and demand metrics are calculated from these valid rows.
+            Segment thresholds are computed as the 60th and 40th percentiles of the demand and efficiency distributions within this specific dataset.
           </p>
         </div>
       </div>
@@ -193,7 +194,11 @@ function KeywordsAnalyzedBody({
 
 // ─── Modal body: High Revenue Potential Keywords ──────────────────────────────
 
-function HighRevenueBody({ count, items, totalN }: { count: number; items: any[]; totalN: number }) {
+function HighRevenueBody({ count, items, totalN, thresholds }: { count: number; items: any[]; totalN: number; thresholds: any }) {
+  const highDemand = thresholds?.high_demand_cutoff ?? 60;
+  const highEff    = thresholds?.high_eff_cutoff    ?? 60;
+  const method     = thresholds?.method ?? 'dataset-relative 60th percentile quantiles';
+
   const cols: Column<any>[] = [
     { header: 'Keyword', accessorKey: 'keyword', cell: r => <span className="font-medium text-sm">{r.keyword || '—'}</span> },
     { header: 'Search Volume', accessorKey: 'search_volume', cell: r => <span className="font-mono text-sm">{fmtVol(r.search_volume)}</span> },
@@ -201,7 +206,7 @@ function HighRevenueBody({ count, items, totalN }: { count: number; items: any[]
     { header: 'Revenue / 1K', accessorKey: 'revenue_per_1000_searches', cell: r => <span className="font-mono text-sm">{formatRev1k(r.revenue_per_1000_searches)}</span> },
     { header: 'Efficiency Index', accessorKey: 'efficiency_score', cell: r => <span className={cn('font-mono text-sm font-bold', effColor(r.efficiency_score ?? 0))}>{(r.efficiency_score ?? 0).toFixed(1)}</span> },
     { header: 'Demand Pct', accessorKey: 'demand_percentile', cell: r => <span className="font-mono text-sm">{(r.demand_percentile ?? 0).toFixed(1)}</span> },
-    { header: 'Segment', accessorKey: 'quadrant', cell: r => <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ color: dotColor(r.quadrant), backgroundColor: dotColor(r.quadrant) + '22' }}>{r.segment ?? r.quadrant}</span> },
+    { header: 'Segment', accessorKey: 'quadrant', cell: r => <span className="text-xs px-2 py-0.5 rounded-full font-medium" style={{ color: dotColor(r.quadrant ?? r.segment), backgroundColor: dotColor(r.quadrant ?? r.segment) + '22' }}>{r.segment ?? r.quadrant}</span> },
   ];
 
   const top = items.length > 0 ? items[0] : null;
@@ -209,14 +214,17 @@ function HighRevenueBody({ count, items, totalN }: { count: number; items: any[]
   return (
     <div className="space-y-5">
       <div className="grid grid-cols-2 gap-3">
-        <div className="p-4 bg-emerald-500/10 border border-emerald-500/20 rounded-xl">
+        <div className="p-4 bg-purple-500/10 border border-purple-500/20 rounded-xl">
           <p className="text-xs text-muted-foreground">Count</p>
-          <p className="text-2xl font-black font-mono text-emerald-500 mt-1">{fmtVol(count)}</p>
+          <p className="text-2xl font-black font-mono text-purple-500 mt-1">{fmtVol(count)}</p>
           <p className="text-xs text-muted-foreground mt-1">{totalN > 0 ? ((count / totalN) * 100).toFixed(1) : 0}% of keywords analyzed</p>
         </div>
         <div className="p-4 border border-border rounded-xl">
-          <p className="text-xs text-muted-foreground">Segment Rule</p>
-          <p className="text-xs font-mono mt-2 leading-relaxed">Demand Percentile ≥ 60<br/>AND Revenue Efficiency Index ≥ 60</p>
+          <p className="text-xs text-muted-foreground">Segment Rule (this dataset)</p>
+          <p className="text-xs font-mono mt-2 leading-relaxed">
+            Demand Percentile ≥ {highDemand.toFixed(1)}<br/>
+            AND Efficiency Index ≥ {highEff.toFixed(1)}
+          </p>
         </div>
       </div>
       <div className="space-y-2">
@@ -229,7 +237,8 @@ function HighRevenueBody({ count, items, totalN }: { count: number; items: any[]
           <p className="text-xs font-mono bg-muted/20 rounded p-2">
             Demand Percentile = percentile_rank(Search Volume) × 100<br/>
             Revenue / 1K = Keyword Sales / Search Volume × 1000<br/>
-            Revenue Efficiency Index = percentile_rank(Revenue / 1K) × 100
+            Efficiency Index = winsorized_percentile_rank(Revenue / 1K) × 100<br/>
+            Threshold method: {method}
           </p>
         </div>
       </div>
@@ -240,16 +249,68 @@ function HighRevenueBody({ count, items, totalN }: { count: number; items: any[]
             Keyword: {top.keyword}<br/>
             Search Volume: {fmtVol(top.search_volume)} → Demand Percentile = {(top.demand_percentile ?? 0).toFixed(1)}<br/>
             Keyword Sales: {formatRev1k(top.keyword_revenue ?? top.revenue)} → Revenue / 1K = {formatRev1k(top.revenue_per_1000_searches)} → Efficiency Index = {(top.efficiency_score ?? 0).toFixed(1)}<br/>
-            Both ≥ 60 → Demand Winner ✓
+            Demand ≥ {highDemand.toFixed(1)} AND Efficiency ≥ {highEff.toFixed(1)} → Demand Winners ✓
           </p>
         </div>
       )}
       {items.length > 0 && (
         <div>
           <p className="text-xs font-bold text-muted-foreground uppercase tracking-wide mb-2">
+            Keywords ({fmtVol(count)} total — showing {Math.min(items.length, 300)})
+          </p>
+          <DataTable columns={cols} data={items.slice(0, 300)} pageSize={15} searchable />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Generic segment body (Hidden Gems, Low Priority, Monitor) ────────────────
+
+function SegmentBody({ segmentName, color, bg, count, items, totalN, thresholds, definition, insight }: {
+  segmentName: string; color: string; bg: string;
+  count: number; items: any[]; totalN: number;
+  thresholds: any; definition: string; insight: string;
+}) {
+  const cols: Column<any>[] = [
+    { header: 'Keyword', accessorKey: 'keyword', cell: r => <span className="font-medium text-sm">{r.keyword || '—'}</span> },
+    { header: 'Search Volume', accessorKey: 'search_volume', cell: r => <span className="font-mono text-sm">{fmtVol(r.search_volume)}</span> },
+    { header: 'Revenue / 1K', accessorKey: 'revenue_per_1000_searches', cell: r => <span className="font-mono text-sm">{formatRev1k(r.revenue_per_1000_searches)}</span> },
+    { header: 'Efficiency Index', accessorKey: 'efficiency_score', cell: r => <span className={cn('font-mono text-sm font-bold', effColor(r.efficiency_score ?? 0))}>{(r.efficiency_score ?? 0).toFixed(1)}</span> },
+    { header: 'Demand Pct', accessorKey: 'demand_percentile', cell: r => <span className="font-mono text-sm">{(r.demand_percentile ?? 0).toFixed(1)}</span> },
+  ];
+
+  return (
+    <div className="space-y-5">
+      <div className="grid grid-cols-2 gap-3">
+        <div className={cn('p-4 rounded-xl border', bg)}>
+          <p className="text-xs text-muted-foreground">Count</p>
+          <p className={cn('text-2xl font-black font-mono mt-1', color)}>{fmtVol(count)}</p>
+          <p className="text-xs text-muted-foreground mt-1">{totalN > 0 ? ((count / totalN) * 100).toFixed(1) : 0}% of keywords analyzed</p>
+        </div>
+        <div className="p-4 border border-border rounded-xl">
+          <p className="text-xs text-muted-foreground">Segment Rule (this dataset)</p>
+          <p className="text-xs font-mono mt-2 leading-relaxed">{definition}</p>
+        </div>
+      </div>
+      {count === 0 && (
+        <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-xl">
+          <p className="text-xs font-bold text-amber-600 mb-1">Empty Segment</p>
+          <p className="text-xs text-muted-foreground">
+            No keywords fall into this segment because the dataset has very narrow efficiency variance or insufficient demand distribution at the current dataset-relative thresholds.
+          </p>
+        </div>
+      )}
+      <div className="p-3 bg-primary/5 border border-primary/20 rounded-xl">
+        <p className="text-xs font-bold text-primary mb-1">{segmentName} Insight</p>
+        <p className="text-sm">{insight}</p>
+      </div>
+      {items.length > 0 && (
+        <div>
+          <p className="text-xs font-bold text-muted-foreground uppercase tracking-wide mb-2">
             Keywords ({fmtVol(count)} total — showing {Math.min(items.length, 200)})
           </p>
-          <DataTable columns={cols} data={items.slice(0, 200)} pageSize={10} searchable />
+          <DataTable columns={cols} data={items.slice(0, 200)} pageSize={15} searchable />
         </div>
       )}
     </div>
@@ -258,20 +319,24 @@ function HighRevenueBody({ count, items, totalN }: { count: number; items: any[]
 
 // ─── Modal body: Friction Keywords ───────────────────────────────────────────
 
-function FrictionKeywordsBody({ count, items, clusters, totalN }: {
-  count: number; items: any[]; clusters: any[]; totalN: number;
+function FrictionKeywordsBody({ count, items, clusters, totalN, thresholds }: {
+  count: number; items: any[]; clusters: any[]; totalN: number; thresholds: any;
 }) {
+  const highDemand = thresholds?.high_demand_cutoff ?? 60;
+  const lowEff     = thresholds?.low_eff_cutoff     ?? 40;
+  const method     = thresholds?.method ?? 'dataset-relative quantile thresholds';
+  const bench      = thresholds?.benchmark_rps_1k_p75 ?? null;
+
   const cols: Column<any>[] = [
     { header: 'Keyword', accessorKey: 'keyword', cell: r => <span className="font-medium text-sm">{r.keyword || '—'}</span> },
     { header: 'Search Volume', accessorKey: 'search_volume', cell: r => <span className="font-mono text-sm">{fmtVol(r.search_volume)}</span> },
-    { header: 'Keyword Sales', accessorKey: 'keyword_revenue', cell: r => <span className="font-mono text-sm">{formatRev1k(r.keyword_revenue ?? r.revenue)}</span> },
     { header: 'Revenue / 1K', accessorKey: 'revenue_per_1000_searches', cell: r => <span className="font-mono text-sm">{formatRev1k(r.revenue_per_1000_searches)}</span> },
     { header: 'Efficiency Index', accessorKey: 'efficiency_score', cell: r => <span className={cn('font-mono text-sm font-bold', effColor(r.efficiency_score ?? 0))}>{(r.efficiency_score ?? 0).toFixed(1)}</span> },
     { header: 'Demand Pct', accessorKey: 'demand_percentile', cell: r => <span className="font-mono text-sm">{(r.demand_percentile ?? 0).toFixed(1)}</span> },
+    { header: 'Est. Leakage', accessorKey: 'estimated_revenue_leakage', cell: r => <span className="font-mono text-sm text-red-500">{formatRev1k(r.estimated_revenue_leakage ?? r.recoverable_revenue)}</span> },
   ];
 
   const top = items.length > 0 ? items[0] : null;
-  const displayData = items.length > 0 ? items : (clusters ?? []);
 
   return (
     <div className="space-y-5">
@@ -282,8 +347,11 @@ function FrictionKeywordsBody({ count, items, clusters, totalN }: {
           <p className="text-xs text-muted-foreground mt-1">{totalN > 0 ? ((count / totalN) * 100).toFixed(1) : 0}% of keywords analyzed</p>
         </div>
         <div className="p-4 border border-border rounded-xl">
-          <p className="text-xs text-muted-foreground">Segment Rule</p>
-          <p className="text-xs font-mono mt-2 leading-relaxed">Demand Percentile ≥ 60<br/>AND Revenue Efficiency Index &lt; 40</p>
+          <p className="text-xs text-muted-foreground">Segment Rule (this dataset)</p>
+          <p className="text-xs font-mono mt-2 leading-relaxed">
+            Demand Percentile ≥ {highDemand.toFixed(1)}<br/>
+            AND Efficiency Index ≤ {lowEff.toFixed(1)}
+          </p>
         </div>
       </div>
       <div className="space-y-2">
@@ -291,28 +359,45 @@ function FrictionKeywordsBody({ count, items, clusters, totalN }: {
           <p className="text-xs font-bold text-muted-foreground uppercase tracking-wide mb-1">Source</p>
           <p className="text-xs">Magnet Keyword Dataset · Columns: Keyword Phrase, Search Volume, Keyword Sales</p>
         </div>
+        <div>
+          <p className="text-xs font-bold text-muted-foreground uppercase tracking-wide mb-1">Formula</p>
+          <p className="text-xs font-mono bg-muted/20 rounded p-2">
+            Demand Percentile = percentile_rank(Search Volume) × 100<br/>
+            Efficiency Index = winsorized_percentile_rank(Revenue / 1K) × 100<br/>
+            Threshold method: {method}<br/>
+            {bench != null && `Benchmark Revenue/1K (p75) = ${formatRev1k(bench)}`}
+          </p>
+        </div>
         <p className="text-xs text-muted-foreground bg-muted/20 rounded p-2 leading-relaxed">
-          Friction keywords have high search demand but low revenue efficiency compared to the 75th-percentile benchmark.
-          They attract significant search traffic but convert poorly into Keyword Sales relative to peers.
+          Friction keywords attract high search demand but convert poorly into revenue relative to dataset peers.
+          They represent missed revenue opportunities.
         </p>
       </div>
+      {count === 0 && (
+        <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-xl">
+          <p className="text-xs font-bold text-amber-600 mb-1">Empty Segment</p>
+          <p className="text-xs text-muted-foreground">
+            No keywords fall into this segment because the dataset has very narrow efficiency variance. All keywords score similarly on the efficiency dimension, making it impossible to identify a clear low-efficiency/high-demand group at the current thresholds (demand ≥ {highDemand.toFixed(1)}, efficiency ≤ {lowEff.toFixed(1)}).
+          </p>
+        </div>
+      )}
       {top && (
         <div className="p-3 bg-muted/20 rounded-xl">
           <p className="text-xs font-bold text-muted-foreground uppercase tracking-wide mb-1">Example</p>
           <p className="text-xs font-mono leading-relaxed">
             Keyword: {top.keyword}<br/>
-            Demand Percentile = {(top.demand_percentile ?? 0).toFixed(1)} (≥ 60 ✓)<br/>
-            Revenue Efficiency Index = {(top.efficiency_score ?? 0).toFixed(1)} (&lt; 40 ✓)<br/>
-            → Friction Keyword
+            Demand Percentile = {(top.demand_percentile ?? 0).toFixed(1)} (≥ {highDemand.toFixed(1)} ✓)<br/>
+            Revenue Efficiency Index = {(top.efficiency_score ?? 0).toFixed(1)} (≤ {lowEff.toFixed(1)} ✓)<br/>
+            → Friction Keywords
           </p>
         </div>
       )}
-      {displayData.length > 0 && (
+      {items.length > 0 && (
         <div>
           <p className="text-xs font-bold text-muted-foreground uppercase tracking-wide mb-2">
-            Friction Keywords ({fmtVol(count)} total — showing {Math.min(displayData.length, 200)})
+            Friction Keywords ({fmtVol(count)} total — showing {Math.min(items.length, 300)})
           </p>
-          <DataTable columns={cols} data={displayData.slice(0, 200)} pageSize={10} searchable />
+          <DataTable columns={cols} data={items.slice(0, 300)} pageSize={15} searchable />
         </div>
       )}
     </div>
@@ -490,14 +575,17 @@ function KeywordDetailBody({ kw }: { kw: any }) {
 
 type ModalState =
   | { kind: 'keywords-analyzed'; total: number; valid: number; excluded: number; reason: string }
-  | { kind: 'high-revenue'; count: number; items: any[]; totalN: number }
-  | { kind: 'friction-kw'; count: number; items: any[]; clusters: any[]; totalN: number }
+  | { kind: 'high-revenue'; count: number; items: any[]; totalN: number; thresholds: any }
+  | { kind: 'hidden-gems'; count: number; items: any[]; totalN: number; thresholds: any }
+  | { kind: 'friction-kw'; count: number; items: any[]; clusters: any[]; totalN: number; thresholds: any }
+  | { kind: 'low-priority'; count: number; items: any[]; totalN: number; thresholds: any }
+  | { kind: 'monitor'; count: number; items: any[]; totalN: number; thresholds: any }
   | { kind: 'cluster'; cluster: any }
   | { kind: 'keyword'; kw: any }
   | null;
 
 export default function IntentEfficiency() {
-  const [activeFilter, setActiveFilter] = useState<'all' | 'demand' | 'friction' | 'hidden' | 'low'>('all');
+  const [activeFilter, setActiveFilter] = useState<'all' | 'demand' | 'friction' | 'hidden' | 'low' | 'monitor'>('all');
   const [modalState, setModalState] = useState<ModalState>(null);
 
   const { data, isLoading, isError } = useQuery({
@@ -509,69 +597,89 @@ export default function IntentEfficiency() {
   const r = data?.data?.results ?? {};
   const validation = data?.data?.validation ?? {};
 
-  // Summary cards — check both top-level and nested keyword_conversion paths
-  const kc = r.keyword_conversion ?? {};
-  const summaryCards = r.summary_cards ?? kc.summary_cards ?? {};
-
   // Row counts for Keywords Analyzed popup
   const totalRaw: number = validation.rows_before_cleaning ?? r.total_keywords_analysed ?? 0;
   const validRows: number = r.total_keywords_analysed ?? 0;
   const excludedRows: number = validation.rows_skipped ?? (totalRaw - validRows);
   const excludedReason = 'Rows are excluded if Keyword Phrase is blank, Search Volume is missing or non-positive, or Keyword Sales is missing or non-numeric.';
 
-  // Keyword rows for matrix + Keyword Rows table (individual, never clustered)
-  const allKeywordRows: any[] = r.keyword_rows ?? kc.keyword_rows ?? r.all_keywords ?? [];
+  // Dataset-relative thresholds from backend
+  const segThresholds = r.segment_thresholds ?? {};
+  const highDemandCutoff: number = segThresholds.high_demand_cutoff ?? 60;
+  const lowDemandCutoff:  number = segThresholds.low_demand_cutoff  ?? 40;
+  const highEffCutoff:    number = segThresholds.high_eff_cutoff    ?? 60;
+  const lowEffCutoff:     number = segThresholds.low_eff_cutoff     ?? 40;
+  const scatterSampled: boolean  = segThresholds.scatter_sampled    ?? false;
+  const scatterSampleSize: number = segThresholds.scatter_sample_size ?? 300;
 
-  // Friction clusters for the friction table
-  const frictionClusters: any[] = r.friction_rows ?? kc.friction_rows ?? [];
+  const kc = r.keyword_conversion ?? {};
+  // Use all_keywords (capped 300) for scatter/table; use segment-specific arrays for segment details
+  const rawRows: any[] = r.keyword_rows ?? r.all_keywords ?? [];
+  const scatterRows: any[] = r.scatter_data ?? rawRows;
 
-  // Matrix scatter data
-  const matrix = r.matrix ?? kc.matrix ?? {};
-  const scatterRaw: any[] = matrix.points ?? r.scatter_data ?? [];
-  const segCounts = matrix.segment_counts ?? r.quadrant_summary ?? {};
+  // Segment counts from full-dataset calculation (backend)
+  const qs = r.quadrant_summary ?? r.matrix?.segment_counts ?? {};
+  const segCounts = {
+    demand_winners:    qs.demand_winners    ?? 0,
+    hidden_gems:       qs.hidden_gems       ?? 0,
+    friction_keywords: qs.friction_keywords ?? 0,
+    low_priority:      qs.low_priority      ?? 0,
+    monitor:           qs.monitor           ?? 0,
+  };
 
-  // Summary card content
-  const highRevCount: number = summaryCards.high_revenue_potential?.count ?? r.high_intent_count ?? 0;
-  const highRevItems: any[] = summaryCards.high_revenue_potential?.items ?? r.demand_winners ?? [];
-  const frictionCount: number = summaryCards.friction_keywords?.count ?? r.friction_count ?? 0;
-  const frictionItems: any[] = summaryCards.friction_keywords?.items ?? [];
-  const frictionClusterItems: any[] = summaryCards.friction_keywords?.clusters ?? frictionClusters;
+  // Pre-segmented items from backend (full dataset, not sampled)
+  const demandWinnersItems: any[] = r.summary_cards?.high_revenue_potential?.items
+    ?? r.high_intent_keywords_full
+    ?? r.demand_winners
+    ?? rawRows.filter((k: any) => k.segment === 'Demand Winners' || k.quadrant === 'Demand Winners');
 
-  // ── Scatter data (capped at 300, matrix uses individual rows) ─────────────
-  const scatter = useMemo(() => {
-    const sorted = [...scatterRaw].sort((a, b) => (b.search_volume ?? 0) - (a.search_volume ?? 0));
-    return sorted.slice(0, 300);
-  }, [scatterRaw]);
+  const hiddenGemsItems: any[] = r.hidden_gems
+    ?? rawRows.filter((k: any) => k.segment === 'Hidden Gems' || k.quadrant === 'Hidden Gems');
+
+  const frictionItems: any[] = r.summary_cards?.friction_keywords?.items
+    ?? r.friction_keywords_full
+    ?? r.friction_keywords
+    ?? rawRows.filter((k: any) => k.segment === 'Friction Keywords' || k.quadrant === 'Friction Keywords');
+
+  const lowPriorityItems: any[] = rawRows.filter(
+    (k: any) => k.segment === 'Low Priority' || k.quadrant === 'Low Priority'
+  );
+
+  const monitorItems: any[] = rawRows.filter(
+    (k: any) => k.segment === 'Monitor' || k.quadrant === 'Monitor'
+  );
+
+  // Friction clusters from backend (already properly clustered)
+  const frictionClusters: any[] = r.summary_cards?.friction_keywords?.clusters
+    ?? r.friction_rows
+    ?? [];
+
+  const highRevCount   = segCounts.demand_winners;
+  const frictionCount  = segCounts.friction_keywords;
+
+  // ── Scatter data (already sampled by backend) ─────────────
+  const scatter = useMemo(() => scatterRows.slice(0, 300), [scatterRows]);
 
   const displayScatter = useMemo(() => {
     if (activeFilter === 'all') return scatter;
     const segMap: Record<string, string> = {
-      demand: 'Demand Winner', friction: 'Friction Keyword',
-      hidden: 'Hidden Gem', low: 'Low Priority',
+      demand: 'Demand Winners', friction: 'Friction Keywords',
+      hidden: 'Hidden Gems', low: 'Low Priority', monitor: 'Monitor',
     };
     const seg = segMap[activeFilter];
-    return scatter.filter(pt => pt.quadrant === seg);
+    return scatter.filter((pt: any) => pt.segment === seg || pt.quadrant === seg);
   }, [scatter, activeFilter]);
 
-  // ── Filtered keyword rows (for the Keyword Rows table) ───────────────────
+  // ── Filtered keyword rows ───────────────────────────────────
   const filteredRows = useMemo(() => {
-    if (activeFilter === 'all') return allKeywordRows;
+    if (activeFilter === 'all') return rawRows;
     const segMap: Record<string, string> = {
-      demand: 'Demand Winner', friction: 'Friction Keyword',
-      hidden: 'Hidden Gem', low: 'Low Priority',
+      demand: 'Demand Winners', friction: 'Friction Keywords',
+      hidden: 'Hidden Gems', low: 'Low Priority', monitor: 'Monitor',
     };
     const seg = segMap[activeFilter];
-    return allKeywordRows.filter(r => (r.segment ?? r.quadrant) === seg);
-  }, [allKeywordRows, activeFilter]);
-
-  // ── Friction clusters sorted by estimated gap desc ────────────────────────
-  const frictionSorted = useMemo(() =>
-    [...frictionClusters].sort((a, b) =>
-      (b.estimated_revenue_leakage ?? b.estimated_revenue_gap ?? b.recoverable_revenue ?? 0) -
-      (a.estimated_revenue_leakage ?? a.estimated_revenue_gap ?? a.recoverable_revenue ?? 0)
-    ),
-    [frictionClusters]
-  );
+    return rawRows.filter((rr: any) => rr.segment === seg || rr.quadrant === seg);
+  }, [rawRows, activeFilter]);
 
   // ── Column defs ───────────────────────────────────────────────────────────
   const kwCols: Column<any>[] = [
@@ -644,8 +752,11 @@ export default function IntentEfficiency() {
     if (!modalState) return '';
     switch (modalState.kind) {
       case 'keywords-analyzed': return 'Keywords Analyzed';
-      case 'high-revenue': return `High Revenue Potential Keywords — ${fmtVol(modalState.count)}`;
+      case 'high-revenue': return `Demand Winners — ${fmtVol(modalState.count)}`;
+      case 'hidden-gems': return `Hidden Gems — ${fmtVol(modalState.count)}`;
       case 'friction-kw': return `Friction Keywords — ${fmtVol(modalState.count)}`;
+      case 'low-priority': return `Low Priority Keywords — ${fmtVol(modalState.count)}`;
+      case 'monitor': return `Monitor Keywords — ${fmtVol(modalState.count)}`;
       case 'cluster': {
         const lbl = modalState.cluster.cluster_label || modalState.cluster.keyword || '—';
         const cnt = modalState.cluster.keyword_count || 1;
@@ -658,8 +769,8 @@ export default function IntentEfficiency() {
 
   // ── Render ────────────────────────────────────────────────────────────────
   const activeFilterLabel: Record<string, string> = {
-    demand: 'Demand Winner', friction: 'Friction Keyword',
-    hidden: 'Hidden Gem', low: 'Low Priority',
+    demand: 'Demand Winners', friction: 'Friction Keywords',
+    hidden: 'Hidden Gems', low: 'Low Priority', monitor: 'Monitor',
   };
 
   return (
@@ -688,6 +799,20 @@ export default function IntentEfficiency() {
             count={modalState.count}
             items={modalState.items}
             totalN={modalState.totalN}
+            thresholds={modalState.thresholds}
+          />
+        )}
+        {modalState?.kind === 'hidden-gems' && (
+          <SegmentBody
+            segmentName="Hidden Gems"
+            color="text-emerald-500"
+            bg="bg-emerald-500/10 border-emerald-500/20"
+            count={modalState.count}
+            items={modalState.items}
+            totalN={modalState.totalN}
+            thresholds={modalState.thresholds}
+            definition={`Demand Percentile < ${modalState.thresholds?.high_demand_cutoff?.toFixed(1) ?? '60'} AND Efficiency Index ≥ ${modalState.thresholds?.high_eff_cutoff?.toFixed(1) ?? '60'}`}
+            insight="Low demand volume but high revenue efficiency — these keywords over-convert relative to their traffic. Consider testing them more aggressively."
           />
         )}
         {modalState?.kind === 'friction-kw' && (
@@ -696,6 +821,33 @@ export default function IntentEfficiency() {
             items={modalState.items}
             clusters={modalState.clusters}
             totalN={modalState.totalN}
+            thresholds={modalState.thresholds}
+          />
+        )}
+        {modalState?.kind === 'low-priority' && (
+          <SegmentBody
+            segmentName="Low Priority"
+            color="text-slate-500"
+            bg="bg-slate-500/10 border-slate-500/20"
+            count={modalState.count}
+            items={modalState.items}
+            totalN={modalState.totalN}
+            thresholds={modalState.thresholds}
+            definition={`Demand Percentile ≤ ${modalState.thresholds?.low_demand_cutoff?.toFixed(1) ?? '40'} AND Efficiency Index ≤ ${modalState.thresholds?.low_eff_cutoff?.toFixed(1) ?? '40'}`}
+            insight="Low search demand and low revenue efficiency. These keywords are unlikely to drive meaningful results without significant improvements."
+          />
+        )}
+        {modalState?.kind === 'monitor' && (
+          <SegmentBody
+            segmentName="Monitor"
+            color="text-amber-500"
+            bg="bg-amber-500/10 border-amber-500/20"
+            count={modalState.count}
+            items={modalState.items}
+            totalN={modalState.totalN}
+            thresholds={modalState.thresholds}
+            definition="Keywords that do not clearly fit the four major segments — mid-range demand and efficiency scores."
+            insight="These keywords are in a transitional zone. Monitor for movement toward Demand Winners or Friction Keywords with additional data."
           />
         )}
         {modalState?.kind === 'cluster' && (
@@ -750,25 +902,43 @@ export default function IntentEfficiency() {
       </div>
 
       {/* ── Summary cards ───────────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
         <KpiCard
-          title="High Revenue Potential Keywords"
+          title="Demand Winners"
           value={fmtVol(highRevCount)}
-          sub="Demand ≥ 60 AND Efficiency ≥ 60 · Click to view keywords"
+          sub={`Demand ≥ ${highDemandCutoff.toFixed(1)} AND Efficiency ≥ ${highEffCutoff.toFixed(1)} · Click to view`}
+          icon={<TrendingUp className="w-4 h-4" />}
+          color="text-purple-500"
+          bg="bg-purple-500/10 border-purple-500/30"
+          onClick={() => setModalState({
+            kind: 'high-revenue',
+            count: highRevCount,
+            items: demandWinnersItems,
+            totalN: validRows,
+            thresholds: segThresholds,
+          })}
+        />
+        <KpiCard
+          title="Hidden Gems"
+          value={fmtVol(segCounts.hidden_gems)}
+          sub={`Demand < ${highDemandCutoff.toFixed(1)} AND Efficiency ≥ ${highEffCutoff.toFixed(1)} · Click to view`}
           icon={<TrendingUp className="w-4 h-4" />}
           color="text-emerald-500"
           bg="bg-emerald-500/10 border-emerald-500/30"
           onClick={() => setModalState({
-            kind: 'high-revenue',
-            count: highRevCount,
-            items: highRevItems,
+            kind: 'hidden-gems',
+            count: segCounts.hidden_gems,
+            items: hiddenGemsItems,
             totalN: validRows,
+            thresholds: segThresholds,
           })}
         />
         <KpiCard
           title="Friction Keywords"
           value={fmtVol(frictionCount)}
-          sub="Demand ≥ 60 AND Efficiency < 40 · Click to view keywords"
+          sub={frictionCount === 0
+            ? 'No friction keywords — data may have narrow efficiency variance'
+            : `Demand ≥ ${highDemandCutoff.toFixed(1)} AND Efficiency ≤ ${lowEffCutoff.toFixed(1)} · Click to view`}
           icon={<TrendingDown className="w-4 h-4" />}
           color="text-red-500"
           bg="bg-red-500/10 border-red-500/30"
@@ -776,8 +946,26 @@ export default function IntentEfficiency() {
             kind: 'friction-kw',
             count: frictionCount,
             items: frictionItems,
-            clusters: frictionClusterItems,
+            clusters: frictionClusters,
             totalN: validRows,
+            thresholds: segThresholds,
+          })}
+        />
+        <KpiCard
+          title="Low Priority"
+          value={fmtVol(segCounts.low_priority)}
+          sub={segCounts.low_priority === 0
+            ? 'No low-priority keywords — data may have narrow variance'
+            : `Demand ≤ ${lowDemandCutoff.toFixed(1)} AND Efficiency ≤ ${lowEffCutoff.toFixed(1)} · Click to view`}
+          icon={<TrendingDown className="w-4 h-4" />}
+          color="text-slate-500"
+          bg="bg-slate-500/10 border-slate-500/30"
+          onClick={() => setModalState({
+            kind: 'low-priority',
+            count: segCounts.low_priority,
+            items: lowPriorityItems,
+            totalN: validRows,
+            thresholds: segThresholds,
           })}
         />
       </div>
@@ -808,34 +996,35 @@ export default function IntentEfficiency() {
               />
               <YAxis
                 type="number" dataKey="efficiency_score" domain={[0, 100]} name="Revenue Efficiency Index"
-                label={{ value: 'Revenue Efficiency Index', angle: -90, position: 'insideLeft', offset: -28, style: { textAnchor: 'middle' }, fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
+                label={{ value: 'Revenue Efficiency Index (winsorized)', angle: -90, position: 'insideLeft', offset: -28, style: { textAnchor: 'middle' }, fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
                 tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false}
               />
-              <ReferenceLine x={60} stroke="hsl(var(--border))" strokeDasharray="4 4" strokeWidth={1.5} />
-              <ReferenceLine y={60} stroke="hsl(var(--border))" strokeDasharray="4 4" strokeWidth={1.5} />
-              <ReferenceLine x={40} stroke="hsl(var(--border))" strokeDasharray="2 6" strokeWidth={1} opacity={0.4} />
-              <ReferenceLine y={40} stroke="hsl(var(--border))" strokeDasharray="2 6" strokeWidth={1} opacity={0.4} />
+              <ReferenceLine x={highDemandCutoff} stroke="hsl(var(--border))" strokeDasharray="4 4" strokeWidth={1.5} />
+              <ReferenceLine y={highEffCutoff} stroke="hsl(var(--border))" strokeDasharray="4 4" strokeWidth={1.5} />
+              <ReferenceLine x={lowDemandCutoff} stroke="hsl(var(--border))" strokeDasharray="2 6" strokeWidth={1} opacity={0.4} />
+              <ReferenceLine y={lowEffCutoff} stroke="hsl(var(--border))" strokeDasharray="2 6" strokeWidth={1} opacity={0.4} />
               <ReTooltip content={<ScatterTip />} />
               <Scatter
                 data={displayScatter}
                 isAnimationActive={false}
                 onClick={(e: any) => { if (e?.payload) setModalState({ kind: 'keyword', kw: e.payload }); }}
               >
-                {displayScatter.map((pt, i) => (
-                  <Cell key={i} fill={dotColor(pt.quadrant)} fillOpacity={0.8} className="cursor-pointer" />
+                {displayScatter.map((pt: any, i: number) => (
+                  <Cell key={i} fill={dotColor(pt.quadrant ?? pt.segment)} fillOpacity={0.8} className="cursor-pointer" />
                 ))}
               </Scatter>
             </ScatterChart>
           </ResponsiveContainer>
 
           {/* Segment legend / filter buttons */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4 pt-4 border-t border-border/50">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mt-4 pt-4 border-t border-border/50">
             {([
-              { key: 'demand',  label: 'Demand Winners',   count: segCounts.demand_winners   ?? 0 },
-              { key: 'hidden',  label: 'Hidden Gems',      count: segCounts.hidden_gems      ?? 0 },
-              { key: 'friction',label: 'Friction Keywords',count: segCounts.friction_keywords ?? 0 },
-              { key: 'low',     label: 'Low Priority',     count: segCounts.low_priority     ?? 0 },
-            ] as const).map(({ key, label, count }) => (
+              { key: 'demand',  label: 'Demand Winners',    count: segCounts.demand_winners   ?? 0, color: '#a855f7' },
+              { key: 'hidden',  label: 'Hidden Gems',       count: segCounts.hidden_gems      ?? 0, color: '#10b981' },
+              { key: 'friction',label: 'Friction Keywords', count: segCounts.friction_keywords ?? 0, color: '#ef4444' },
+              { key: 'low',     label: 'Low Priority',      count: segCounts.low_priority     ?? 0, color: '#64748b' },
+              { key: 'monitor', label: 'Monitor',           count: segCounts.monitor          ?? 0, color: '#f59e0b' },
+            ] as const).map(({ key, label, count, color }) => (
               <button
                 key={key}
                 type="button"
@@ -845,7 +1034,7 @@ export default function IntentEfficiency() {
                   activeFilter === key ? 'border-primary/50 bg-primary/5' : 'border-border hover:bg-muted/50',
                 )}
               >
-                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: dotColor(activeFilterLabel[key] ?? label) }} />
+                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: color }} />
                 <div>
                   <p className="text-xs font-semibold leading-tight">{label}</p>
                   <p className="text-xs text-muted-foreground font-mono">{fmtVol(count)}</p>
@@ -853,6 +1042,14 @@ export default function IntentEfficiency() {
               </button>
             ))}
           </div>
+          {scatterSampled && (
+            <p className="text-xs text-muted-foreground mt-2 text-center">
+              Chart shows {fmtVol(scatterSampleSize)} sampled keywords from {fmtVol(validRows)} analyzed. Segment counts above reflect the full dataset.
+            </p>
+          )}
+          <p className="text-xs text-muted-foreground mt-1 text-center font-mono">
+            Thresholds (dataset-relative): high demand ≥ {highDemandCutoff.toFixed(1)} · low demand ≤ {lowDemandCutoff.toFixed(1)} · high efficiency ≥ {highEffCutoff.toFixed(1)} · low efficiency ≤ {lowEffCutoff.toFixed(1)}
+          </p>
         </CardContent>
       </Card>
 
@@ -862,8 +1059,10 @@ export default function IntentEfficiency() {
           <CardTitle className="text-base">Keyword Rows</CardTitle>
           <CardDescription>
             {activeFilter !== 'all'
-              ? `Filtered: ${activeFilterLabel[activeFilter]} — ${fmtVol(filteredRows.length)} keywords`
-              : `All ${fmtVol(allKeywordRows.length)} analyzed keywords`
+              ? `Filtered: ${activeFilterLabel[activeFilter as keyof typeof activeFilterLabel] ?? activeFilter} — ${fmtVol(filteredRows.length)} keywords shown`
+              : scatterSampled
+                ? `Showing ${fmtVol(rawRows.length)} sampled keywords from ${fmtVol(validRows)} analyzed keywords`
+                : `All ${fmtVol(rawRows.length)} analyzed keywords`
             } · Click any row for full calculation evidence.
           </CardDescription>
         </CardHeader>
@@ -871,7 +1070,7 @@ export default function IntentEfficiency() {
           <DataTable
             columns={kwCols}
             data={filteredRows}
-            pageSize={10}
+            pageSize={15}
             searchable
             onRowClick={row => setModalState({ kind: 'keyword', kw: row })}
           />
@@ -886,19 +1085,23 @@ export default function IntentEfficiency() {
             Conversion Leaks / Friction Clusters
           </CardTitle>
           <CardDescription>
-            Friction keywords (Demand ≥ 60 AND Efficiency &lt; 40) grouped into clusters by phrase similarity.
-            Broken fragments are merged into their parent cluster.
-            Sorted by estimated revenue gap descending.
-            {frictionSorted.length > 0 && ` ${fmtVol(frictionSorted.length)} cluster${frictionSorted.length === 1 ? '' : 's'} · ${fmtVol(frictionCount)} individual keywords.`}
+            Friction keywords grouped by phrase similarity using Levenshtein distance clustering.
+            Singular/plural variants are merged. Sorted by estimated revenue gap descending.
+            {frictionClusters.length > 0 && ` ${fmtVol(frictionClusters.length)} cluster${frictionClusters.length === 1 ? '' : 's'} · ${fmtVol(frictionCount)} individual keywords.`}
+            {frictionCount === 0 && ` No friction keywords found — segment is empty because the dataset has narrow efficiency variance (thresholds: demand ≥ ${highDemandCutoff.toFixed(1)}, efficiency ≤ ${lowEffCutoff.toFixed(1)}).`}
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {frictionSorted.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-6 text-center">No friction keywords found in this dataset.</p>
+          {frictionClusters.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-6 text-center">
+              {frictionCount === 0
+                ? `No friction keywords found in this dataset. The dataset efficiency values are too uniform to produce a Friction Keywords segment at the current thresholds (demand ≥ ${highDemandCutoff.toFixed(1)}, efficiency ≤ ${lowEffCutoff.toFixed(1)}).`
+                : 'No clusters formed from friction keywords.'}
+            </p>
           ) : (
             <DataTable
               columns={frictionCols}
-              data={frictionSorted}
+              data={frictionClusters}
               pageSize={10}
               searchable
               onRowClick={row => setModalState({ kind: 'cluster', cluster: row })}
