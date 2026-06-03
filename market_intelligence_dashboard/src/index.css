@@ -148,4 +148,67 @@
   ::-webkit-scrollbar-thumb:hover {
     @apply bg-muted-foreground/50;
   }
+
+  /* UNIFIED TYPOGRAPHY SYSTEM */
+  .text-page-title {
+    @apply text-[32px] font-bold leading-tight tracking-tight text-foreground;
+  }
+  .text-section-title {
+    @apply text-[24px] font-semibold leading-snug tracking-tight text-foreground;
+  }
+  .text-card-title {
+    @apply text-[16px] font-semibold leading-snug text-foreground;
+  }
+  .text-metric-value {
+    @apply text-[32px] font-bold leading-tight text-foreground tracking-tight;
+  }
+  .text-body {
+    @apply text-[14px] leading-relaxed text-foreground/90;
+  }
+  .text-helper {
+    @apply text-[12px] leading-normal text-muted-foreground;
+  }
+  .text-table {
+    @apply text-[13px] leading-normal text-foreground/90;
+  }
+  .text-modal {
+    @apply text-[14px] leading-relaxed text-foreground/90;
+  }
+
+  /* ENTERPRISE PDF EXPORT STYLES */
+  @media print {
+    body {
+      background: white !important;
+      color: black !important;
+      font-size: 11pt !important;
+    }
+    
+    .no-print, header, nav, button, .sidebar {
+      display: none !important;
+    }
+
+    .print-only {
+      display: block !important;
+    }
+
+    .glass, .glass-card, .bg-card, .bg-primary\/5 {
+      background: white !important;
+      border: 1px solid #e2e8f0 !important;
+      box-shadow: none !important;
+      break-inside: avoid;
+    }
+
+    h1 { font-size: 24pt !important; }
+    h2 { font-size: 18pt !important; border-bottom: 2px solid #333; padding-bottom: 4px; margin-top: 24px;}
+    
+    .text-metric-value {
+      font-size: 20pt !important;
+      color: #000 !important;
+    }
+
+    @page {
+      margin: 1.5cm;
+      size: A4 portrait;
+    }
+  }
 }

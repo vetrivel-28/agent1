@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../services/api';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/Card';
@@ -8,6 +8,10 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import Papa from 'papaparse';
 import JSZip from 'jszip';
+import { AnalysisProgressModal } from '../components/modals/AnalysisProgressModal';
+import type { AnalysisStatus } from '../components/modals/AnalysisProgressModal';
+import { historyStorage } from '../services/historyStorage';
+import { PageHeader } from '../components/layout/PageHeader';
 
 type DetectedFile = {
   file: File;
@@ -43,9 +47,18 @@ export default function DatasetUpload() {
         message: 'Datasets uploaded successfully.',
         details: data
       });
-      queryClient.invalidateQueries();
-      setTimeout(() => navigate('/overview'), 2500);
-      setTimeout(() => setDetectedDatasets([]), 3000);
+      
+      const blackboxRows = detectedDatasets.find(d => d.type === 'blackbox')?.rows || 0;
+      const magnetRows = detectedDatasets.find(d => d.type === 'magnet')?.rows || 0;
+      
+      historyStorage.saveEntry({
+        runDate: Date.now(),
+        datasetName: detectedDatasets[0]?.file.name || 'Analysis Package',
+        keywords: magnetRows,
+        products: blackboxRows,
+        brands: 0,
+      });
+      // Navigation is now handled by the modal success effect
     },
     onError: (error: any) => {
       const errList = error.response?.data?.errors;
@@ -59,6 +72,31 @@ export default function DatasetUpload() {
       });
     }
   });
+
+  const handleModalClose = () => {
+    if (uploadStatus.type === 'success') {
+      queryClient.invalidateQueries();
+      navigate('/overview');
+      setTimeout(() => setDetectedDatasets([]), 500);
+    }
+    setUploadStatus({ type: 'idle', message: '' });
+  };
+
+  useEffect(() => {
+    if (uploadStatus.type === 'success') {
+      const timer = setTimeout(() => {
+        handleModalClose();
+      }, 1000);
+      return () => clearTimeout(timer);
+    }
+  }, [uploadStatus.type]);
+
+  const getModalStatus = (): AnalysisStatus => {
+    if (mutation.isPending) return 'analyzing';
+    if (uploadStatus.type === 'success') return 'success';
+    if (uploadStatus.type === 'error') return 'error';
+    return 'idle';
+  };
 
   const parseCSV = (file: File): Promise<DetectedFile> => {
     return new Promise((resolve) => {
@@ -219,14 +257,13 @@ export default function DatasetUpload() {
     <motion.div 
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className="space-y-6 max-w-6xl mx-auto"
+      className="max-w-6xl mx-auto"
     >
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">Dataset Upload</h1>
-        <p className="text-muted-foreground mt-1 text-lg">
-          Upload your Market Intelligence Package. The system will automatically detect and schema-map your files.
-        </p>
-      </div>
+      <PageHeader 
+        badge="Data Ingestion"
+        title="Dataset Upload"
+        description="Upload your Market Intelligence Package. The system will automatically detect and schema-map your Blackbox and Magnet files."
+      />
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 space-y-6">
@@ -377,33 +414,14 @@ export default function DatasetUpload() {
               </div>
 
               <div className="mt-6 pt-6 border-t flex flex-col gap-4">
-                {uploadStatus.type === 'error' && (
-                  <div className="p-4 bg-danger/10 border border-danger/20 rounded-xl flex items-start gap-3">
-                    <AlertCircle className="w-5 h-5 text-danger mt-0.5 shrink-0" />
-                    <div>
-                      <h4 className="font-semibold text-danger">Upload Failed</h4>
-                      <p className="text-sm text-danger/80 mt-1">{uploadStatus.message}</p>
-                    </div>
-                  </div>
-                )}
-
                 <Button 
                   size="lg" 
                   onClick={handleUpload}
                   disabled={!isValid || mutation.isPending}
                   className="w-full text-base"
                 >
-                  {mutation.isPending ? (
-                    <>
-                      <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-                      Uploading & Processing...
-                    </>
-                  ) : (
-                    <>
-                      <BarChart3 className="w-5 h-5 mr-2" />
-                      Start Analysis
-                    </>
-                  )}
+                  <BarChart3 className="w-5 h-5 mr-2" />
+                  Start Analysis
                 </Button>
                 {!isValid && detectedDatasets.length > 0 && (
                   <p className="text-xs text-center text-danger font-medium">
@@ -479,6 +497,13 @@ export default function DatasetUpload() {
           </Card>
         </div>
       </div>
+
+      <AnalysisProgressModal
+        status={getModalStatus()}
+        errorMessage={uploadStatus.message}
+        onRetry={handleUpload}
+        onClose={handleModalClose}
+      />
     </motion.div>
   );
 }

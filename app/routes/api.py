@@ -499,8 +499,7 @@ def whitespace_opportunities(top_n: int = 15):
     cached = analysis_cache.get_engine("whitespace")
     if cached:
         return format_response(cached)
-    kc_df = registry.get_keyword_classification()
-    result = whitespace_engine.run(magnet_df, None, keyword_classification_df=kc_df, top_n=top_n)
+    result = whitespace_engine.run(magnet_df, None, top_n=top_n)
     logger.info(
         f"Whitespace Opportunity complete — status={result['status']}, "
         f"score={result.get('results', {}).get('overall_whitespace_score', 'n/a')}"
@@ -585,8 +584,7 @@ def revenue_opportunity_segment_keywords(segment_name: str):
             "keywords": [],
             "message": "Magnet keyword dataset not uploaded or is empty.",
         }
-    kc_df = registry.get_keyword_classification()
-    return whitespace_engine.get_revenue_segment_keywords(magnet_df, segment_name, kc_df)
+    return whitespace_engine.get_revenue_segment_keywords(magnet_df, segment_name)
 
 
 @router.post(

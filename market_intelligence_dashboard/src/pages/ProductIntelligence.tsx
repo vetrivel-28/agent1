@@ -9,6 +9,7 @@ import SubstituteIntelligence from './SubstituteIntelligence';
 import ComplementIntelligence from './ComplementIntelligence';
 import BundleOpportunities from './BundleOpportunities';
 import { cn } from '../utils/cn';
+import { PageHeader } from '../components/layout/PageHeader';
 
 const tabs = [
   { id: 'competitors', label: 'Direct Competitors', icon: Users, component: DirectCompetitors },
@@ -23,17 +24,13 @@ export default function ProductIntelligence() {
   const ActiveComponent = tabs.find(t => t.id === activeTab)?.component || DirectCompetitors;
 
   return (
-    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-8 pb-10">
+    <div className="pb-16 max-w-[1400px] mx-auto px-6">
       
-      {/* Header */}
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 border-b border-border/50 pb-6">
-        <div>
-          <h1 className="text-4xl font-bold tracking-tight text-foreground">Product Intelligence</h1>
-          <p className="text-muted-foreground mt-2 max-w-2xl text-lg">
-            Complete ecosystem analysis: competitors, substitutes, complements, and bundle opportunities.
-          </p>
-        </div>
-      </div>
+      <PageHeader 
+        badge="Ecosystem Intelligence"
+        title="Product Intelligence"
+        description="Complete ecosystem analysis: competitors, substitutes, complements, and bundle opportunities."
+      />
 
       {/* Tabs */}
       <div className="flex flex-wrap gap-2 border-b border-border/50 pb-px">
@@ -58,10 +55,10 @@ export default function ProductIntelligence() {
       </div>
 
       {/* Content */}
-      <div className="pt-2">
+      <div className="pt-6">
         <ActiveComponent />
       </div>
 
-    </motion.div>
+    </div>
   );
 }

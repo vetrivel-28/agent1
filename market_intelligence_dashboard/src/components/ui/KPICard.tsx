@@ -1,88 +1,61 @@
 import React from 'react';
-import { Card, CardContent } from './Card';
-import { cn } from '../../utils/cn';
-import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { Card, CardContent } from './Card';
+import { MetricExplainer } from './MetricExplainer';
 
 interface KPICardProps {
-  title: string;
+  label: string;
   value: string | number;
-  trend?: number; // percentage change
-  trendLabel?: string;
-  subtitle?: string;
-  subtitleClassName?: string;
-  icon: React.ReactNode;
-  status?: 'success' | 'warning' | 'danger' | 'neutral';
-  loading?: boolean;
-  trendIsPercent?: boolean;
+  implication?: string;
+  confidence?: number;
+  icon?: React.ElementType;
+  colorClass?: string; // e.g. "emerald-500", "primary"
+  onClick?: () => void;
 }
 
-export function KPICard({
-  title,
-  value,
-  trend,
-  trendLabel,
-  subtitle,
-  subtitleClassName,
-  icon,
-  status = 'neutral',
-  loading,
-  trendIsPercent = true,
-}: KPICardProps) {
-  const statusColors = {
-    success: 'text-success bg-success/10 border-success/20',
-    warning: 'text-warning bg-warning/10 border-warning/20',
-    danger: 'text-danger bg-danger/10 border-danger/20',
-    neutral: 'text-primary bg-primary/10 border-primary/20',
-  };
-
-  const TrendIcon = !trend ? Minus : trend > 0 ? TrendingUp : TrendingDown;
-  const trendColor = !trend ? 'text-muted-foreground' : trend > 0 ? 'text-success' : 'text-danger';
-
+export function KPICard({ label, value, implication, confidence, icon: Icon, colorClass = "primary", onClick }: KPICardProps) {
+  // Use CSS variables or Tailwind classes based on the colorClass string
+  // If colorClass is "emerald-500", it needs to map to text-emerald-500 bg-emerald-500/10 etc.
+  // For safety with Tailwind arbitrary strings, we will use inline style or map generic classes.
+  
+  // A generic fallback pattern using the primary theme
   return (
-    <Card className="hover-card-anim relative overflow-hidden group">
-      <CardContent className="p-6">
-        <div className="flex justify-between items-start">
-          <div className="space-y-4">
-            <p className="text-sm font-medium text-muted-foreground">{title}</p>
-            
-            {loading ? (
-              <div className="h-8 w-24 bg-muted animate-pulse rounded-md" />
-            ) : (
-              <motion.h3 
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="text-3xl font-bold tracking-tight"
-              >
-                {value}
-              </motion.h3>
-            )}
-
-            {!loading && subtitle && (
-              <p className={cn('text-sm font-semibold', subtitleClassName)}>{subtitle}</p>
-            )}
-
-            {!loading && trend !== undefined && (
-              <motion.div 
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ delay: 0.1 }}
-                className="flex items-center gap-2 mt-2"
-              >
-                <div className={cn("flex items-center text-xs font-medium", trendColor)}>
-                  <TrendIcon className="w-3 h-3 mr-1" />
-                  {Math.abs(trend).toFixed(1)}{trendIsPercent ? '%' : ''}
+    <MetricExplainer metricId={label}>
+      <motion.div whileHover={onClick ? { y: -2 } : {}} className="h-full" onClick={onClick}>
+        <Card className={`border-border/50 bg-card hover:border-primary/40 transition-colors h-full flex flex-col ${onClick ? 'cursor-pointer ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2' : ''}`}>
+          <CardContent className="p-6 flex flex-col h-full space-y-4">
+            <div className="flex items-center gap-3">
+              {Icon && (
+                <div className="p-2 bg-primary/10 rounded-lg">
+                  <Icon className="w-4 h-4 text-primary" />
                 </div>
-                {trendLabel && <span className="text-xs text-muted-foreground">{trendLabel}</span>}
-              </motion.div>
+              )}
+              <h3 className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">{label}</h3>
+            </div>
+            
+            <div>
+              <p className="text-metric-value">{value}</p>
+              <p className="text-xs text-foreground/70 mt-2 font-medium leading-relaxed">
+                {implication}
+              </p>
+            </div>
+
+            {confidence !== undefined && (
+              <div className="mt-auto pt-4 border-t border-border/40 w-full">
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
+                    Confidence
+                  </span>
+                  <span className="text-[10px] font-bold text-primary">{confidence}%</span>
+                </div>
+                <div className="mt-1.5 w-full h-1 bg-muted rounded-full overflow-hidden">
+                  <div className="h-full bg-primary" style={{ width: `${confidence}%` }} />
+                </div>
+              </div>
             )}
-          </div>
-          
-          <div className={cn("p-3 rounded-xl border transition-colors group-hover:scale-110", statusColors[status])}>
-            {icon}
-          </div>
-        </div>
-      </CardContent>
-    </Card>
+          </CardContent>
+        </Card>
+      </motion.div>
+    </MetricExplainer>
   );
 }

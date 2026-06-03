@@ -101,6 +101,18 @@ def _normalize_keyword_text(keyword: Any) -> Optional[str]:
     return normalized if normalized != "" else None
 
 
+_SPONSORED_ASINS_CANDIDATES = [
+    "Sponsored ASINs", "sponsored asins", "Sponsored Asins", "Sponsored ASIN count",
+]
+
+
+def _normalize_keyword_text(keyword: Any) -> Optional[str]:
+    if keyword is None or pd.isna(keyword):
+        return None
+    normalized = re.sub(r"\s+", " ", str(keyword).strip()).lower()
+    return normalized if normalized != "" else None
+
+
 def _build_keyword_classification_map(kc_df: Optional[pd.DataFrame]) -> Dict[str, str]:
     if kc_df is None or kc_df.empty:
         return {}
@@ -178,9 +190,12 @@ def _build_segment_keyword_record(row: Dict[str, Any], keyword_col: str) -> Dict
         "keyword_sales": int(row.get("_sales_clean", 0)) if pd.notna(row.get("_sales_clean")) else 0,
         "conversion_efficiency_score": _compute_conversion_efficiency_score(click_share, conversion_share),
         "opportunity_score": _format_score(float(row.get("_opp_score", 0))) if row.get("_opp_score") is not None else None,
-        "classification": str(row.get("_opp_label", "")) if row.get("_opp_label") is not None else "",
+        "opportunity_label": str(row.get("_opp_label", "")) if row.get("_opp_label") is not None else "",
         "source_dataset": "Magnet",
         "title_density": float(row.get("_density_clean")) if pd.notna(row.get("_density_clean")) else None,
+        "vol_pct": _format_score(float(row.get("_vol_pct", 0))) if row.get("_vol_pct") is not None else None,
+        "sales_pct": _format_score(float(row.get("_sales_pct", 0))) if row.get("_sales_pct") is not None else None,
+        "inv_comp_pct": _format_score(float(row.get("_inv_comp_pct", 0))) if row.get("_inv_comp_pct") is not None else None,
     }
 
 
@@ -218,30 +233,31 @@ def _opportunity_driver(
     vol_pct: float,
     sales_pct: float,
     inv_competition_pct: float,
+    accessibility_pct: float = 0.0,
+    has_revenue: bool = True,
+    has_comp: bool = True,
+    has_density: bool = True,
 ) -> str:
     HIGH = 70.0
     drivers = []
     if vol_pct >= HIGH:
         drivers.append("High Demand")
-    if sales_pct >= HIGH:
+    if has_revenue and sales_pct >= HIGH:
         drivers.append("High Revenue")
-    if inv_competition_pct >= HIGH:
+    if has_comp and inv_competition_pct >= HIGH:
         drivers.append("Low Competition")
-    if vol_pct >= HIGH and sales_pct >= HIGH:
-        return "High Demand + High Revenue"
-    if vol_pct >= HIGH and inv_competition_pct >= HIGH:
-        return "High Demand + Low Competition"
-    if sales_pct >= HIGH and inv_competition_pct >= HIGH:
-        return "Revenue Gap"
+    if has_density and accessibility_pct >= HIGH:
+        drivers.append("High Accessibility")
+
     if not drivers:
-        best = max(
-            [
-                ("High Demand", vol_pct),
-                ("High Revenue", sales_pct),
-                ("Low Competition", inv_competition_pct),
-            ],
-            key=lambda x: x[1],
-        )
+        candidates = [("High Demand", vol_pct)]
+        if has_revenue:
+            candidates.append(("High Revenue", sales_pct))
+        if has_comp:
+            candidates.append(("Low Competition", inv_competition_pct))
+        if has_density:
+            candidates.append(("High Accessibility", accessibility_pct))
+        best = max(candidates, key=lambda x: x[1])
         return best[0]
     return " + ".join(drivers[:2])
 
@@ -293,8 +309,7 @@ def _percentile_rank(series: pd.Series) -> pd.Series:
 
 def run(
     magnet_df: Optional[pd.DataFrame],
-    blackbox_df: Optional[pd.DataFrame],
-    keyword_classification_df: Optional[pd.DataFrame] = None,
+    blackbox_df: Optional[pd.DataFrame] = None,
     top_n: int = 15,
 ) -> Dict[str, Any]:
     t0 = time.time()
@@ -313,6 +328,7 @@ def run(
     title_density_col = find_column(magnet_df, _TITLE_DENSITY_CANDIDATES)
     sales_col         = find_column(magnet_df, _SALES_CANDIDATES)
     comp_col          = find_column(magnet_df, _COMP_CANDIDATES)
+    sponsored_col     = find_column(magnet_df, _SPONSORED_ASINS_CANDIDATES)
     trend_col         = find_column(magnet_df, _TREND_CANDIDATES)
     iq_col            = find_column(magnet_df, _IQ_CANDIDATES)
 
@@ -341,14 +357,13 @@ def run(
     df["_density_clean"] = process_col(title_density_col)
     df["_sales_clean"]   = process_col(sales_col)
     df["_comp_clean"]    = process_col(comp_col)
+    df["_sponsored_clean"] = process_col(sponsored_col)
     df["_trend_clean"]   = process_col(trend_col)
     df["_iq_clean"]      = process_col(iq_col)
     df["_click_clean"]   = process_col(click_share_col)
     df["_conv_clean"]    = process_col(conv_share_col)
     df["_price_clean"]   = process_col(price_col)
     df["_revenue_clean"] = process_col(revenue_col)
-
-    classification_map = _build_keyword_classification_map(keyword_classification_df)
 
     df_valid = df.dropna(subset=["_vol_clean"]).copy()
     rows_before  = len(df)
@@ -364,38 +379,70 @@ def run(
 
     n = rows_after
 
-    title_density_reliable = (
-        title_density_col is not None
-        and _assess_title_density_reliability(df_valid["_density_clean"])
-    )
-    df_valid["_comp_density"] = _build_competition_density(df_valid, title_density_reliable)
+    # Check which components exist to rebalance weights:
+    # Demand = 35%, Revenue = 30%, Low Competition = 25%, Accessibility = 10%
+    has_demand = search_vol_col is not None and df_valid["_vol_clean"].notna().sum() > 0 and not df_valid["_vol_clean"].eq(0).all()
+    has_revenue = sales_col is not None and df_valid["_sales_clean"].notna().sum() > 0 and not df_valid["_sales_clean"].eq(0).all()
+    has_comp_col = comp_col is not None and df_valid["_comp_clean"].notna().sum() > 0 and not df_valid["_comp_clean"].eq(0).all()
+    has_sponsored_col = sponsored_col is not None and df_valid["_sponsored_clean"].notna().sum() > 0 and not df_valid["_sponsored_clean"].eq(0).all()
+    has_comp = has_comp_col or has_sponsored_col
+    has_density = title_density_col is not None and df_valid["_density_clean"].notna().sum() > 0 and not df_valid["_density_clean"].eq(0).all()
+
+    weights = {
+        "demand": 0.35 if has_demand else 0.0,
+        "revenue": 0.30 if has_revenue else 0.0,
+        "competition": 0.25 if has_comp else 0.0,
+        "accessibility": 0.10 if has_density else 0.0
+    }
+    
+    sum_w = sum(weights.values())
+    if sum_w > 0:
+        scaled_w = {k: v / sum_w for k, v in weights.items()}
+    else:
+        scaled_w = {"demand": 1.0, "revenue": 0.0, "competition": 0.0, "accessibility": 0.0}
 
     # ── Percentile ranks (0-100) ─────────────────────────────────────────────
+    # 1. Demand Score
     df_valid["_vol_pct"] = _percentile_rank(df_valid["_vol_clean"])
-    sales_series = df_valid["_sales_clean"].fillna(0)
+    
+    # 2. Revenue Score
     df_valid["_sales_pct"] = 0.0
-    sales_positive_mask = sales_series > 0
-    if int(sales_positive_mask.sum()) >= 2:
-        df_valid.loc[sales_positive_mask, "_sales_pct"] = _percentile_rank(
-            sales_series[sales_positive_mask]
-        )
-    df_valid["_comp_pct"] = _percentile_rank(df_valid["_comp_density"])
-    # Lower competition density percentile → better opportunity
-    df_valid["_inv_comp_pct"] = 100.0 - df_valid["_comp_pct"]
+    if has_revenue:
+        df_valid["_sales_pct"] = _percentile_rank(df_valid["_sales_clean"])
+        
+    # 3. Low Competition Score
+    df_valid["_inv_comp_pct"] = 0.0
+    df_valid["_comp_pct"] = 50.0
+    if has_comp:
+        if has_comp_col and has_sponsored_col:
+            # Low Competition Score = inverse percentile of Competing Products / Sponsored ASINs
+            comp_ratio = df_valid["_comp_clean"] / df_valid["_sponsored_clean"].replace(0, 1)
+            df_valid["_comp_pct"] = _percentile_rank(comp_ratio)
+        elif has_comp_col:
+            df_valid["_comp_pct"] = _percentile_rank(df_valid["_comp_clean"])
+        else:
+            df_valid["_comp_pct"] = _percentile_rank(df_valid["_sponsored_clean"])
+        df_valid["_inv_comp_pct"] = 100.0 - df_valid["_comp_pct"]
+            
+    # 4. Accessibility Score
+    df_valid["_accessibility_pct"] = 0.0
+    if has_density:
+        df_valid["_accessibility_pct"] = 100.0 - _percentile_rank(df_valid["_density_clean"])
 
     # ── Opportunity Score: percentile-rank weighted composite (full 0–100) ───
     composite_signal = (
-        0.40 * df_valid["_vol_pct"].fillna(0.0)
-        + 0.35 * df_valid["_sales_pct"].fillna(0.0)
-        + 0.25 * df_valid["_inv_comp_pct"].fillna(0.0)
+        scaled_w["demand"] * df_valid["_vol_pct"].fillna(0.0)
+        + scaled_w["revenue"] * df_valid["_sales_pct"].fillna(0.0)
+        + scaled_w["competition"] * df_valid["_inv_comp_pct"].fillna(0.0)
+        + scaled_w["accessibility"] * df_valid["_accessibility_pct"].fillna(0.0)
     )
     df_valid["_opp_score"] = _percentile_rank(composite_signal)
 
     # ── Classification & driver ──────────────────────────────────────────────
     df_valid["_opp_label"] = [_classify_opportunity(x) for x in df_valid["_opp_score"]]
     df_valid["_opp_driver"] = [
-        _opportunity_driver(v, s, c)
-        for v, s, c in zip(df_valid["_vol_pct"], df_valid["_sales_pct"], df_valid["_inv_comp_pct"])
+        _opportunity_driver(v, s, c, a, has_revenue=has_revenue, has_comp=has_comp, has_density=has_density)
+        for v, s, c, a in zip(df_valid["_vol_pct"], df_valid["_sales_pct"], df_valid["_inv_comp_pct"], df_valid["_accessibility_pct"])
     ]
 
     # ── Aggregate stats ──────────────────────────────────────────────────────
@@ -467,9 +514,12 @@ def run(
             "opportunity_label": row["_opp_label"],
             "opportunity_driver": row["_opp_driver"],
             "opportunity_score": _format_score(row["_opp_score"]),
+            "vol_pct": _format_score(row["_vol_pct"]) if "_vol_pct" in row else 0.0,
+            "sales_pct": _format_score(row["_sales_pct"]) if "_sales_pct" in row else 0.0,
+            "inv_comp_pct": _format_score(row["_inv_comp_pct"]) if "_inv_comp_pct" in row else 0.0,
         }
         density_val = row["_density_clean"]
-        if title_density_reliable and pd.notna(density_val):
+        if has_density and pd.notna(density_val):
             record["title_density"] = _format_score(density_val)
         else:
             record["title_density"] = None
@@ -482,12 +532,12 @@ def run(
         return record
 
     top_keywords: List[Dict[str, Any]] = [
-        _build_record(row) for _, row in df_sorted.head(top_n).iterrows()
+        _build_record(row) for _, row in df_sorted.iterrows()
     ]
 
     high_search_low_density_keywords: List[Dict[str, Any]] = [
         _build_record(row)
-        for _, row in df_sorted[df_sorted["_opp_score"] >= 65].head(top_n).iterrows()
+        for _, row in df_sorted[df_sorted["_opp_score"] >= 65].iterrows()
     ]
 
     # ── Best opportunity keyword ─────────────────────────────────────────────
@@ -523,8 +573,10 @@ def run(
 
     df_high_extreme = df_valid.loc[high_extreme_mask] if high_extreme_mask.any() else df_sorted.head(0)
     entry_segments, best_entry_cluster, segments_reliable = _build_entry_segments(
-        df_high_extreme, keyword_col, classification_map
+        df_high_extreme, keyword_col
     )
+    
+    bestClusterSeg = next((s for s in entry_segments if s["segment"] == best_entry_cluster), None)
     top_entry_segments = _build_top_entry_segments_analysis(entry_segments)
 
     # ── Insights (segment-first) ─────────────────────────────────────────────
@@ -560,13 +612,16 @@ def run(
         )
 
     # ── Evidence metadata for frontend drawers ──────────────────────────────
-    competition_source = title_density_col if title_density_reliable else comp_col
+    competition_source = (comp_col if has_comp_col else sponsored_col) if has_comp else "None"
     evidence_metadata = {
         "formula": {
             "opportunity_score": (
-                "Opportunity Score = percentile-rank("
-                "Search Volume × 40% + Keyword Sales × 35% + Inverse Competition × 25%"
-                "). Final score = percentile rank of the composite within all valid keywords."
+                f"Opportunity Score = percentile-rank("
+                f"Search Volume × {scaled_w['demand']:.1%} + "
+                f"Keyword Sales × {scaled_w['revenue']:.1%} + "
+                f"Inverse Competition × {scaled_w['competition']:.1%} + "
+                f"Accessibility × {scaled_w['accessibility']:.1%}"
+                f"). Final score = percentile rank of the composite within all valid keywords."
             ),
             "extreme_opportunity": "Opportunity Score ≥ 80 (top tier — highest demand + revenue + accessibility)",
             "high_opportunity": "Opportunity Score ≥ 65 and < 80 (strong but not top tier)",
@@ -575,12 +630,12 @@ def run(
                 "capped at 60% of total measurable category keyword sales."
             ),
         },
-        "source_dataset": "Magnet",
+        "source_dataset": "Magnet Keyword Dataset",
         "columns_used": {
             "search_volume": search_vol_col,
             "keyword_sales": sales_col,
             "competition": competition_source,
-            "title_density": title_density_col if title_density_reliable else None,
+            "title_density": title_density_col if has_density else None,
             "click_share": click_share_col,
             "conversion_share": conv_share_col,
         },
@@ -590,12 +645,13 @@ def run(
         "extreme_threshold": 80,
         "high_threshold": 65,
         "score_weights": {
-            "search_volume_pct": 0.40,
-            "keyword_sales_pct": 0.35,
-            "inv_competition_pct": 0.25,
+            "search_volume_pct": round(scaled_w["demand"] * 100, 1),
+            "keyword_sales_pct": round(scaled_w["revenue"] * 100, 1),
+            "inv_competition_pct": round(scaled_w["competition"] * 100, 1),
+            "accessibility_pct": round(scaled_w["accessibility"] * 100, 1),
         },
         "competition_column_used": competition_source,
-        "title_density_reliable": title_density_reliable,
+        "title_density_reliable": has_density,
         "revenue_signal_source": "Keyword Sales" if sales_col else "Not available",
         "revenue_capped": revenue_capped,
         "revenue_cap_threshold_pct": 60,
@@ -605,6 +661,261 @@ def run(
             if kw.get("opportunity_score", 0) >= 80
         ] or [{k: v for k, v in kw.items() if k in ("keyword", "search_volume", "keyword_sales", "opportunity_score", "opportunity_driver")} for kw in top_keywords[:3]],
     }
+
+    # ── Build the specific whitespace evidence object dictionary ──────────────
+    source_cols_list = [c for c in [search_vol_col, sales_col, comp_col, sponsored_col, title_density_col] if c]
+    
+    # Heatmap evidence list
+    heatmap_evidence = []
+    for seg in entry_segments:
+        heatmap_evidence.append({
+            "source_dataset": "Magnet Keyword Dataset",
+            "source_columns": source_cols_list,
+            "keyword_phrases_used": [k["keyword"] for k in seg["keywords"]][:10],
+            "rows_included": len(seg["keywords"]),
+            "rows_excluded": 0,
+            "plain_english_calculation": f"Aggregation of Opportunity Score (avg={seg['avg_opportunity_score']:.1f}) and Search Volume across {seg['keyword_count']} keywords.",
+            "final_value": {
+                "cluster_label": seg["segment"],
+                "opportunity_score": seg["avg_opportunity_score"],
+                "keyword_count": seg["keyword_count"],
+                "search_volume": seg["mean_search_volume"],
+                "keyword_sales": seg["opportunity_revenue"],
+                "opportunity_revenue_signal": seg["opportunity_revenue"],
+                "competition_accessibility_signal": 100.0 - seg["mean_competition_pct"]
+            },
+            "interpretation": f"Cluster '{seg['segment']}' ranks with average score of {seg['avg_opportunity_score']:.1f}/100 and represents {seg['opportunity_revenue']} units in Magnet keyword sales.",
+            "recommendation": f"Action: {seg['recommended_action']}"
+        })
+
+    # Top opportunity clusters list
+    top_clusters_evidence = []
+    for seg in entry_segments:
+        top_clusters_evidence.append({
+            "source_dataset": "Magnet Keyword Dataset",
+            "source_columns": source_cols_list,
+            "keyword_phrases_used": [k["keyword"] for k in seg["keywords"]][:10],
+            "rows_included": len(seg["keywords"]),
+            "rows_excluded": 0,
+            "plain_english_calculation": f"Cluster Entry Score = (Revenue Score * 40% + Count Score * 25% + Average Score * 25% + Accessibility Score * 10%) resulting in {seg.get('cluster_entry_score', 0.0)}.",
+            "final_value": {
+                "cluster_label": seg["segment"],
+                "keyword_count": seg["keyword_count"],
+                "total_search_volume": seg["mean_search_volume"] * seg["keyword_count"],
+                "total_keyword_sales": seg["opportunity_revenue"],
+                "average_opportunity_score": seg["avg_opportunity_score"],
+                "cluster_entry_score": seg.get("cluster_entry_score", 0.0)
+            },
+            "interpretation": f"Segment '{seg['segment']}' has an entry priority of {seg['recommended_priority']} based on search pattern clustering.",
+            "recommendation": f"Action: {seg['recommended_action']}"
+        })
+
+    # Gap analysis list
+    total_revenue = sum(s["opportunity_revenue"] for s in entry_segments)
+    total_vol     = sum(s["mean_search_volume"] * s["keyword_count"] for s in entry_segments)
+    gap_evidence = []
+    for seg in entry_segments:
+        seg_vol = seg["mean_search_volume"] * seg["keyword_count"]
+        demand_share = total_vol > 0 and (seg_vol / total_vol * 100) or 0.0
+        rev_share    = total_revenue > 0 and (seg["opportunity_revenue"] / total_revenue * 100) or 0.0
+        gap          = demand_share - rev_share
+        gap_evidence.append({
+            "source_dataset": "Magnet Keyword Dataset",
+            "source_columns": [search_vol_col, sales_col] if search_vol_col and sales_col else [],
+            "keyword_phrases_used": [k["keyword"] for k in seg["keywords"]][:10],
+            "rows_included": len(seg["keywords"]),
+            "rows_excluded": 0,
+            "plain_english_calculation": f"Demand Share ({demand_share:.1f}%) minus Revenue Share ({rev_share:.1f}%) equals Gap ({gap:+.1f}%)",
+            "final_value": {
+                "cluster": seg["segment"],
+                "demand_share": demand_share,
+                "revenue_share": rev_share,
+                "gap": gap
+            },
+            "interpretation": f"A gap of {gap:+.1f}% indicates that this segment is " + ("under-monetized relative to its search interest (whitespace opportunity)." if gap > 0 else "converting well and already capturing its demand share."),
+            "recommendation": f"Target this segment with optimized listings to close the +{gap:.1f}% capture gap." if gap > 0 else "Monitor segment, focus resources on larger gaps."
+        })
+
+    # Keywords evidence list
+    kw_evidence_list = []
+    for kw in top_keywords:
+        kw_evidence_list.append({
+            "source_dataset": "Magnet Keyword Dataset",
+            "source_columns": source_cols_list,
+            "keyword_phrases_used": [kw["keyword"]],
+            "rows_included": 1,
+            "rows_excluded": 0,
+            "plain_english_calculation": (
+                f"Opportunity Score = (SV percentile × {scaled_w['demand']:.1%} + Sales percentile × {scaled_w['revenue']:.1%} + "
+                f"Inverse Comp percentile × {scaled_w['competition']:.1%} + Accessibility percentile × {scaled_w['accessibility']:.1%})"
+            ),
+            "final_value": {
+                "keyword_phrase": kw["keyword"],
+                "search_volume": kw["search_volume"],
+                "keyword_sales": kw["keyword_sales"],
+                "opportunity_score": kw["opportunity_score"],
+                "opportunity_tier": kw["opportunity_label"],
+                "opportunity_driver": kw["opportunity_driver"],
+                "cluster": best_entry_cluster
+            },
+            "interpretation": f"Keyword phrase '{kw['keyword']}' scores {kw['opportunity_score']:.1f}/100 and belongs to the {kw['opportunity_label']} tier.",
+            "recommendation": f"Add to active tracking. " + ("Prioritize for catalog launch." if kw["opportunity_score"] >= 80 else "Include in PPC optimization.")
+        })
+
+    whitespace = {
+        "source_dataset": "Magnet Keyword Dataset",
+        "cluster_method": "Magnet keyword phrase clustering",
+        "overall_whitespace_score": {
+            "source_dataset": "Magnet Keyword Dataset",
+            "source_columns": source_cols_list,
+            "keyword_phrases_used": [kw["keyword"] for kw in top_keywords[:10]],
+            "rows_included": rows_after,
+            "rows_excluded": rows_skipped,
+            "plain_english_calculation": (
+                f"Opportunity Score = percentile-rank("
+                f"Search Volume × {scaled_w['demand']:.1%} + "
+                f"Keyword Sales × {scaled_w['revenue']:.1%} + "
+                f"Inverse Competition × {scaled_w['competition']:.1%} + "
+                f"Accessibility × {scaled_w['accessibility']:.1%}"
+                f"). Overall score is the average of these individual keyword scores."
+            ),
+            "final_value": overall_score,
+            "interpretation": (
+                f"The overall whitespace score of {overall_score}/100 indicates a "
+                f"{'strong' if overall_score >= 70 else 'moderate' if overall_score >= 50 else 'low'} "
+                f"opportunity density across the keyword pool."
+            ),
+            "recommendation": "Target clusters with the highest average opportunity score and largest demand-revenue gap."
+        },
+        "extreme_opportunities": {
+            "source_dataset": "Magnet Keyword Dataset",
+            "source_columns": source_cols_list,
+            "keyword_phrases_used": [kw["keyword"] for kw in top_keywords if kw["opportunity_score"] >= 80][:10],
+            "rows_included": rows_after,
+            "rows_excluded": rows_skipped,
+            "plain_english_calculation": "Opportunity Score >= 80",
+            "final_value": extreme_count,
+            "interpretation": f"Found {extreme_count} keywords with extreme opportunity (score >= 80), meaning they score highest on combined demand, sales, and low competition.",
+            "recommendation": "Launch catalog items and target listing optimizations immediately."
+        },
+        "high_opportunities": {
+            "source_dataset": "Magnet Keyword Dataset",
+            "source_columns": source_cols_list,
+            "keyword_phrases_used": [kw["keyword"] for kw in top_keywords if 65 <= kw["opportunity_score"] < 80][:10],
+            "rows_included": rows_after,
+            "rows_excluded": rows_skipped,
+            "plain_english_calculation": "Opportunity Score between 65 and 79",
+            "final_value": high_count,
+            "interpretation": f"Found {high_count} keywords in the high opportunity tier (score 65-79), representing strong secondary entry signals.",
+            "recommendation": "Incorporate these keywords in secondary product pages and search campaigns."
+        },
+        "opportunity_revenue_signal": {
+            "source_dataset": "Magnet Keyword Dataset",
+            "source_columns": [sales_col] if sales_col else [],
+            "keyword_phrases_used": [kw["keyword"] for kw in top_keywords if kw["opportunity_score"] >= 65][:10],
+            "rows_included": rows_after,
+            "rows_excluded": rows_skipped,
+            "plain_english_calculation": (
+                f"Sum of keyword sales for Extreme-tier keywords + 35% of sales for High-tier keywords"
+                f"{', capped at 60% of total category keyword sales' if revenue_capped else ''}."
+            ),
+            "final_value": round(revenue_opportunity_pool, 2),
+            "interpretation": f"Total addressable sales volume from opportunity keywords is {revenue_opportunity_pool:,.0f} units.",
+            "recommendation": "Build catalog coverage for top segments to capture this sales volume."
+        },
+        "best_entry_cluster": {
+            "source_dataset": "Magnet Keyword Dataset",
+            "source_columns": source_cols_list,
+            "keyword_phrases_used": [kw["keyword"] for kw in (bestClusterSeg.get("keywords", []) if bestClusterSeg else [])][:10],
+            "rows_included": rows_after,
+            "rows_excluded": rows_skipped,
+            "plain_english_calculation": "Cluster Entry Score = Revenue Score * 40% + Count Score * 25% + Average Score * 25% + Accessibility Score * 10%",
+            "final_value": best_entry_cluster,
+            "interpretation": f"'{best_entry_cluster}' is selected as the top entry cluster due to its high score of {bestClusterSeg.get('cluster_entry_score', 0.0) if bestClusterSeg else 0.0}.",
+            "recommendation": f"Initiate launch sequences in the '{best_entry_cluster}' niche first."
+        },
+        "segment_intelligence": {
+            "key_finding": {
+                "source_dataset": "Magnet Keyword Dataset",
+                "source_columns": [search_vol_col] if search_vol_col else [],
+                "keyword_phrases_used": [kw["keyword"] for kw in top_keywords[:10]],
+                "rows_included": rows_after,
+                "rows_excluded": rows_skipped,
+                "plain_english_calculation": "Analysis of keyword count and driver patterns across segments.",
+                "final_value": insights[0]["text"] if len(insights) > 0 else "",
+                "interpretation": "Overview of segment concentrations.",
+                "recommendation": "Review segment priorities to sequence launch steps."
+            },
+            "leading_signal": {
+                "source_dataset": "Magnet Keyword Dataset",
+                "source_columns": [sales_col] if sales_col else [],
+                "keyword_phrases_used": [kw["keyword"] for kw in top_keywords[:10]],
+                "rows_included": rows_after,
+                "rows_excluded": rows_skipped,
+                "plain_english_calculation": "Revenue and score comparison across segments.",
+                "final_value": insights[1]["text"] if len(insights) > 1 else "",
+                "interpretation": "Identifies the leading revenue segment.",
+                "recommendation": "Focus initial launch resource on the leading segment."
+            },
+            "market_gap": {
+                "source_dataset": "Magnet Keyword Dataset",
+                "source_columns": [comp_col, sponsored_col, title_density_col],
+                "keyword_phrases_used": [kw["keyword"] for kw in top_keywords[:10]],
+                "rows_included": rows_after,
+                "rows_excluded": rows_skipped,
+                "plain_english_calculation": "Competition intensity and driver evaluation.",
+                "final_value": insights[2]["text"] if len(insights) > 2 else "",
+                "interpretation": "Identifies underserved areas within leading segments.",
+                "recommendation": "Target specific gap themes with customized product listings."
+            },
+            "recommended_entry": {
+                "source_dataset": "Magnet Keyword Dataset",
+                "source_columns": [sales_col] if sales_col else [],
+                "keyword_phrases_used": [kw["keyword"] for kw in top_keywords[:10]],
+                "rows_included": rows_after,
+                "rows_excluded": rows_skipped,
+                "plain_english_calculation": "Revenue capture potential and sequencing logic.",
+                "final_value": insights[3]["text"] if len(insights) > 3 else "",
+                "interpretation": "Suggested entry order sequence.",
+                "recommendation": "Sequence entry first through high-confidence segments, expanding over time."
+            }
+        },
+        "opportunity_heatmap": heatmap_evidence,
+        "top_opportunity_clusters": top_clusters_evidence,
+        "demand_revenue_gap_analysis": gap_evidence,
+        "representative_keywords": kw_evidence_list,
+        "top_opportunity_keywords": kw_evidence_list
+    }
+
+    # ── Validation before return ─────────────────────────────────────────────
+    for kw_list_name, kw_list in [
+        ("top_whitespace_keywords", top_keywords),
+        ("heatmap_keywords", heatmap_keywords),
+        ("high_search_low_density_keywords", high_search_low_density_keywords),
+    ]:
+        for kw in kw_list:
+            for field in ["opportunity_score", "vol_pct", "sales_pct", "inv_comp_pct"]:
+                if field not in kw or kw[field] is None:
+                    logger.warning(
+                        f"Validation Warning: '{field}' missing/null in {kw_list_name} record "
+                        f"for keyword '{kw.get('keyword', 'unknown')}'"
+                    )
+                    kw[field] = 0.0
+
+    for ins in insights:
+        if "category" not in ins or not ins["category"]:
+            logger.warning("Validation Warning: 'category' missing/null in insight record.")
+            ins["category"] = "Key Finding"
+
+    for seg in entry_segments:
+        for kw in seg.get("keywords", []):
+            for field in ["opportunity_score", "vol_pct", "sales_pct", "inv_comp_pct"]:
+                if field not in kw or kw[field] is None:
+                    logger.warning(
+                        f"Validation Warning: '{field}' missing/null in entry_segment '{seg.get('segment')}' keyword record "
+                        f"for keyword '{kw.get('keyword', 'unknown')}'"
+                    )
+                    kw[field] = 0.0
 
     elapsed = round(time.time() - t0, 3)
     logger.info(
@@ -619,17 +930,19 @@ def run(
         "datasets_used": ["magnet"],
         "columns_used": numeric_cols_cleaned,
         "formula_used": (
-            "Opportunity Score = percentile-rank(40%×SearchVolPct + 35%×KeywordSalesPct "
-            "+ 25%×InvCompetitionDensityPct). Competition from title density or competing products."
+            f"Opportunity Score = percentile-rank({scaled_w['demand']:.1%}×SearchVolPct + {scaled_w['revenue']:.1%}×KeywordSalesPct "
+            f"+ {scaled_w['competition']:.1%}×InvCompetitionPct + {scaled_w['accessibility']:.1%}×AccessibilityPct)."
         ),
+        "whitespace": whitespace,
         "results": {
+            "whitespace": whitespace,
             "overall_whitespace_score":         overall_score,
             "total_keywords_analyzed":          n,
             "revenue_opportunity_pool":         round(revenue_opportunity_pool, 2),
             "total_category_keyword_sales":     round(total_category_keyword_sales, 2),
             "revenue_pct_of_category_sales":    revenue_pct_of_category_sales,
             "revenue_pct_of_opportunity_universe": revenue_pct_of_opportunity_universe,
-            "title_density_reliable":           title_density_reliable,
+            "title_density_reliable":           has_density,
             "best_opportunity_keyword":         best_kw,
             "most_common_driver":               most_common_driver,
             "top_whitespace_keywords":          top_keywords,
@@ -706,76 +1019,127 @@ def _recommended_action(priority: str) -> str:
 
 
 def _build_entry_segments(
-    df_opp: pd.DataFrame,
+    df: pd.DataFrame,
     keyword_col: Optional[str],
-    classification_map: Optional[Dict[str, str]] = None,
-    min_cluster_size: int = 3,
+    min_cluster_size: int = 1,
 ) -> tuple:
-    """Aggregate high/extreme opportunity keywords into entry segments."""
-    if df_opp.empty or not keyword_col or keyword_col not in df_opp.columns:
+    """Aggregate keywords into entry segments based on Magnet keyword phrases only."""
+    import re
+    from collections import Counter
+
+    if df.empty or not keyword_col or keyword_col not in df.columns:
         return [], None, False
 
-    segment_col = find_column(df_opp, _SEGMENT_COLUMN_CANDIDATES)
-    classification_map = classification_map or {}
+    stopwords = {
+        "for", "and", "the", "with", "in", "of", "a", "an", "to", "on", "at", "by",
+        "from", "or", "as", "is", "it", "be", "are", "was", "were", "has", "have",
+        "large", "small", "new", "best", "top", "good", "great", "thin", "thick",
+        "pack", "set", "lot", "sale", "buy", "under", "over", "into", "their", "them",
+        "your", "my", "our", "you", "her", "his", "she", "he", "it", "about", "above"
+    }
+
+    def clean_word(w):
+        w = w.lower().strip()
+        if w.endswith("s") and not w.endswith("ss") and len(w) > 3:
+            if w.endswith("ies"):
+                w = w[:-3] + "y"
+            elif w.endswith("es") and w[:-2].endswith(("ch", "sh", "x", "z", "s")):
+                w = w[:-2]
+            else:
+                w = w[:-1]
+        return w
+
+    def normalize_phrase(phrase):
+        phrase = re.sub(r"[^a-zA-Z0-9\s]", "", str(phrase)).lower()
+        words = phrase.split()
+        return " ".join([clean_word(w) for w in words])
+
+    records = df.to_dict("records")
+    keywords = [str(r[keyword_col]).strip() for r in records if pd.notna(r.get(keyword_col))]
+    
+    normalized_kws = [normalize_phrase(kw) for kw in keywords]
+    
+    unigram_counts = Counter()
+    bigram_counts = Counter()
+    trigram_counts = Counter()
+
+    for nkw in normalized_kws:
+        words = nkw.split()
+        if not words:
+            continue
+        for w in words:
+            if w not in stopwords and len(w) > 2:
+                unigram_counts[w] += 1
+        for i in range(len(words) - 1):
+            w1, w2 = words[i], words[i+1]
+            if w1 not in stopwords and w2 not in stopwords:
+                bigram_counts[f"{w1} {w2}"] += 1
+        for i in range(len(words) - 2):
+            w1, w2, w3 = words[i], words[i+1], words[i+2]
+            if w1 not in stopwords and w3 not in stopwords:
+                trigram_counts[f"{w1} {w2} {w3}"] += 1
+
+    # Extract candidate themes
+    MIN_FREQ = 2
+    candidates = []
+    
+    for tri, count in trigram_counts.most_common():
+        if count >= MIN_FREQ:
+            candidates.append((tri, count, 3))
+    for bi, count in bigram_counts.most_common():
+        if count >= MIN_FREQ:
+            is_redundant = False
+            for cand, _, _ in candidates:
+                if bi in cand:
+                    is_redundant = True
+                    break
+            if not is_redundant:
+                candidates.append((bi, count, 2))
+    for uni, count in unigram_counts.most_common():
+        if count >= MIN_FREQ:
+            is_redundant = False
+            for cand, _, _ in candidates:
+                if uni in cand.split():
+                    is_redundant = True
+                    break
+            if not is_redundant:
+                candidates.append((uni, count, 1))
+
+    candidates = sorted(candidates, key=lambda x: (-x[2], -x[1]))
+    candidate_phrases = [c[0] for c in candidates]
 
     buckets: Dict[str, List[Dict[str, Any]]] = {}
-    for row in df_opp.to_dict("records"):
-        normalized_keyword = _normalize_keyword_text(row.get(keyword_col))
-        if not normalized_keyword:
-            continue
-
-        labels = set()
-
-        # From HEAD: Check segment column
-        if segment_col and row.get(segment_col) is not None:
-            label_value = str(row.get(segment_col)).strip()
-            if label_value:
-                labels.add(label_value)
-
-        # From HEAD: Check classification map
-        if normalized_keyword in classification_map:
-            labels.add(classification_map[normalized_keyword])
-
-        # From remote: Match categories
-        rule_labels = get_matching_categories(str(row[keyword_col]))
-        for rl in rule_labels:
-            if rl != "Other":
-                labels.add(rl)
-
-        # Fallbacks if no labels yet
-        if not labels:
-            dyn_label = _assign_dynamic_segment(str(row[keyword_col]))
-            if dyn_label != "General Search Terms":
-                labels.add(dyn_label)
-            elif "Other" in rule_labels:
-                labels.add("Other")
+    for r in records:
+        kw = str(r[keyword_col]).strip()
+        nkw = normalize_phrase(kw)
+        
+        assigned = False
+        for phrase in candidate_phrases:
+            if phrase in nkw:
+                buckets.setdefault(phrase.title(), []).append(r)
+                assigned = True
+                break
+        if not assigned:
+            words_in_nkw = [w for w in nkw.split() if w not in stopwords and len(w) > 2]
+            if words_in_nkw:
+                best_fallback = max(words_in_nkw, key=len).title()
+                buckets.setdefault(best_fallback, []).append(r)
             else:
-                labels.add(dyn_label)
-
-        for label in labels:
-            buckets.setdefault(label, []).append(row)
-
-    merged: Dict[str, List[Dict[str, Any]]] = {}
-    for label, rows in buckets.items():
-        seg_name = label if len(rows) >= min_cluster_size else _derive_cluster_name(rows, keyword_col)
-        base = seg_name
-        suffix = 1
-        while seg_name in merged:
-            seg_name = f"{base} ({suffix})"
-            suffix += 1
-        merged.setdefault(seg_name, []).extend(rows)
+                buckets.setdefault("Other Searches", []).append(r)
 
     segments: List[Dict[str, Any]] = []
-    for label, rows in merged.items():
+    for label, rows in buckets.items():
         unique_rows = _dedupe_keyword_rows(rows, keyword_col)
         raw_row_count = len(rows)
         keyword_records = [_build_segment_keyword_record(row, keyword_col) for row in unique_rows]
         keyword_count = len(keyword_records)
+        if keyword_count == 0:
+            continue
 
         revenue = round(sum(_keyword_revenue_value(row) for row in unique_rows), 2)
         mean_vol = float(np.mean([float(r["_vol_clean"]) for r in unique_rows])) if unique_rows else 0.0
         mean_comp = float(np.mean([float(r["_comp_pct"]) for r in unique_rows])) if unique_rows else 0.0
-        drivers = [str(r["_opp_driver"]) for r in unique_rows]
+        drivers = [str(r["_opp_driver"]) for r in unique_rows if "_opp_driver" in r]
         primary_driver = max(set(drivers), key=drivers.count) if drivers else "—"
         avg_opportunity_score = (
             round(float(np.mean([_format_score(float(r.get("_opp_score", 0) or 0)) for r in unique_rows])), 2)
@@ -798,98 +1162,53 @@ def _build_entry_segments(
             "avg_opportunity_score": avg_opportunity_score,
         })
 
-    if len(segments) >= 2:
-        vols = pd.Series([s["mean_search_volume"] for s in segments])
-        revs = pd.Series([s["opportunity_revenue"] for s in segments])
-        comps = pd.Series([s["mean_competition_pct"] for s in segments])
-        composite = (
-            0.40 * _percentile_rank(vols)
-            + 0.35 * _percentile_rank(revs)
-            + 0.25 * (100.0 - _percentile_rank(comps))
-        )
-        spread_scores = _percentile_rank(composite)
-        for seg, spread in zip(segments, spread_scores):
-            seg["avg_opportunity_score"] = round(float(spread), 2)
-    elif len(segments) == 1:
-        if segments[0]["avg_opportunity_score"] is None:
-            segments[0]["avg_opportunity_score"] = 75.0
+    # Cluster entry score ranking and sorting
+    if segments:
+        seg_df = pd.DataFrame(segments)
+        def rank_series(series: pd.Series) -> pd.Series:
+            n_seg = len(series)
+            if n_seg < 2:
+                return pd.Series(100.0, index=series.index)
+            ranks = series.rank(method="average", ascending=True)
+            return (ranks - 1) / (n_seg - 1) * 100.0
 
-    for seg in segments:
-        keyword_length = len(seg.get("keywords", []))
-        if seg.get("opportunity_keywords") != keyword_length:
-            logger.error(
-                "Segment '%s' opportunity_keywords mismatch: %s vs actual keywords %s",
-                seg.get("segment"),
-                seg.get("opportunity_keywords"),
-                keyword_length,
-            )
-            seg["opportunity_keywords"] = keyword_length
-        if seg.get("keyword_count") != keyword_length:
-            seg["keyword_count"] = keyword_length
-        if seg.get("unique_keywords_after_dedupe") != keyword_length:
-            seg["unique_keywords_after_dedupe"] = keyword_length
-        expected_dupes = seg.get("raw_rows_before_dedupe", 0) - keyword_length
-        if seg.get("duplicate_rows_removed") != expected_dupes:
-            logger.error(
-                "Segment '%s' duplicate_removed_count recalculated: %s -> %s",
-                seg.get("segment"),
-                seg.get("duplicate_rows_removed"),
-                expected_dupes,
-            )
-            seg["duplicate_rows_removed"] = expected_dupes
+        rev_rank = rank_series(seg_df["opportunity_revenue"])
+        count_rank = rank_series(seg_df["keyword_count"])
+        avg_score_rank = rank_series(seg_df["avg_opportunity_score"].fillna(0))
+        mean_inv_comp_series = pd.Series([
+            float(np.mean([float(r["_inv_comp_pct"]) for r in buckets[seg["segment"]]]))
+            for seg in segments
+        ])
+        access_rank = rank_series(mean_inv_comp_series)
 
-    segments.sort(
-        key=lambda s: (
-            s["opportunity_revenue"],
-            s.get("avg_opportunity_score") or 0,
-            s["keyword_count"],
-        ),
-        reverse=True,
-    )
-    max_revenue = segments[0]["opportunity_revenue"] if segments else 0.0
+        entry_scores = 0.40 * rev_rank + 0.25 * count_rank + 0.25 * avg_score_rank + 0.10 * access_rank
+        for idx, score in enumerate(entry_scores):
+            segments[idx]["cluster_entry_score"] = round(float(score), 2)
+
+        segments.sort(key=lambda s: s.get("cluster_entry_score", 0.0), reverse=True)
+
     for rank, seg in enumerate(segments, start=1):
         seg["rank"] = rank
-        priority = _recommended_priority(
-            rank,
-            float(seg.get("avg_opportunity_score") if seg.get("avg_opportunity_score") is not None else 0.0),
-            seg["opportunity_revenue"],
-            max_revenue,
-        )
+        score = seg.get("avg_opportunity_score") or 0.0
+        if score >= 75:
+            priority = "Enter First"
+        elif score >= 55:
+            priority = "Evaluate"
+        else:
+            priority = "Low Priority"
         seg["recommended_priority"] = priority
-        seg["competitive_intensity"] = _competitive_intensity_label(
-            float(seg.get("mean_competition_pct", 50))
-        )
         seg["recommended_action"] = _recommended_action(priority)
+        seg["competitive_intensity"] = _competitive_intensity_label(seg["mean_competition_pct"])
 
-    _BROAD_CATCHALL_NAMES = {
-        "generic", "other", "general search terms", "general", "misc", "miscellaneous",
-        "broad", "catch-all", "catchall", "unclassified",
-    }
+    best_entry_cluster = segments[0]["segment"] if segments else "N/A"
+    segments_reliable = len(segments) > 0
 
-    def _is_broad_catchall(name: str) -> bool:
-        return name.strip().lower() in _BROAD_CATCHALL_NAMES
-
-    best = segments[0]["segment"] if segments else None
-    # Prefer the first actionable (non-catchall) segment if the top segment is a broad catch-all
-    if best and _is_broad_catchall(best):
-        for seg in segments[1:]:
-            if not _is_broad_catchall(seg["segment"]):
-                # Only prefer it if it has meaningful keywords
-                if seg.get("keyword_count", 0) >= 3:
-                    best = seg["segment"]
-                    break
-    reliable = (
-        len(segments) >= 2
-        and segments[0]["keyword_count"] >= min_cluster_size
-        and any(s["keyword_count"] >= min_cluster_size for s in segments[1:3])
-    )
-    return segments, best, reliable
+    return segments, best_entry_cluster, segments_reliable
 
 
 def get_revenue_segment_keywords(
     magnet_df: Optional[pd.DataFrame],
     segment_name: str,
-    keyword_classification_df: Optional[pd.DataFrame] = None,
 ) -> Dict[str, Any]:
     if magnet_df is None or magnet_df.empty:
         return {
@@ -901,8 +1220,9 @@ def get_revenue_segment_keywords(
             "keywords": [],
         }
 
-    keyword_col = find_column(magnet_df, _KEYWORD_CANDIDATES)
-    if not keyword_col:
+    # Use run directly to ensure absolute consistency
+    analysis_res = run(magnet_df, None)
+    if analysis_res.get("status") != "success":
         return {
             "success": False,
             "segment": segment_name,
@@ -910,94 +1230,40 @@ def get_revenue_segment_keywords(
             "duplicate_removed_count": 0,
             "keyword_count": 0,
             "keywords": [],
+            "message": analysis_res.get("summary", "Analysis failed.")
         }
 
-    search_vol_col = find_column(magnet_df, _SEARCH_VOL_CANDIDATES)
-    title_density_col = find_column(magnet_df, _TITLE_DENSITY_CANDIDATES)
-    sales_col = find_column(magnet_df, _SALES_CANDIDATES)
-    comp_col = find_column(magnet_df, _COMP_CANDIDATES)
-    trend_col = find_column(magnet_df, _TREND_CANDIDATES)
-    iq_col = find_column(magnet_df, _IQ_CANDIDATES)
-    click_share_col = find_column(magnet_df, _CLICK_SHARE_CANDIDATES)
-    conv_share_col = find_column(magnet_df, _CONV_SHARE_CANDIDATES)
-
-    df = magnet_df.copy()
-
-    def process_col(col_name: Optional[str]) -> pd.Series:
-        if col_name:
-            clean, _ = clean_numeric_series(df[col_name], col_name)
-            return clean
-        return pd.Series(0.0, index=df.index)
-
-    df["_vol_clean"] = process_col(search_vol_col)
-    df["_density_clean"] = process_col(title_density_col)
-    df["_sales_clean"] = process_col(sales_col)
-    df["_comp_clean"] = process_col(comp_col)
-    df["_trend_clean"] = process_col(trend_col)
-    df["_iq_clean"] = process_col(iq_col)
-    df["_click_clean"] = process_col(click_share_col)
-    df["_conv_clean"] = process_col(conv_share_col)
-
-    df_valid = df.dropna(subset=["_vol_clean"]).copy()
-    if df_valid.empty:
-        return {
-            "success": False,
-            "segment": segment_name,
-            "raw_row_count": 0,
-            "duplicate_removed_count": 0,
-            "keyword_count": 0,
-            "keywords": [],
-        }
-
-    sales_series = df_valid["_sales_clean"].fillna(0)
-    df_valid["_sales_pct"] = 0.0
-    sales_positive_mask = sales_series > 0
-    if int(sales_positive_mask.sum()) >= 2:
-        df_valid.loc[sales_positive_mask, "_sales_pct"] = _percentile_rank(
-            sales_series[sales_positive_mask]
+    results = analysis_res.get("results", {})
+    entry_segments = results.get("entry_segments", [])
+    
+    matched = next((s for s in entry_segments if s.get("segment") == segment_name), None)
+    if matched is None:
+        matched = next(
+            (s for s in entry_segments if str(s.get("segment", "")).strip().lower() == segment_name.strip().lower()),
+            None
         )
-    df_valid["_comp_pct"] = _percentile_rank(df_valid["_comp_clean"])
-    df_valid["_inv_comp_pct"] = 100.0 - df_valid["_comp_pct"]
-    composite_signal = (
-        0.40 * _percentile_rank(df_valid["_vol_clean"].fillna(0.0))
-        + 0.35 * df_valid["_sales_pct"].fillna(0.0)
-        + 0.25 * df_valid["_inv_comp_pct"].fillna(0.0)
-    )
-    df_valid["_opp_score"] = _percentile_rank(composite_signal)
-    df_valid["_opp_label"] = [_classify_opportunity(x) for x in df_valid["_opp_score"]]
-    df_valid["_opp_driver"] = [
-        _opportunity_driver(v, s, c)
-        for v, s, c in zip(df_valid["_vol_clean"], df_valid["_sales_pct"], df_valid["_inv_comp_pct"])
-    ]
 
-    high_extreme_mask = df_valid["_opp_label"].isin(["High Opportunity", "Extreme Opportunity"])
-    df_high_extreme = df_valid.loc[high_extreme_mask] if high_extreme_mask.any() else df_valid.head(0)
-    classification_map = _build_keyword_classification_map(keyword_classification_df)
-    segments, _, _ = _build_entry_segments(df_high_extreme, keyword_col, classification_map)
+    if matched is not None:
+        kw_list = matched.get("keywords", [])
+        raw_count = matched.get("raw_rows_before_dedupe", len(kw_list))
+        dupe_count = matched.get("duplicate_rows_removed", 0)
+        return {
+            "success": True,
+            "segment": segment_name,
+            "opportunity_revenue": matched.get("opportunity_revenue", 0.0),
+            "opportunity_keywords": matched.get("opportunity_keywords", len(kw_list)),
+            "keyword_count": len(kw_list),
+            "avg_opportunity_score": matched.get("avg_opportunity_score"),
+            "raw_rows_before_dedupe": raw_count,
+            "unique_keywords_after_dedupe": len(kw_list),
+            "duplicate_rows_removed": dupe_count,
+            "raw_row_count": raw_count,
+            "duplicate_removed_count": dupe_count,
+            "recommended_priority": matched.get("recommended_priority", "Evaluate"),
+            "keywords": kw_list,
+        }
 
-    for seg in segments:
-        seg_key = seg["segment"]
-        if seg_key == segment_name or seg_key.strip().lower() == segment_name.strip().lower():
-            kw_list = seg.get("keywords", [])
-            raw_count = seg.get("raw_rows_before_dedupe", len(kw_list))
-            dupe_count = seg.get("duplicate_rows_removed", 0)
-            return {
-                "success": True,
-                "segment": segment_name,
-                "opportunity_revenue": seg.get("opportunity_revenue", 0.0),
-                "opportunity_keywords": seg.get("opportunity_keywords", len(kw_list)),
-                "keyword_count": len(kw_list),
-                "avg_opportunity_score": seg.get("avg_opportunity_score"),
-                "raw_rows_before_dedupe": raw_count,
-                "unique_keywords_after_dedupe": len(kw_list),
-                "duplicate_rows_removed": dupe_count,
-                "raw_row_count": raw_count,
-                "duplicate_removed_count": dupe_count,
-                "recommended_priority": seg.get("recommended_priority", "Evaluate"),
-                "keywords": kw_list,
-            }
-
-    available = [s.get("segment") for s in segments]
+    available = [s.get("segment") for s in entry_segments]
     return {
         "success": False,
         "segment": segment_name,
@@ -1225,6 +1491,21 @@ def _generate_insights(
                 "Action: Pursue differentiated micro-segments before broad expansion."
             ),
         })
+
+    # Normalize categories before returning
+    for insight in insights:
+        cat = insight.get("category", "")
+        cat_lower = str(cat).strip().lower().replace("_", "").replace(" ", "")
+        if cat_lower in ("keyfinding", "keyfindings"):
+            insight["category"] = "Key Finding"
+        elif cat_lower in ("leadingsegment", "leadingcategory"):
+            insight["category"] = "Leading Segment"
+        elif cat_lower in ("marketgap", "marketgaps"):
+            insight["category"] = "Market Gap"
+        elif cat_lower in ("recommendedentry", "recommendedentries"):
+            insight["category"] = "Recommended Entry"
+        else:
+            insight["category"] = cat
 
     return insights
 

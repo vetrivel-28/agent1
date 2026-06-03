@@ -16,6 +16,13 @@ import {
 } from 'recharts';
 import { motion } from 'framer-motion';
 
+// Unified Layouts
+import { PageHeader } from '../components/layout/PageHeader';
+import { PageSection } from '../components/layout/PageSection';
+import { ExecutiveNarrative } from '../components/intelligence/ExecutiveNarrative';
+import { ChartContainer } from '../components/ui/ChartContainer';
+import { DashboardSkeleton } from '../components/ui/Skeletons';
+
 // --- Types ---
 type Evidence = {
   source_dataset: string;
@@ -422,14 +429,7 @@ export default function PriceElasticity() {
     return results as PricingIntelligenceData;
   }, [engineResponse]);
 
-  if (isLoading) {
-    return (
-      <div className="flex h-[80vh] items-center justify-center flex-col gap-3">
-        <Loader2 className="w-8 h-8 animate-spin text-primary" />
-        <p className="text-sm text-muted-foreground font-mono uppercase tracking-widest">Synthesizing Price Intelligence...</p>
-      </div>
-    );
-  }
+  if (isLoading) return <DashboardSkeleton />;
 
   if (isError || engineResponse?.data?.status === 'unavailable' || !memoized) {
     const fallbackMsg = 'Could not calculate price economics. Ensure Parent Level Revenue and Price are mapped.';
@@ -580,22 +580,19 @@ export default function PriceElasticity() {
     },
   ];
 
+  const narrative = `The market's price floor sits at ${formatCurrency(struct.price_floor)}, extending up to a ceiling of ${formatCurrency(struct.price_ceiling)}, yielding a price spread of ${formatCurrency(struct.price_spread)}. The optimal strategic sweet spot is ${pi.market_sweet_spot.range_label} (${pi.market_sweet_spot.tier}), which currently commands ${formatCurrency(pi.market_sweet_spot.parent_revenue)} in Parent Level Revenue. The recommended entry range is ${pi.entry_price_recommendation.recommended_range}.`;
+
   return (
     <>
-    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-8 pb-10">
+    <div className="pb-16 max-w-[1400px] mx-auto px-6">
       
-      {/* Header */}
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 border-b border-border/50 pb-6">
-        <div>
-          <Badge className="bg-primary/10 text-primary hover:bg-primary/20 mb-3 border border-primary/20 font-mono tracking-widest uppercase rounded-none">
-            DATA-DRIVEN PRICING INTELLIGENCE
-          </Badge>
-          <h1 className="text-4xl font-black tracking-tight text-foreground font-serif">Price Economics & Strategy</h1>
-          <p className="text-muted-foreground mt-2 max-w-3xl text-lg">
-            Structural analysis strictly utilizing Parent Level Revenue to calculate distribution, sweet spots, and entry recommendations across refined market tiers.
-          </p>
-        </div>
-      </div>
+      <PageHeader 
+        badge="Pricing Intelligence"
+        title="Price Economics & Strategy"
+        description="Structural analysis utilizing Parent Level Revenue to calculate distribution, sweet spots, and entry recommendations across refined market tiers."
+      />
+
+      <ExecutiveNarrative content={narrative} />
 
       {/* TIER DEFINITIONS */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
@@ -618,34 +615,22 @@ export default function PriceElasticity() {
         ))}
       </div>
 
-      {/* SECTION 1: MARKET PRICE STRUCTURE */}
-      <div 
-        className="cursor-pointer group" 
-        onClick={() => setModalState({ type: 'evidence', title: "Market Price Structure", evidence: struct.evidence })}
-      >
-        <div className="flex items-center justify-between mb-4 mt-8">
-            <h2 className="text-lg font-bold font-serif flex items-center gap-2 group-hover:text-primary transition-colors">
-            <Scale className="w-5 h-5 text-primary" /> Market Price Structure
-            </h2>
-            <span className="text-[10px] uppercase tracking-widest text-muted-foreground group-hover:text-primary transition-colors opacity-50 group-hover:opacity-100 flex items-center gap-1"><Database className="w-3 h-3" /> View Evidence</span>
-        </div>
-        
+      <PageSection title="1. Market Price Structure" icon={Scale}>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <KpiCard title="Price Floor" value={formatCurrency(struct.price_floor)} icon={<Maximize className="w-4 h-4" />} color="text-muted-foreground" bg="bg-muted border-border" />
-          <KpiCard title="Price Ceiling" value={formatCurrency(struct.price_ceiling)} icon={<Maximize className="w-4 h-4" />} color="text-muted-foreground" bg="bg-muted border-border" />
-          <KpiCard title="Price Spread" value={formatCurrency(struct.price_spread)} icon={<Layers className="w-4 h-4" />} color="text-blue-500" bg="bg-blue-500/10 border-blue-500/20" />
+          <KpiCard title="Price Floor" value={formatCurrency(struct.price_floor)} icon={<Maximize className="w-4 h-4" />} color="text-muted-foreground" bg="bg-muted border-border" tooltip="Lowest statistically significant price point in market" onClick={() => setModalState({ type: 'evidence', title: "Market Price Structure", evidence: struct.evidence })} />
+          <KpiCard title="Price Ceiling" value={formatCurrency(struct.price_ceiling)} icon={<Maximize className="w-4 h-4" />} color="text-muted-foreground" bg="bg-muted border-border" tooltip="Highest statistically significant price point in market" onClick={() => setModalState({ type: 'evidence', title: "Market Price Structure", evidence: struct.evidence })} />
+          <KpiCard title="Price Spread" value={formatCurrency(struct.price_spread)} icon={<Layers className="w-4 h-4" />} color="text-primary" bg="bg-primary/10 border-primary/20" tooltip="Difference between ceiling and floor" onClick={() => setModalState({ type: 'evidence', title: "Market Price Structure", evidence: struct.evidence })} />
         </div>
-      </div>
+      </PageSection>
 
       {/* SECTION: PRODUCT POSITIONING MAP */}
-      <Card className="border-border/50 overflow-hidden shadow-sm">
-        <CardHeader className="bg-muted/10 border-b border-border/50 flex flex-row items-center justify-between">
-          <div>
-            <CardTitle className="font-serif">Product Positioning Map</CardTitle>
-            <CardDescription>Top 200 items plotted by Price vs. Parent Level Revenue.</CardDescription>
-          </div>
-        </CardHeader>
-        <CardContent className="p-6">
+      <PageSection title="2. Product Positioning Map" icon={Target}>
+        <ChartContainer 
+          title="Price vs Revenue Distribution"
+          yAxisLabel="Parent Level Revenue"
+          xAxisLabel="Price"
+          businessExplanation="Plots individual products based on their price and parent revenue. Clusters indicate optimal pricing tiers where the highest revenue is concentrated."
+        >
           <div className="h-[400px] relative">
             <ResponsiveContainer width="100%" height="100%">
               <ScatterChart margin={{ top: 20, right: 20, bottom: 40, left: 40 }}>
@@ -696,11 +681,12 @@ export default function PriceElasticity() {
               </ScatterChart>
             </ResponsiveContainer>
           </div>
-        </CardContent>
-      </Card>
+        </ChartContainer>
+      </PageSection>
 
       {/* STRATEGIC INSIGHTS */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <PageSection title="3. Strategic Price Economics" icon={Activity}>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         
         {/* Market Sweet Spot */}
         <Card 
@@ -774,10 +760,12 @@ export default function PriceElasticity() {
             </CardContent>
             </Card>
         </div>
-      </div>
+        </div>
+      </PageSection>
 
       {/* SECTIONS 3 & 4: CHARTS */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <PageSection title="4. Pricing Demographics" icon={Layers}>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         
         {/* Revenue Pricing Chart */}
         <Card className="border-border/50 transition-colors">
@@ -834,8 +822,8 @@ export default function PriceElasticity() {
             </ResponsiveContainer>
           </CardContent>
         </Card>
-
-      </div>
+        </div>
+      </PageSection>
 
       {/* SECTION 9: TOP PRICING OPPORTUNITIES */}
       <Card className="border-border/50 overflow-hidden shadow-sm">
@@ -887,7 +875,7 @@ export default function PriceElasticity() {
         </Card>
       )}
 
-    </motion.div>
+    </div>
 
     {/* MODAL (REPLACES DRAWER) */}
     <Modal 

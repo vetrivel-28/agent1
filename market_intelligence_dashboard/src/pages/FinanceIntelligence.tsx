@@ -12,6 +12,12 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import { cn } from '../utils/cn';
 
+// Unified Layouts
+import { PageHeader } from '../components/layout/PageHeader';
+import { PageSection } from '../components/layout/PageSection';
+import { ExecutiveNarrative } from '../components/intelligence/ExecutiveNarrative';
+import { DashboardSkeleton } from '../components/ui/Skeletons';
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -344,14 +350,7 @@ export default function FinanceIntelligence() {
     queryFn: () => api.getFinanceIntelligence(),
   });
 
-  if (isLoading) {
-    return (
-      <div className="flex h-[80vh] items-center justify-center flex-col gap-3">
-        <Loader2 className="w-8 h-8 animate-spin text-primary" />
-        <p className="text-sm text-muted-foreground font-mono uppercase tracking-widest">Evaluating Market Economics...</p>
-      </div>
-    );
-  }
+  if (isLoading) return <DashboardSkeleton />;
 
   if (isError || !isEngineOk(data)) {
     return (
@@ -539,8 +538,10 @@ export default function FinanceIntelligence() {
   const entryVerdict = rawVerdict ? sanitizeText(String(rawVerdict)) : null;
   const narrative = results.market_economics_narrative ? sanitizeText(String(results.market_economics_narrative)) : null;
 
+  const finalNarrativeText = entryVerdict ? `${entryVerdict} ${narrative ? narrative : ''}` : 'Upload datasets to generate a market entry verdict from available signals.';
+
   return (
-    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-8 pb-10">
+    <div className="pb-16 max-w-[1400px] mx-auto px-6">
 
       <AnimatePresence>
         {evidenceFor && (
@@ -551,39 +552,33 @@ export default function FinanceIntelligence() {
         )}
       </AnimatePresence>
 
-      {/* Header */}
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-4 border-b border-border/50 pb-6">
-        <div>
-          <div className="inline-flex items-center justify-center px-2 py-1 rounded border border-primary/20 bg-primary/10 text-primary text-[10px] font-mono tracking-widest uppercase mb-3">
-            Investment Intelligence
-          </div>
-          <h1 className="text-4xl font-black tracking-tight text-foreground">Market Entry Intelligence</h1>
-          <p className="text-muted-foreground mt-2 max-w-2xl text-lg">
-            Evaluate barrier-to-entry economics and risk factors before allocating capital.
-          </p>
-        </div>
-        <div className="text-right flex gap-6">
-          <div>
-            <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-1">Attractiveness</p>
+      <PageHeader 
+        badge="Investment Intelligence"
+        title="Market Entry Intelligence"
+        description="Evaluate barrier-to-entry economics and risk factors before allocating capital."
+        kpiSummary={
+          <div className="mt-4 border-t border-border/40 pt-4">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-1">Attractiveness Score</p>
             <p className={cn('text-3xl font-black font-mono', marketAttractivenessScore && marketAttractivenessScore >= 60 ? 'text-emerald-500' : 'text-red-500')}>
               {marketAttractivenessScore?.toFixed(0) ?? '—'}
             </p>
           </div>
+        }
+      />
 
-        </div>
-      </div>
+      <ExecutiveNarrative content={finalNarrativeText} />
 
-      {/* KPI Row — all clickable */}
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
-        <KpiCard
-          title="Market Attractiveness"
-          value={marketAttractivenessLabel}
-          sub={marketAttractivenessScore != null ? `${marketAttractivenessScore.toFixed(0)}/100 composite` : 'Click for details'}
-          icon={<TrendingUp className="w-4 h-4" />}
-          color={marketAttractivenessScore != null ? classColor(marketAttractivenessLabel) : 'text-muted-foreground'}
-          bg={marketAttractivenessScore != null ? classBg(marketAttractivenessLabel) : 'bg-muted border-border'}
-          clickable onClick={() => setEvidenceFor({ title: 'Market Attractiveness', metric: maEvidenceBlock })}
-        />
+      <PageSection title="1. Capital Requirements & Barriers" icon={DoorOpen}>
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">
+          <KpiCard
+            title="Market Attractiveness"
+            value={marketAttractivenessLabel}
+            sub={marketAttractivenessScore != null ? `${marketAttractivenessScore.toFixed(0)}/100 composite` : 'Click for details'}
+            icon={<TrendingUp className="w-4 h-4" />}
+            color={marketAttractivenessScore != null ? classColor(marketAttractivenessLabel) : 'text-muted-foreground'}
+            bg={marketAttractivenessScore != null ? classBg(marketAttractivenessLabel) : 'bg-muted border-border'}
+            clickable onClick={() => setEvidenceFor({ title: 'Market Attractiveness', metric: maEvidenceBlock })}
+          />
 
         <KpiCard
           title="Advertising Pressure"
@@ -621,10 +616,11 @@ export default function FinanceIntelligence() {
           bg={edOk ? classBg(accessibilityLabel) : 'bg-muted border-border'}
           clickable onClick={() => setEvidenceFor({ title: 'Market Accessibility', metric: entry_difficulty_data })}
         />
-      </div>
+        </div>
+      </PageSection>
 
-      {/* Executive Brief */}
-      <Card className="border-border/50 shadow-sm">
+      <PageSection title="2. Intelligence Briefing" icon={Lightbulb}>
+        <Card className="border-border/50 shadow-sm bg-card">
         <CardHeader className="pb-3 border-b border-border/50 bg-muted/10">
           <div className="flex items-center gap-2">
             <Lightbulb className="w-4 h-4 text-primary" />
@@ -650,6 +646,7 @@ export default function FinanceIntelligence() {
           </p>
         </CardContent>
       </Card>
+      </PageSection>
 
       {/* Price Positioning Potential — clickable, shown only when available */}
       {pvsOk && (
@@ -678,67 +675,53 @@ export default function FinanceIntelligence() {
         </Card>
       )}
 
-      {/* Attractiveness Matrix — clickable quadrant */}
-      {attractivenessMatrix?.quadrant && (
-        <div className="rounded-xl border border-border/50 p-1 cursor-pointer hover:border-primary/50 transition-colors"
-          onClick={() => setShowMatrixExplanation(true)}>
-          <div className="flex items-center gap-2 px-4 pt-3 pb-1">
-            <Info className="w-3 h-3 text-muted-foreground/60" />
-            <p className="text-xs text-muted-foreground">Click quadrant to see why it was selected</p>
+      <PageSection title="3. Financial Modeling" icon={TrendingUp}>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Attractiveness Matrix — clickable quadrant */}
+          {attractivenessMatrix?.quadrant && (
+            <div className="rounded-xl border border-border/50 p-1 cursor-pointer hover:border-primary/50 transition-colors bg-card shadow-sm"
+              onClick={() => setShowMatrixExplanation(true)}>
+              <div className="flex items-center gap-2 px-4 pt-3 pb-1">
+                <Info className="w-3 h-3 text-muted-foreground/60" />
+                <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Why this quadrant?</p>
+              </div>
+              <AttractivenessMatrix data={attractivenessMatrix} />
+            </div>
+          )}
+
+          {/* Opportunities and Risks */}
+          <div className="flex flex-col gap-6">
+            <Card className="border-emerald-500/20 bg-emerald-500/5 shadow-sm">
+              <CardHeader className="pb-3 border-b border-emerald-500/10">
+                <div className="flex items-center gap-2">
+                  <TrendingUp className="w-5 h-5 text-emerald-500" />
+                  <CardTitle className="text-base text-emerald-700 dark:text-emerald-400">Opportunities</CardTitle>
+                </div>
+                <CardDescription className="text-emerald-600/70 dark:text-emerald-400/70">Supported by calculated market signals</CardDescription>
+              </CardHeader>
+              <CardContent className="pt-6">
+                <BulletList items={opportunities} variant="opportunity"
+                  emptyMessage="No favorable opportunity signals identified from available data. Upload datasets with H10 PPC Sugg. Bid, Sponsored ASINs, and Competing Products columns." />
+              </CardContent>
+            </Card>
+
+            <Card className="border-red-500/20 bg-red-500/5 shadow-sm">
+              <CardHeader className="pb-3 border-b border-red-500/10">
+                <div className="flex items-center gap-2">
+                  <TrendingDown className="w-5 h-5 text-red-500" />
+                  <CardTitle className="text-base text-red-700 dark:text-red-400">Risks</CardTitle>
+                </div>
+                <CardDescription className="text-red-600/70 dark:text-red-400/70">Only risks backed by available metrics</CardDescription>
+              </CardHeader>
+              <CardContent className="pt-6">
+                <BulletList items={risks} variant="risk"
+                  emptyMessage={risks.length === 0 && (apiOk || edOk) ? 'No material risks identified from available market signals.' : 'Risk assessment requires more data. Upload Magnet with H10 PPC Sugg. Bid, Sponsored ASINs, CPR columns.'} />
+              </CardContent>
+            </Card>
           </div>
-          <AttractivenessMatrix data={attractivenessMatrix} />
         </div>
-      )}
+      </PageSection>
 
-      {/* Opportunities and Risks */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <Card className="border-emerald-500/20 bg-emerald-500/5 shadow-sm">
-          <CardHeader className="pb-3 border-b border-emerald-500/10">
-            <div className="flex items-center gap-2">
-              <TrendingUp className="w-5 h-5 text-emerald-500" />
-              <CardTitle className="text-base text-emerald-700 dark:text-emerald-400">Opportunities</CardTitle>
-            </div>
-            <CardDescription className="text-emerald-600/70 dark:text-emerald-400/70">Supported by calculated market signals</CardDescription>
-          </CardHeader>
-          <CardContent className="pt-6">
-            <BulletList items={opportunities} variant="opportunity"
-              emptyMessage="No favorable opportunity signals identified from available data. Upload datasets with H10 PPC Sugg. Bid, Sponsored ASINs, and Competing Products columns." />
-          </CardContent>
-        </Card>
-
-        <Card className="border-red-500/20 bg-red-500/5 shadow-sm">
-          <CardHeader className="pb-3 border-b border-red-500/10">
-            <div className="flex items-center gap-2">
-              <TrendingDown className="w-5 h-5 text-red-500" />
-              <CardTitle className="text-base text-red-700 dark:text-red-400">Risks</CardTitle>
-            </div>
-            <CardDescription className="text-red-600/70 dark:text-red-400/70">Only risks backed by available metrics</CardDescription>
-          </CardHeader>
-          <CardContent className="pt-6">
-            <BulletList items={risks} variant="risk"
-              emptyMessage={risks.length === 0 && (apiOk || edOk) ? 'No material risks identified from available market signals.' : 'Risk assessment requires more data. Upload Magnet with H10 PPC Sugg. Bid, Sponsored ASINs, CPR columns.'} />
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Market Entry Verdict */}
-      <Card className="border-primary/30 bg-primary/5 shadow-md">
-        <CardContent className="p-8 flex gap-5 items-start">
-          <div className="p-3 bg-primary/20 rounded-xl">
-            <Landmark className="w-8 h-8 text-primary flex-shrink-0" />
-          </div>
-          <div className="flex-1">
-            <h3 className="font-bold text-lg text-primary uppercase tracking-widest">Market Entry Verdict</h3>
-            <p className="text-foreground mt-2 text-base leading-relaxed font-medium">
-              {entryVerdict ?? 'Upload datasets to generate a market entry verdict from available signals.'}
-            </p>
-            {narrative && (
-              <p className="text-sm text-muted-foreground/80 mt-4 leading-relaxed border-t border-primary/20 pt-4">{narrative}</p>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-
-    </motion.div>
+    </div>
   );
 }

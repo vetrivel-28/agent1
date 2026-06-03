@@ -14,6 +14,7 @@ logger = get_logger("hhi_engine")
 
 _BRAND_CANDIDATES = ["Brand", "Brand Name", "Seller"]
 _REVENUE_CANDIDATES = ["Parent Level Revenue", "Revenue", "ASIN Revenue", "Monthly Revenue"]
+_UNITS_CANDIDATES = ["Sales", "sales", "Unit Sales", "units sold", "Units Sold", "ASIN Sales", "Parent Level Sales", "Monthly Sales"]
 _ASIN_CANDIDATES = ["ASIN"]
 _TITLE_CANDIDATES = ["Title", "Product Title", "Product Name"]
 _NUMERIC_CLEAN_RE = re.compile(r"[^\d\.\-]")
@@ -87,6 +88,7 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
 
     brand_col = find_column(blackbox_df, _BRAND_CANDIDATES)
     revenue_col = find_column(blackbox_df, _REVENUE_CANDIDATES)
+    units_col = find_column(blackbox_df, _UNITS_CANDIDATES)
 
     if brand_col is None or revenue_col is None:
         return _error_response(
@@ -103,6 +105,10 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
     work = pd.DataFrame(index=blackbox_df.index)
     work["brand"] = blackbox_df[brand_col].astype(str).str.strip().replace({"": "Unknown Brand"})
     work["revenue"] = _clean_numeric_series(blackbox_df[revenue_col])
+    if units_col:
+        work["units"] = _clean_numeric_series(blackbox_df[units_col]).fillna(0)
+    else:
+        work["units"] = 0.0
     if asin_col:
         work["asin"] = blackbox_df[asin_col].astype(str).str.strip()
     if title_col:
@@ -139,7 +145,7 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
     elif "title_norm" in work.columns:
         product_key = "title_norm"
 
-    brand_revenue = work.groupby("brand", as_index=False, sort=False)["revenue"].sum()
+    brand_revenue = work.groupby("brand", as_index=False, sort=False).agg({"revenue": "sum", "units": "sum"})
     if product_key:
         brand_products = (
             work.loc[work[product_key].notna() & (work[product_key] != "")]
@@ -152,6 +158,7 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
         brand_revenue["product_count"] = work.groupby("brand", as_index=False).size()["size"]
     brand_revenue["product_count"] = brand_revenue["product_count"].fillna(0).astype(int)
     total_revenue = float(brand_revenue["revenue"].sum())
+    total_units = int(brand_revenue["units"].sum())
 
     if total_revenue == 0:
         return _error_response(
@@ -185,6 +192,8 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
         product_count = int(row.get("product_count", 0) or 0)
         avg_revenue_per_product = float(row["revenue"]) / float(product_count) if product_count > 0 else 0.0
         segment = _segment_name(share, rank, thresholds)
+        units_sold = int(row.get("units", 0))
+        asp = float(row["revenue"]) / float(units_sold) if units_sold > 0 else 0.0
         top_brands_list.append({
             "rank": rank,
             "brand": str(row["brand"]),
@@ -193,6 +202,8 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
             "product_count": product_count,
             "avg_revenue_per_product": round(avg_revenue_per_product, 2),
             "segment": segment,
+            "units_sold": units_sold,
+            "asp": round(asp, 2),
         })
 
     segment_order = ["Market Leaders", "Strong Competitors", "Niche Players", "Long Tail"]
@@ -249,6 +260,7 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
             ],
             "market_structure": {
                 "total_market_revenue": round(total_revenue, 2),
+                "total_units_sold": total_units,
                 "active_brand_count": total_brands,
                 "top_1_share": round(top1_share, 4),
                 "top_3_share": round(top3_share, 4),

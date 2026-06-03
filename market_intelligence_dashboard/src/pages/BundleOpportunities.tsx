@@ -3,8 +3,13 @@ import { api } from '../services/api';
 import { Card, CardContent } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import { isEngineOk, getEngineErrorMessage } from '../utils/analysisStatus';
-import { AlertCircle, Loader2, Target } from 'lucide-react';
+import { AlertCircle, Target, Layers } from 'lucide-react';
 import { formatCurrency } from '../utils/cn';
+
+// Unified Layouts
+import { PageSection } from '../components/layout/PageSection';
+import { ExecutiveNarrative } from '../components/intelligence/ExecutiveNarrative';
+import { DashboardSkeleton } from '../components/ui/Skeletons';
 
 export default function BundleOpportunities() {
   const { data, isLoading, isError } = useQuery({
@@ -12,14 +17,7 @@ export default function BundleOpportunities() {
     queryFn: () => api.getBundleOpportunities(10),
   });
 
-  if (isLoading) {
-    return (
-      <div className="flex py-20 items-center justify-center flex-col gap-3">
-        <Loader2 className="w-8 h-8 animate-spin text-primary" />
-        <p className="text-sm text-muted-foreground font-mono uppercase tracking-widest">Loading Top 10 Bundle Concepts...</p>
-      </div>
-    );
-  }
+  if (isLoading) return <DashboardSkeleton />;
 
   if (isError || !isEngineOk(data)) {
     return (
@@ -48,14 +46,16 @@ export default function BundleOpportunities() {
     );
   }
 
+  const narrative = top_items.length > 0
+    ? `We identified ${top_items.length} potential bundle opportunities based on LLM-inferred relationships and use cases. Note: These are derived from functional complementarity rather than hard sales data.`
+    : `No bundle concepts could be confidently inferred from the current dataset.`;
+
   return (
-    <div className="mt-6 space-y-4">
-      <div className="mb-6">
-        <h2 className="text-2xl font-bold">Top 10 LLM-Inferred Bundle Opportunities</h2>
-        <p className="text-muted-foreground font-semibold italic text-sm mt-1 mb-2 text-warning">LLM-inferred relationship based on product function and use case. Not derived from sales data.</p>
-      </div>
-      
-      <div className="grid grid-cols-1 gap-4">
+    <div className="space-y-4">
+      <ExecutiveNarrative content={narrative} />
+
+      <PageSection title="Top 10 LLM-Inferred Bundle Opportunities" icon={Layers}>
+        <div className="grid grid-cols-1 gap-4">
         {top_items.map((item: any, idx: number) => {
           let titleText = item.title || item.concept || 'Unknown Concept';
           
@@ -83,7 +83,8 @@ export default function BundleOpportunities() {
             </Card>
           );
         })}
-      </div>
+        </div>
+      </PageSection>
     </div>
   );
 }

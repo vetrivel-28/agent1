@@ -1,9 +1,12 @@
+import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../../services/api';
 import { Badge } from '../ui/Badge';
 import { Server, Database, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Button } from '../ui/Button';
 
 export function Topbar() {
+
   const { data: health, isLoading, isError } = useQuery({
     queryKey: ['health'],
     queryFn: api.getHealth,
