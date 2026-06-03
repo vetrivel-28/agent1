@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/Card';
 import { motion } from 'framer-motion';
 import { 
-  Users, ShieldAlert, LinkIcon, PackagePlus, ArrowRight
+  Users, ShieldAlert, Zap, Layers
 } from 'lucide-react';
 import DirectCompetitors from './DirectCompetitors';
 import SubstituteIntelligence from './SubstituteIntelligence';
@@ -12,9 +12,9 @@ import { cn } from '../utils/cn';
 
 const tabs = [
   { id: 'competitors', label: 'Direct Competitors', icon: Users, component: DirectCompetitors },
-  { id: 'substitutes', label: 'Substitute Threats', icon: ShieldAlert, component: SubstituteIntelligence },
-  { id: 'complements', label: 'Complement Products', icon: LinkIcon, component: ComplementIntelligence },
-  { id: 'bundles', label: 'Bundle Opportunities', icon: PackagePlus, component: BundleOpportunities },
+  { id: 'substitutes', label: 'LLM-Inferred Alternative Products', icon: ShieldAlert, component: SubstituteIntelligence },
+  { id: 'complements', label: 'LLM-Inferred Companion Products', icon: Zap, component: ComplementIntelligence },
+  { id: 'bundles', label: 'Potential Bundle Concepts', icon: Layers, component: BundleOpportunities },
 ];
 
 export default function ProductIntelligence() {

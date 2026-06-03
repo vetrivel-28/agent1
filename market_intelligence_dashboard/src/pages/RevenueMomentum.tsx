@@ -19,20 +19,40 @@ type LedgerRow = {
   classification: string;
   parent_revenue: number;
   revenue_share: number;
+  market_power_score?: number;
+  revenue_percentile?: number;
+  sales_percentile?: number;
   evidence?: MetricEvidence;
+};
+
+type InsightItem = {
+  title: string;
+  observation: string;
+  why_it_matters: string;
+  potential_opportunity: string;
+  evidence: Record<string, string>;
+};
+
+type AiInsight = {
+  insights: InsightItem[];
 };
 
 type SegmentBlock = {
   count: number;
   preview_brands?: string[];
   items: LedgerRow[];
-  tinyllama_strategy?: string | null;
-  tinyllama_status?: string;
-  rule_based_strategy?: string;
+  ai_insight?: AiInsight | string;
   evidence?: MetricEvidence;
 };
 
 type RevenueMomentumPayload = {
+  total_market_revenue?: number;
+  concentration?: {
+    top_5_share?: number;
+    top_10_share?: number;
+    remaining_share?: number;
+    hhi?: number;
+  };
   metrics: {
     market_leaders: SegmentBlock;
     emerging_brands: SegmentBlock;
@@ -45,22 +65,22 @@ type RevenueMomentumPayload = {
 
 const GROUP_META: Record<string, { title: string; ruleLabel: string; cardClass: string }> = {
   market_leaders: {
-    title: 'Market Leaders',
+    title: 'Dominant Leaders',
     ruleLabel: 'HIGH REVENUE  •  HIGH SALES',
     cardClass: 'border-success/30 bg-success/5 text-success',
   },
   emerging_brands: {
-    title: 'Emerging Brands',
+    title: 'Growth Challengers',
     ruleLabel: 'LOW REVENUE  •  HIGH SALES',
     cardClass: 'border-primary/30 bg-primary/5 text-primary',
   },
   premium_brands: {
-    title: 'Premium Brands',
+    title: 'Revenue Heavyweights',
     ruleLabel: 'HIGH REVENUE  •  LOW SALES',
     cardClass: 'border-warning/30 bg-warning/5 text-warning',
   },
   niche_players: {
-    title: 'Niche Players',
+    title: 'Long Tail Players',
     ruleLabel: 'LOW REVENUE  •  LOW SALES',
     cardClass: 'border-border bg-muted/30 text-muted-foreground',
   },
@@ -97,6 +117,8 @@ export default function RevenueMomentum() {
   });
 
   const rm: RevenueMomentumPayload = data?.data?.results?.revenue_momentum || {
+    total_market_revenue: 0,
+    concentration: { top_5_share: 0, top_10_share: 0, remaining_share: 0, hhi: 0 },
     metrics: {
       market_leaders: { count: 0, items: [] },
       emerging_brands: { count: 0, items: [] },
@@ -116,10 +138,13 @@ export default function RevenueMomentum() {
     [rm.metrics]
   );
 
+
+
   if (isLoading) {
     return (
-      <div className="flex h-[80vh] items-center justify-center flex-col gap-3">
-        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+      <div className="flex h-[80vh] items-center justify-center flex-col gap-4">
+        <Loader2 className="w-10 h-10 animate-spin text-primary" />
+        <p className="text-muted-foreground font-medium animate-pulse tracking-wide">Generating Competitive Intelligence...</p>
       </div>
     );
   }
@@ -142,11 +167,12 @@ export default function RevenueMomentum() {
   const drillColumns: Column<LedgerRow>[] = [
     { header: 'Brand', accessorKey: 'brand', cell: (r) => <span className="font-semibold">{r.brand}</span> },
     { header: 'Parent Level Revenue', accessorKey: 'parent_revenue', cell: (r) => `$${Number(r.parent_revenue || 0).toLocaleString()}` },
-    { header: 'Revenue Share', accessorKey: 'revenue_share', cell: (r) => `${Number(r.revenue_share || 0).toFixed(2)}%` },
+    { header: 'Market Share %', accessorKey: 'revenue_share', cell: (r) => `${Number(r.revenue_share || 0).toFixed(2)}%` },
+    { header: 'Market Power', accessorKey: 'market_power_score', cell: (r) => <span className="font-mono text-muted-foreground">{Number(r.market_power_score || 0).toFixed(2)}</span> },
     { header: 'Revenue Percentile', accessorKey: 'revenue_percentile', cell: (r) => <span className="font-mono text-muted-foreground">{Number((r as any).revenue_percentile || 0).toFixed(1)}</span> },
     { header: 'Sales Percentile', accessorKey: 'sales_percentile', cell: (r) => <span className="font-mono text-muted-foreground">{Number((r as any).sales_percentile || 0).toFixed(1)}</span> },
     { header: 'Momentum Score', accessorKey: 'momentum_score', cell: (r) => <ScoreBar score={Number(r.momentum_score || 0)} onClick={() => setSelectedEvidence(r.evidence || null)} /> },
-    { header: 'Primary Engine', accessorKey: 'primary_engine', cell: (r) => <Badge variant="outline">{r.primary_engine || 'N/A'}</Badge> },
+    { header: 'Growth Driver', accessorKey: 'primary_engine', cell: (r) => <Badge variant="outline">{r.primary_engine || 'N/A'}</Badge> },
     { header: 'Classification', accessorKey: 'classification', cell: (r) => <Badge variant="outline">{r.classification}</Badge> },
     { header: 'View Calculation / Evidence', accessorKey: 'evidence', cell: (r) => <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); setSelectedEvidence(r.evidence || null); }}>View</Button> },
   ];
@@ -154,8 +180,10 @@ export default function RevenueMomentum() {
   const ledgerColumns: Column<LedgerRow>[] = [
     { header: '#', accessorKey: 'row_number', cell: (r) => <span className="font-mono text-muted-foreground">{r.row_number ?? '-'}</span> },
     { header: 'Ticker / Brand', accessorKey: 'brand', cell: (r) => <span className="font-bold text-foreground uppercase tracking-wide">{r.brand}</span> },
+    { header: 'Market Share %', accessorKey: 'revenue_share', cell: (r) => <span className="font-mono">{Number(r.revenue_share || 0).toFixed(2)}%</span> },
     { header: 'Momentum', accessorKey: 'momentum_score', cell: (r) => <ScoreBar score={Number(r.momentum_score || 0)} onClick={(e) => { e?.stopPropagation(); setSelectedEvidence(r.evidence || null); }} /> },
-    { header: 'Primary Engine', accessorKey: 'primary_engine', cell: (r) => <Badge variant="outline">{r.primary_engine || 'N/A'}</Badge> },
+    { header: 'Market Power', accessorKey: 'market_power_score', cell: (r) => <span className="font-mono">{Number(r.market_power_score || 0).toFixed(2)}</span> },
+    { header: 'Growth Driver', accessorKey: 'primary_engine', cell: (r) => <Badge variant="outline">{r.primary_engine || 'N/A'}</Badge> },
     { header: 'Classification', accessorKey: 'classification', cell: (r) => <Badge variant="outline">{r.classification}</Badge> },
     { header: 'Calculation / Evidence', accessorKey: 'evidence', cell: (r) => <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); setSelectedEvidence(r.evidence || null); }}>View</Button> },
   ];
@@ -171,6 +199,17 @@ export default function RevenueMomentum() {
       </div>
 
       <section className="pt-1">
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3 mb-4">
+          <div className="rounded-md border border-border p-3"><p className="text-xs text-muted-foreground uppercase">Total Brands</p><p className="text-xl font-bold">{rm.momentum_ledger.length}</p></div>
+          <div className="rounded-md border border-success/20 bg-success/5 p-3"><p className="text-xs text-muted-foreground uppercase">Dominant Leaders</p><p className="text-xl font-bold">{rm.metrics.market_leaders.count}</p></div>
+          <div className="rounded-md border border-primary/20 bg-primary/5 p-3"><p className="text-xs text-muted-foreground uppercase">Growth Challengers</p><p className="text-xl font-bold">{rm.metrics.emerging_brands.count}</p></div>
+          <div className="rounded-md border border-warning/20 bg-warning/5 p-3"><p className="text-xs text-muted-foreground uppercase">Revenue Heavyweights</p><p className="text-xl font-bold">{rm.metrics.premium_brands.count}</p></div>
+          <div className="rounded-md border border-border bg-muted/20 p-3"><p className="text-xs text-muted-foreground uppercase">Long Tail Players</p><p className="text-xl font-bold">{rm.metrics.niche_players.count}</p></div>
+          <div className="rounded-md border border-border p-3"><p className="text-xs text-muted-foreground uppercase">Top 5 Share</p><p className="text-xl font-bold">{Number(rm.concentration?.top_5_share || 0).toFixed(1)}%</p></div>
+        </div>
+        <p className="text-xs text-muted-foreground mb-4">
+          Top 5 brands control {Number(rm.concentration?.top_5_share || 0).toFixed(1)}% of category revenue.
+        </p>
         <div className="flex items-center gap-2 mb-4">
           <Activity className="w-5 h-5 text-primary" />
           <h2 className="text-xl font-bold tracking-tight">Market Momentum Matrix</h2>
@@ -214,7 +253,7 @@ export default function RevenueMomentum() {
             </div>
             <DataTable
               columns={ledgerColumns}
-              data={rm.momentum_ledger}
+              data={rm.momentum_ledger.slice().sort((a, b) => Number(b.revenue_share || 0) - Number(a.revenue_share || 0) || Number(b.momentum_score || 0) - Number(a.momentum_score || 0))}
               pageSize={15}
               rowKey={(row, i) => `${row.brand}-${row.row_number ?? i}`}
               onRowClick={(row) => setSelectedEvidence(row.evidence || null)}
@@ -230,23 +269,63 @@ export default function RevenueMomentum() {
       >
         {selectedGroup && selectedGroupMeta && (
           <div className="space-y-5">
-            <div className="rounded-lg border border-border bg-muted/20 p-4 space-y-2">
-              <p className="text-xs uppercase tracking-wider text-muted-foreground">{selectedGroupMeta.ruleLabel}</p>
-              <p className="text-sm">
-                {selectedGroup.tinyllama_strategy
-                  ? selectedGroup.tinyllama_strategy
-                  : `${selectedGroup.tinyllama_status || 'TinyLlama unavailable, showing rule-based insight.'} ${selectedGroup.rule_based_strategy || ''}`}
-              </p>
-              <div className="flex gap-2">
+            <div className="rounded-lg border border-border bg-muted/20 p-5 space-y-4 shadow-sm">
+              <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground border-b border-border/50 pb-2 mb-2">{selectedGroupMeta.ruleLabel}</p>
+              
+              {!selectedGroup.ai_insight ? (
+                <div className="text-sm italic text-muted-foreground">AI Insight Unavailable</div>
+              ) : typeof selectedGroup.ai_insight === 'string' ? (
+                <div className="text-sm whitespace-pre-line leading-relaxed">{selectedGroup.ai_insight}</div>
+              ) : (
+                <div className="space-y-4 text-sm">
+                  {selectedGroup.ai_insight.insights?.map((insight: any, idx: number) => (
+                    <div key={idx} className="bg-card border border-border/60 rounded-lg overflow-hidden shadow-sm">
+                      <div className="bg-muted/40 px-4 py-3 border-b border-border/50">
+                        <h4 className="font-semibold text-foreground tracking-wide text-xs">{insight.title}</h4>
+                      </div>
+                      <div className="p-4 space-y-4">
+                        <div className="bg-primary/5 border border-primary/20 rounded p-3 text-sm font-mono flex flex-col gap-1">
+                          {Object.entries(insight.evidence || {}).map(([key, value]) => (
+                            <div key={key} className="flex justify-between items-center text-primary">
+                              <span className="opacity-70">{key}:</span>
+                              <span className="font-semibold">{String(value)}</span>
+                            </div>
+                          ))}
+                        </div>
+                        <div>
+                          <span className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold mb-1 block">Observation</span>
+                          <p className="text-foreground leading-relaxed">{insight.observation}</p>
+                        </div>
+                        <div>
+                          <span className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold mb-1 block">Why It Matters</span>
+                          <p className="text-foreground leading-relaxed">{insight.why_it_matters}</p>
+                        </div>
+                        <div>
+                          <span className="text-[10px] uppercase tracking-widest text-primary font-bold mb-1 block">Potential Opportunity</span>
+                          <p className="text-foreground leading-relaxed">{insight.potential_opportunity}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  
+                  {(!selectedGroup.ai_insight.insights || selectedGroup.ai_insight.insights.length === 0) && (
+                    <div className="text-muted-foreground text-center py-6 italic border rounded-lg bg-muted/20">
+                      The available data does not provide enough evidence to generate insights.
+                    </div>
+                  )}
+                </div>
+              )}
+              
+              <div className="flex gap-2 pt-2 mt-4 border-t border-border/50">
                 <Button size="sm" variant="outline" onClick={() => setSelectedEvidence(selectedGroup.evidence || null)}>
-                  View Group Evidence
+                  View Audit Trail
                 </Button>
               </div>
             </div>
 
             <DataTable
               columns={drillColumns}
-              data={selectedGroup.items}
+              data={selectedGroup.items.slice().sort((a, b) => Number(b.revenue_share || 0) - Number(a.revenue_share || 0) || Number(b.momentum_score || 0) - Number(a.momentum_score || 0))}
               pageSize={20}
               rowKey={(row, i) => `${row.brand}-${row.row_number ?? i}`}
               onRowClick={(row) => setSelectedEvidence(row.evidence || null)}
