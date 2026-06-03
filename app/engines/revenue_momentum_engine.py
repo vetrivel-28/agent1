@@ -33,10 +33,12 @@ _PRICE_TREND_CANDIDATES = ["Price Trend (90 days) (%)", "price trend (90 days) (
 _NUMERIC_CLEAN_RE = re.compile(r"[^\d\.\-]")
 
 _CLASSIFICATION_RULE = (
-    "Dominant Leader: Revenue Percentile >= 50 and Sales Percentile >= 50; "
-    "Growth Challenger: Revenue Percentile < 50 and Sales Percentile >= 50; "
-    "Revenue Heavyweight: Revenue Percentile >= 50 and Sales Percentile < 50; "
-    "Long Tail Player: Revenue Percentile < 50 and Sales Percentile < 50."
+    "Dominant Leader: Revenue Tier A/B + High Momentum; "
+    "Revenue Heavyweight: Revenue Tier A/B + Low/Moderate Momentum; "
+    "Growth Challenger: Revenue Tier C + High Momentum; "
+    "Long Tail Player: Revenue Tier C + Low/Moderate Momentum. "
+    "(High Momentum threshold is adaptive 75th percentile; "
+    "Tier A: Top 60% cumulative rev, Tier B: 60-85%, Tier C: >85%)"
 )
 
 _WEIGHTS = {
@@ -93,16 +95,6 @@ def _safe_minmax(series: pd.Series, invert: bool = False) -> pd.Series:
     if invert:
         out = 100.0 - out
     return out.clip(0.0, 100.0)
-
-
-def _classify(revenue_percentile: float, sales_percentile: float) -> str:
-    if revenue_percentile >= 50 and sales_percentile >= 50:
-        return "Dominant Leader"
-    if revenue_percentile < 50 and sales_percentile >= 50:
-        return "Growth Challenger"
-    if revenue_percentile >= 50 and sales_percentile < 50:
-        return "Revenue Heavyweight"
-    return "Long Tail Player"
 
 
 
@@ -393,11 +385,24 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
         brand_agg["bsr_momentum_score"] = np.nan
         
     # 5. Revenue Efficiency Score
+    eff_series = None
     if "parent_sales" in brand_agg.columns:
-        eff = brand_agg["parent_revenue"] / brand_agg["parent_sales"].replace({0.0: np.nan})
-        brand_agg["revenue_efficiency_score"] = _safe_minmax(eff)
+        eff_series = brand_agg["parent_revenue"] / brand_agg["parent_sales"].replace({0.0: np.nan})
+        brand_agg["revenue_efficiency_score"] = _safe_minmax(eff_series)
     else:
         brand_agg["revenue_efficiency_score"] = np.nan
+        
+    raw_bounds = {}
+    if "sales_trend_pct" in brand_agg.columns:
+        raw_bounds["sales_trend"] = {"min": brand_agg["sales_trend_pct"].min(), "max": brand_agg["sales_trend_pct"].max()}
+    if "revenue_trend_pct" in brand_agg.columns:
+        raw_bounds["revenue_trend"] = {"min": brand_agg["revenue_trend_pct"].min(), "max": brand_agg["revenue_trend_pct"].max()}
+    if "parent_sales" in brand_agg.columns:
+        raw_bounds["sales_velocity"] = {"min": brand_agg["parent_sales"].min(), "max": brand_agg["parent_sales"].max()}
+        if eff_series is not None:
+            raw_bounds["revenue_efficiency"] = {"min": eff_series.min(), "max": eff_series.max()}
+    if "bsr" in brand_agg.columns:
+        raw_bounds["bsr"] = {"min": brand_agg["bsr"].min(), "max": brand_agg["bsr"].max()}
 
     component_cols = ["sales_trend_score", "revenue_trend_score", "sales_velocity_score", "bsr_momentum_score", "revenue_efficiency_score"]
     for c in component_cols:
@@ -421,8 +426,59 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
     else:
         brand_agg["sales_percentile"] = brand_agg["product_count"].rank(pct=True, method="average") * 100.0
 
-    brand_agg["classification"] = brand_agg.apply(lambda r: _classify(float(r["revenue_percentile"]), float(r["sales_percentile"])), axis=1)
+    brand_agg["market_power_score"] = brand_agg["revenue_percentile"]
+    
+    # Calculate dataset median market share
+    dataset_median_market_share = float(brand_agg["revenue_share"].median())
+    leader_share = float(brand_agg["revenue_share"].max())
+    
+    # Sort by revenue for tiering
+    brand_agg_tier_sort = brand_agg.sort_values("parent_revenue", ascending=False).copy()
+    brand_agg_tier_sort["cum_revenue_share"] = brand_agg_tier_sort["revenue_share"].cumsum()
+    
+    def assign_tier(cum_share):
+        if cum_share <= 60.0:
+            return "A"
+        elif cum_share <= 85.0:
+            return "B"
+        return "C"
+        
+    brand_agg_tier_sort["revenue_tier"] = brand_agg_tier_sort["cum_revenue_share"].apply(assign_tier)
+    
+    # If Tier A is empty (e.g., first brand has >60% share), ensure the first brand is at least Tier A
+    if not (brand_agg_tier_sort["revenue_tier"] == "A").any() and not brand_agg_tier_sort.empty:
+        brand_agg_tier_sort.iloc[0, brand_agg_tier_sort.columns.get_loc("revenue_tier")] = "A"
+        
+    brand_agg = brand_agg.merge(brand_agg_tier_sort[["brand", "revenue_tier"]], on="brand", how="left")
+    
+    # Adaptive momentum cutoffs
+    momentum_cutoff_75 = float(brand_agg["momentum_score"].quantile(0.75))
+    momentum_cutoff_50 = float(brand_agg["momentum_score"].median())
+    momentum_cutoff = momentum_cutoff_75
+    
+    def adaptive_classify(row, cutoff):
+        tier = row["revenue_tier"]
+        mom = row["momentum_score"]
+        
+        is_high_momentum = mom >= cutoff
+        
+        if tier in ("A", "B"):
+            if is_high_momentum:
+                return "Dominant Leader", f"Revenue Tier {tier} with high momentum."
+            else:
+                return "Revenue Heavyweight", f"Revenue Tier {tier} with low/moderate momentum."
+        else: # Tier C
+            if is_high_momentum:
+                return "Growth Challenger", "Revenue Tier C with high momentum."
+            else:
+                return "Long Tail Player", "Revenue Tier C with low/moderate momentum."
 
+    classification_results = brand_agg.apply(lambda r: adaptive_classify(r, momentum_cutoff), axis=1)
+    brand_agg["classification"] = classification_results.apply(lambda x: x[0])
+    brand_agg["classification_reason"] = classification_results.apply(lambda x: x[1])
+    
+    fallback_used = False
+        
     brand_agg_sorted = brand_agg.sort_values("momentum_score", ascending=False).reset_index(drop=True)
     brand_agg_sorted["rank"] = brand_agg_sorted.index + 1
     
@@ -485,11 +541,84 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
                 primary_engine = engine_map.get(k, "Sales Velocity")
                 
         # Generate calculation string
-        calc_str = ""
-        for k, v in comps.items():
-            if v is not None:
-                calc_str += f"{_WEIGHTS[k]} × {v:.1f}\n"
-        calc_str += f"= {row['momentum_score']:.1f}"
+        raw_sales_trend = float(row.get("sales_trend_pct", np.nan))
+        raw_rev_trend = float(row.get("revenue_trend_pct", np.nan))
+        raw_sales = float(row.get("parent_sales", np.nan))
+        raw_bsr = float(row.get("bsr", np.nan))
+        raw_eff = float(row["parent_revenue"] / row["parent_sales"]) if pd.notna(row.get("parent_sales")) and row["parent_sales"] != 0 else np.nan
+
+        calc_str = "Momentum Score Components Explanation:\n\n"
+        
+        if pd.notna(raw_sales_trend) and "sales_trend" in raw_bounds:
+            calc_str += "A. Sales Trend Score\n"
+            calc_str += f"- Brand Sales Trend = {raw_sales_trend:.2f}%\n"
+            calc_str += "- Aggregation method: revenue-weighted average of Sales Trend (%)\n"
+            calc_str += "- Normalization method: Min-Max scaling to 0-100\n"
+            calc_str += f"- Dataset min Sales Trend = {raw_bounds['sales_trend']['min']:.2f}\n"
+            calc_str += f"- Dataset max Sales Trend = {raw_bounds['sales_trend']['max']:.2f}\n"
+            calc_str += f"- Final Sales Trend Score = {comps['sales_trend_score']:.1f}\n\n"
+
+        if pd.notna(raw_rev_trend) and "revenue_trend" in raw_bounds:
+            calc_str += "B. Revenue Trend Score\n"
+            if not revenue_trend_col and sales_trend_col:
+                calc_str += "- Uses Sales Trend proxy because revenue trend column is unavailable.\n"
+            calc_str += f"- Brand Revenue Trend = {raw_rev_trend:.2f}%\n"
+            calc_str += "- Normalization method: Min-Max scaling to 0-100\n"
+            calc_str += f"- Dataset min Revenue Trend = {raw_bounds['revenue_trend']['min']:.2f}\n"
+            calc_str += f"- Dataset max Revenue Trend = {raw_bounds['revenue_trend']['max']:.2f}\n"
+            calc_str += f"- Final Revenue Trend Score = {comps['revenue_trend_score']:.1f}\n\n"
+
+        if pd.notna(raw_sales) and "sales_velocity" in raw_bounds:
+            calc_str += "C. Sales Velocity Score\n"
+            calc_str += f"- Brand Parent Level Sales = {raw_sales:.2f}\n"
+            calc_str += "- Normalization method: Min-Max scaling to 0-100\n"
+            calc_str += f"- Dataset min Sales = {raw_bounds['sales_velocity']['min']:.2f}\n"
+            calc_str += f"- Dataset max Sales = {raw_bounds['sales_velocity']['max']:.2f}\n"
+            calc_str += f"- Final Sales Velocity Score = {comps['sales_velocity_score']:.1f}\n\n"
+
+        if pd.notna(raw_bsr) and "bsr" in raw_bounds:
+            calc_str += "D. BSR Momentum Score\n"
+            calc_str += f"- Brand BSR = {raw_bsr:.2f}\n"
+            calc_str += "- Aggregation method: revenue-weighted average BSR\n"
+            calc_str += "- Explanation: lower BSR is better\n"
+            calc_str += "- Normalization method: Inverted Min-Max scaling to 0-100 (lower BSR -> higher score)\n"
+            calc_str += f"- Dataset min BSR = {raw_bounds['bsr']['min']:.2f}\n"
+            calc_str += f"- Dataset max BSR = {raw_bounds['bsr']['max']:.2f}\n"
+            calc_str += f"- Final BSR Momentum Score = {comps['bsr_momentum_score']:.1f}\n\n"
+
+        if pd.notna(raw_eff) and "revenue_efficiency" in raw_bounds:
+            calc_str += "E. Revenue Efficiency Score\n"
+            calc_str += "- Revenue Efficiency = Parent Level Revenue / Parent Level Sales\n"
+            calc_str += f"- Brand Revenue per Unit = {raw_eff:.2f}\n"
+            calc_str += "- Normalization method: Min-Max scaling to 0-100\n"
+            calc_str += f"- Dataset min Revenue Efficiency = {raw_bounds['revenue_efficiency']['min']:.2f}\n"
+            calc_str += f"- Dataset max Revenue Efficiency = {raw_bounds['revenue_efficiency']['max']:.2f}\n"
+            calc_str += f"- Final Revenue Efficiency Score = {comps['revenue_efficiency_score']:.1f}\n\n"
+
+        calc_str += "----------------------------------------\n"
+        calc_str += "Momentum Score Formula:\n"
+        calc_str += "Momentum Score =\n"
+        if comps['sales_trend_score'] is not None: calc_str += f"  Sales Trend Score ({comps['sales_trend_score']:.1f}) × 35%\n"
+        if comps['revenue_trend_score'] is not None: calc_str += f"+ Revenue Trend Score ({comps['revenue_trend_score']:.1f}) × 25%\n"
+        if comps['sales_velocity_score'] is not None: calc_str += f"+ Sales Velocity Score ({comps['sales_velocity_score']:.1f}) × 20%\n"
+        if comps['bsr_momentum_score'] is not None: calc_str += f"+ BSR Momentum Score ({comps['bsr_momentum_score']:.1f}) × 10%\n"
+        if comps['revenue_efficiency_score'] is not None: calc_str += f"+ Revenue Efficiency Score ({comps['revenue_efficiency_score']:.1f}) × 10%\n"
+        calc_str += f"= Final Momentum Score: {row['momentum_score']:.1f}\n\n"
+
+        calc_str += "----------------------------------------\n"
+        calc_str += "Classification Evidence:\n"
+        calc_str += f"- Brand Parent Revenue: {row['parent_revenue']:.2f}\n"
+        calc_str += f"- Market Share: {row['revenue_share']:.2f}%\n"
+        if pd.notna(raw_sales):
+            calc_str += f"- Parent Level Sales: {raw_sales:.2f}\n"
+        calc_str += f"- Revenue Tier: {row.get('revenue_tier', 'C')}\n"
+        calc_str += f"- Momentum Score: {row['momentum_score']:.1f}\n"
+        calc_str += f"- Momentum High Threshold: {momentum_cutoff_75:.1f}\n"
+        calc_str += f"- Dataset Median Momentum: {momentum_cutoff_50:.1f}\n"
+        calc_str += f"- Applied Rule: {row.get('classification_reason', '')}\n"
+        
+        above_or_below = "above or equal to" if row['momentum_score'] >= momentum_cutoff_75 else "below"
+        calc_str += f"- Why: {row['brand']} is {row['classification']} because it is Revenue Tier {row.get('revenue_tier', 'C')} and its Momentum Score {row['momentum_score']:.1f} is {above_or_below} the high momentum threshold {momentum_cutoff_75:.1f}.\n"
         
         ledger_evidence = _build_evidence(
             metric_name=f"Momentum Score - {row['brand']}",
@@ -497,9 +626,17 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
             source_columns=src_cols,
             source_rows=evidence_rows,
             calculation_steps=["Aggregate brand-level signals (Parent Level Revenue as base)", "Normalize to 0-100", "Apply weighted formula", "Apply classification thresholds"],
-            intermediate_values={"components": comps, "weights": _WEIGHTS, "revenue_percentile": round(float(row["revenue_percentile"]), 4), "sales_percentile": round(float(row["sales_percentile"]), 4), "calculation": calc_str},
+            intermediate_values={
+                "components": comps,
+                "weights": _WEIGHTS,
+                "revenue_percentile": round(float(row["revenue_percentile"]), 4),
+                "sales_percentile": round(float(row["sales_percentile"]), 4),
+                "calculation": calc_str,
+                "momentum_high_threshold": round(momentum_cutoff_75, 4),
+                "median_momentum": round(momentum_cutoff_50, 4)
+            },
             final_value=round(float(row["momentum_score"]), 4),
-            classification_rule=f"Revenue Percentile = {round(float(row['revenue_percentile']), 1)}, Sales Percentile = {round(float(row['sales_percentile']), 1)} -> {row['classification']}",
+            classification_rule=f"Revenue Tier = {row['revenue_tier']}, Momentum = {round(float(row['momentum_score']), 1)} -> {row['classification']} ({row.get('classification_reason', '')})",
         )
         
         momentum_ledger.append({
@@ -513,7 +650,8 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
             "product_count": int(row["product_count"]),
             "revenue_percentile": round(float(row["revenue_percentile"]), 1),
             "sales_percentile": round(float(row["sales_percentile"]), 1),
-            "market_power_score": round((0.7 * float(row["revenue_percentile"])) + (0.3 * float(row["sales_percentile"])), 2),
+            "revenue_tier": str(row.get("revenue_tier", "C")),
+            "market_power_score": round(float(row.get("market_power_score", row["revenue_percentile"])), 2),
             "revenue_strength": round(float(row["revenue_strength"]), 4),
             "momentum_score": round(float(row["momentum_score"]), 1),
             "sales_trend_score": comps["sales_trend_score"],
@@ -522,6 +660,7 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
             "bsr_momentum_score": comps["bsr_momentum_score"],
             "revenue_efficiency_score": comps["revenue_efficiency_score"],
             "classification": str(row["classification"]),
+            "classification_reason": str(row.get("classification_reason", "")),
             "primary_engine": primary_engine,
             "evidence": ledger_evidence,
         })
@@ -645,7 +784,24 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
                 "opportunity_alerts": opportunity_alerts,
                 "executive_questions": executive_questions,
                 "momentum_ledger": momentum_ledger,
-                "classification_rules": {"rule_text": _CLASSIFICATION_RULE, "thresholds": {"revenue_percentile_cutoff": 50, "sales_percentile_cutoff": 50}},
+                "classification_summary": {
+                    "adaptive_method": "fallback_to_60th_percentile" if fallback_used else "75th_percentile",
+                    "revenue_tiers": {"A": "Top 60% cumulative revenue", "B": "Next 25% (up to 85%)", "C": "Remaining long tail"},
+                    "market_power_cutoff": "Used revenue tier structure",
+                    "momentum_cutoff": round(momentum_cutoff, 2),
+                    "group_counts": quadrant_counts,
+                    "group_definitions": {
+                        "Dominant Leaders": "Revenue Tier A + High Momentum",
+                        "Growth Challengers": "Revenue Tier B/C + High Momentum",
+                        "Revenue Heavyweights": "Revenue Tier A/B + Low Momentum",
+                        "Long Tail Players": "Revenue Tier C + Low Momentum",
+                    },
+                    "guardrails_used": {
+                        "median_market_share": round(dataset_median_market_share, 4),
+                        "leader_market_share": round(leader_share, 4),
+                    },
+                },
+                "classification_rules": {"rule_text": _CLASSIFICATION_RULE, "thresholds": {"momentum_cutoff": round(momentum_cutoff, 2)}},
                 "quadrant_audit": {
                     "counts": quadrant_counts,
                     "counts_by_label": {

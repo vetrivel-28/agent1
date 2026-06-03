@@ -464,3 +464,7 @@ function BestClusterEvidence({ cluster, segments }: { cluster: string; segments:
     </div>
   );
 }
+
+export default function WhitespaceOpportunities() {
+  return null;
+}

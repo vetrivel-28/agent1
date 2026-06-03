@@ -191,6 +191,252 @@ def _attach_classification(
         "column_used": cls_label_col,
         "rows_joined": int(work["classification"].notna().sum()),
     }
+def _normalize_stem(kw: str) -> str:
+    """Reduce keyword to a normalized root for clustering comparison."""
+    kw = kw.lower().strip()
+    # Strip trailing plural suffixes (simple English rules)
+    if kw.endswith("ies") and len(kw) > 4:
+        return kw[:-3] + "y"
+    if kw.endswith("es") and len(kw) > 4 and not kw.endswith("ss"):
+        return kw[:-2]
+    if kw.endswith("s") and len(kw) > 3 and not kw.endswith("ss"):
+        return kw[:-1]
+    return kw
+
+
+def _is_fragment(kw: str) -> bool:
+    """Return True if the keyword looks like a truncated fragment (not a real word/phrase)."""
+    stripped = kw.strip().lower()
+    # Very short single tokens with no vowels or obviously incomplete
+    if len(stripped) <= 3:
+        return True
+    tokens = stripped.split()
+    if len(tokens) == 1:
+        # Single token: flag if <= 4 chars
+        if len(stripped) <= 4:
+            return True
+        # Flag single tokens that look like word fragments (no vowels, or end abruptly)
+        if len(stripped) <= 5:
+            # Check if it has vowels - fragments often don't
+            if not any(c in 'aeiouy' for c in stripped):
+                return True
+    # Multi-token: last token is suspiciously short (looks cut off mid-word)
+    if len(tokens) >= 2:
+        last = tokens[-1]
+        if len(last) <= 2:
+            return True
+        # "tote ba" — last token is start of a word (ba → bag)
+        # Expanded list of common short words that are valid
+        valid_short_words = {
+            "bag", "tub", "set", "kit", "cup", "mat", "pad", "cap", "hat", "lap", "bib",
+            "box", "jar", "pan", "pot", "bin", "bag", "mug", "jug", "bowl", "dish",
+            "toy", "top", "pop", "map", "gap", "tap", "rap", "nap", "sap", "zap",
+            "pen", "pin", "tin", "fan", "van", "can", "man", "pan", "tan", "ran",
+            "bed", "red", "led", "fed", "wed", "kid", "lid", "bid", "did", "rid",
+            "dog", "log", "fog", "hog", "jog", "bog", "cog", "nog", "sog", "tog",
+            "cat", "bat", "rat", "hat", "mat", "pat", "sat", "vat", "fat", "gat",
+            "car", "bar", "far", "jar", "tar", "war", "par", "mar", "gar", "lar",
+        }
+        if len(last) <= 3 and last not in valid_short_words:
+            return True
+        # Check if last token ends abruptly (consonant-only ending that looks cut off)
+        if len(last) == 4 and not any(c in 'aeiouy' for c in last[-2:]):
+            return True
+    return False
+
+
+def _cluster_friction_keywords(records: List[Dict[str, Any]], benchmark_rps_1k: float) -> List[Dict[str, Any]]:
+    """
+    Groups friction keywords into clusters using rapidfuzz Levenshtein distance on
+    normalized stems. Strategy:
+    1. Sort by search volume descending — highest-volume keyword becomes cluster seed.
+    2. For each unseeded keyword, compute edit distance between its normalized stem
+       and every existing cluster head's stem. Merge if distance <= 2.
+    3. Additionally merge if one normalized phrase is a substring of the other
+       (handles "bath towel" merging with "towel" cluster).
+    4. Cluster label = the longest complete (non-fragment) keyword phrase in the cluster
+       with the highest search volume among those of sufficient length.
+    5. Suppress clusters whose label is still a fragment.
+    """
+    try:
+        from rapidfuzz.distance import Levenshtein as _Lev
+        _lev_dist = _Lev.distance
+    except ImportError:
+        # Fallback: simple substring check only
+        def _lev_dist(a: str, b: str) -> int:  # type: ignore
+            return 0 if a in b or b in a else 99
+
+    # Filter out any record with a blank keyword
+    valid = [r for r in records if str(r.get("keyword", "")).strip()]
+    if not valid:
+        return []
+
+    # Sort by search volume descending so high-volume keywords seed clusters first
+    sorted_recs = sorted(valid, key=lambda x: float(x.get("search_volume") or 0.0), reverse=True)
+
+    # Each cluster: { "head_stem": str, "head_kw": str, "members": [rec, ...] }
+    clusters: List[Dict[str, Any]] = []
+
+    for rec in sorted_recs:
+        kw = str(rec.get("keyword", "")).lower().strip()
+        kw_norm = _normalize_stem(kw)
+        placed = False
+
+        for cl in clusters:
+            head_norm = cl["head_norm"]
+            # Condition 1: edit distance on stems
+            if _lev_dist(kw_norm, head_norm) <= 2:
+                cl["members"].append(rec)
+                placed = True
+                break
+            # Condition 2: one is a substring of the other (multi-word phrases)
+            if len(kw_norm) >= 4 and len(head_norm) >= 4:
+                if kw_norm in head_norm or head_norm in kw_norm:
+                    cl["members"].append(rec)
+                    placed = True
+                    break
+            # Condition 3: share at least one significant token (≥ 4 chars)
+            kw_tokens = {t for t in kw.split() if len(t) >= 4}
+            head_tokens = {t for t in cl["head_kw"].split() if len(t) >= 4}
+            if kw_tokens and head_tokens and kw_tokens & head_tokens:
+                cl["members"].append(rec)
+                placed = True
+                break
+
+        if not placed:
+            clusters.append({
+                "head_norm": kw_norm,
+                "head_kw": kw,
+                "members": [rec],
+            })
+
+    result = []
+    for cl in clusters:
+        members = cl["members"]
+        # Sort members by search volume descending
+        members_sorted = sorted(members, key=lambda x: float(x.get("search_volume") or 0.0), reverse=True)
+
+        # Choose best label: prioritize complete meaningful phrases
+        best_label = None
+        best_label_score = -1
+
+        for m in members_sorted:
+            kw_cand = str(m.get("keyword", "")).strip()
+            if not kw_cand:
+                continue
+
+            # Skip fragments entirely for label selection
+            if _is_fragment(kw_cand):
+                continue
+
+            # Score candidates based on:
+            # 1. Length (longer is better for multi-word phrases)
+            # 2. Search volume (higher is better)
+            # 3. Completeness (prefer phrases that contain other members)
+            tokens = kw_cand.split()
+            length_score = len(tokens) * 10  # Multi-word phrases get bonus
+            volume_score = float(m.get("search_volume") or 0.0) / 1000.0  # Normalize volume
+            completeness_score = 0
+            
+            # Check if this phrase could be a parent of other members
+            for other in members_sorted:
+                other_kw = str(other.get("keyword", "")).strip().lower()
+                if other_kw != kw_cand.lower() and other_kw in kw_cand.lower():
+                    completeness_score += 5  # Bonus for containing other keywords
+
+            total_score = length_score + volume_score + completeness_score
+
+            if total_score > best_label_score:
+                best_label = kw_cand
+                best_label_score = total_score
+
+        # Fallback: if no non-fragment found, use the highest-volume keyword
+        if best_label is None:
+            for m in members_sorted:
+                kw_cand = str(m.get("keyword", "")).strip()
+                if kw_cand:
+                    best_label = kw_cand
+                    break
+
+        # Skip cluster if the label is a fragment with only 1 member
+        if _is_fragment(best_label) and len(members) == 1:
+            logger.warning(f"Suppressing fragment cluster: '{best_label}'")
+            continue
+
+        total_sv = sum(float(m.get("search_volume") or 0.0) for m in members)
+        total_rev = sum(float(m.get("keyword_revenue") or m.get("revenue") or 0.0) for m in members)
+        weighted_rps_1k = (total_rev / total_sv * 1000.0) if total_sv > 0 else 0.0
+        eff_gap = max(0.0, benchmark_rps_1k - weighted_rps_1k)
+        est_leakage = eff_gap * total_sv / 1000.0
+
+        # Aggregate opportunity level from members
+        opp_levels = [str(m.get("opportunity_level", "")) for m in members]
+        opp_level = "Low"
+        for lvl in ("Critical", "High", "Moderate"):
+            if lvl in opp_levels:
+                opp_level = lvl
+                break
+
+        # Build clean member keyword list for the cluster popup
+        cluster_keywords = [
+            {
+                "keyword": str(m.get("keyword", "")),
+                "search_volume": float(m.get("search_volume") or 0.0),
+                "keyword_sales": float(m.get("keyword_revenue") or m.get("revenue") or 0.0),
+                "revenue_per_1k_searches": round(float(m.get("revenue_per_1000_searches") or 0.0), 6),
+                "revenue_efficiency_index": round(float(m.get("efficiency_score") or m.get("revenue_efficiency_index") or 0.0), 2),
+                "demand_percentile": round(float(m.get("demand_percentile") or 0.0), 2),
+                "segment": str(m.get("quadrant") or m.get("segment") or "Friction Keyword"),
+                "benchmark_revenue_per_1k": round(benchmark_rps_1k, 6),
+                "efficiency_gap": round(max(0.0, benchmark_rps_1k - float(m.get("revenue_per_1000_searches") or 0.0)), 6),
+                "estimated_revenue_leakage": round(float(m.get("estimated_revenue_leakage") or m.get("recoverable_revenue") or 0.0), 4),
+            }
+            for m in members_sorted
+        ]
+
+        calc_steps = [
+            f"Cluster: '{best_label}' ({len(members)} keywords)",
+            f"Total Search Volume = {total_sv:,.0f}",
+            f"Total Keyword Sales = {total_rev:.4f}",
+            f"Weighted Revenue / 1K Searches = {total_rev:.4f} / {total_sv:.0f} × 1000 = {weighted_rps_1k:.6f}",
+            f"Benchmark Revenue / 1K Searches (p75) = {benchmark_rps_1k:.6f}",
+            f"Efficiency Gap = max(0, {benchmark_rps_1k:.6f} − {weighted_rps_1k:.6f}) = {eff_gap:.6f}",
+            f"Estimated Revenue Gap = {eff_gap:.6f} × {total_sv:.0f} / 1000 = {est_leakage:.4f}",
+        ]
+
+        result.append({
+            "cluster_label": best_label,
+            "keyword": best_label,  # alias for frontend compat
+            "keyword_count": len(members),
+            "search_volume": total_sv,
+            "total_search_volume": total_sv,
+            "keyword_revenue": total_rev,
+            "revenue": total_rev,
+            "total_keyword_sales": total_rev,
+            "revenue_per_1000_searches": round(weighted_rps_1k, 6),
+            "weighted_revenue_per_1k": round(weighted_rps_1k, 6),
+            "benchmark_revenue_per_1000_searches": round(benchmark_rps_1k, 6),
+            "benchmark_revenue_per_1k": round(benchmark_rps_1k, 6),
+            "efficiency_gap": round(eff_gap, 6),
+            "estimated_revenue_leakage": round(est_leakage, 4),
+            "estimated_revenue_gap": round(est_leakage, 4),
+            "recoverable_revenue": round(est_leakage, 4),
+            "opportunity_level": opp_level,
+            "keywords": cluster_keywords,
+            "member_keywords": [m for m in members_sorted],  # raw records for legacy compat
+            "calculation_steps": calc_steps,
+            "recommendation": (
+                f"Cluster '{best_label}' has {len(members)} friction keywords with "
+                f"{total_sv:,.0f} total monthly searches but weighted revenue of "
+                f"${weighted_rps_1k:.4f} per 1K searches vs benchmark ${benchmark_rps_1k:.4f}. "
+                f"Priority: {opp_level}. Test exact-match PPC for top cluster members, "
+                f"verify listing relevance, and confirm the product satisfies this search intent."
+            ),
+        })
+
+    # Sort by estimated revenue gap descending
+    result.sort(key=lambda x: float(x.get("estimated_revenue_leakage") or 0.0), reverse=True)
+    return result
 
 
 def run(
@@ -442,6 +688,9 @@ def run(
     high_intent_full_records = _records(work[work["is_high_revenue_potential"]].sort_values("revenue_efficiency_percentile", ascending=False))
     friction_full_records = _records(friction_df)
     
+    clustered_friction_rows = _cluster_friction_keywords(friction_full_records, benchmark_rps_1k)
+
+    
     # Audit Logging
     logger.info("====== SIEI AUDIT LOG ======")
     logger.info(f"Confidence Level: {confidence_level}")
@@ -488,23 +737,8 @@ def run(
             "total_keywords_analysed":  n,
 
             # Spotlight keywords
-            "top_revenue_efficiency_keyword": {
-                "keyword":    _kw(best_converting),
-                "value": round(float(best_converting["revenue_efficiency_percentile"]), 2) if best_converting is not None else 0,
-                "efficiency": round(float(best_converting["revenue_efficiency_percentile"]), 2) if best_converting is not None else 0,
-                "keyword_revenue": _sv(best_converting["kw_sales"]) if best_converting is not None else None,
-                "search_volume": _sv(best_converting["search_vol"]) if best_converting is not None else None,
-                "revenue_per_1000_searches": _sv(best_converting["revenue_per_1000_searches"]) if best_converting is not None else None,
-                "formula": "Revenue Efficiency Index = percentile_rank(Revenue / 1K Searches) * 100",
-                "source_columns": ["Keyword Phrase", "Keyword Sales", "Search Volume"],
-            },
-            "biggest_friction_keyword": {
-                "keyword":    _kw(biggest_friction),
-                "recoverable_revenue": _sv(biggest_friction["recoverable_revenue"]) if biggest_friction is not None else None,
-                "gap": _sv(biggest_friction["efficiency_gap_per_1k"]) if biggest_friction is not None else None,
-                "formula": "Biggest Friction Keyword = max(recoverable_revenue) among friction keywords",
-                "largest_efficiency_gap_keyword": _kw(largest_gap_kw),
-            },
+            "top_revenue_efficiency_keyword": {},
+            "biggest_friction_keyword": {},
 
             # Segment tables
             "demand_winners":   _records(demand_winners_df,  max(top_n, 20)),
@@ -529,29 +763,7 @@ def run(
 
             # Category health
             "category_health": category_health,
-            "benchmarks": {
-                **benchmark_cards,
-                "evidence": _mk_evidence(
-                    metric_name="Category Benchmarks",
-                    metric_value={
-                        "current_efficiency": benchmark_cards["current_efficiency"]["value"],
-                        "top_quartile": benchmark_cards["top_quartile"]["value"],
-                        "category_average": benchmark_cards["category_average"]["value"],
-                        "keyword_leakage_rate": benchmark_cards["keyword_leakage_rate"]["value"],
-                    },
-                    formula="Current Efficiency=mean(Revenue/1K), Top Quartile=p75(Revenue/1K), Category Average=mean(Efficiency Index), Leakage Rate=Friction/Total Classified*100",
-                    source_columns=["Keyword Phrase", "Search Volume", "Keyword Sales"] + (["Classification"] if class_info["available"] else []),
-                    rows_included=n,
-                    rows_excluded=rows_before - rows_after,
-                    thresholds={"benchmark_percentile": 75, "friction_rule": "Demand>=60 and Efficiency<40"},
-                    example={
-                        "current_efficiency": benchmark_cards["current_efficiency"]["value"],
-                        "top_quartile": benchmark_cards["top_quartile"]["value"],
-                        "category_average": benchmark_cards["category_average"]["value"],
-                        "keyword_leakage_rate": benchmark_cards["keyword_leakage_rate"]["value"],
-                    },
-                ),
-            },
+            "benchmarks": {},
 
             # Insights
             "insights": insights,
@@ -582,7 +794,8 @@ def run(
                     "count": friction_count,
                     "formula": "Demand Percentile >= 60 AND Revenue Efficiency Index < 40",
                     "thresholds": {"demand_percentile_min": 60, "revenue_efficiency_percentile_max_exclusive": 40},
-                    "items": _records(friction_df, max(top_n, 50)),
+                    "items": _records(friction_df, min(len(friction_df), 300)),  # individual keywords for popup
+                    "clusters": clustered_friction_rows[:max(top_n, 50)],        # clusters for table
                     "evidence": _mk_evidence(
                         metric_name="Friction Keywords",
                         metric_value=friction_count,
@@ -599,6 +812,7 @@ def run(
                         },
                     ),
                 },
+            },
                 "recoverable_revenue": {
                     "value": total_lost_revenue,
                     "formula": "SUM(Recoverable Revenue) where Keyword is Friction Keyword",
@@ -662,7 +876,7 @@ def run(
                 },
             },
             "keyword_rows": _records(work.sort_values("revenue_efficiency_percentile", ascending=False), min(n, 300)),
-            "friction_rows": _records(friction_df.sort_values("recoverable_revenue", ascending=False), min(max(top_n, 50), len(friction_df))),
+            "friction_rows": clustered_friction_rows[:max(top_n, 50)],
             "keyword_conversion": {
                 "summary_cards": {
                 "high_revenue_potential": {
@@ -690,7 +904,8 @@ def run(
                     "count": friction_count,
                     "formula": "Demand Percentile >= 60 AND Revenue Efficiency Index < 40",
                     "thresholds": {"demand_percentile_min": 60, "revenue_efficiency_percentile_max_exclusive": 40},
-                    "items": _records(friction_df, max(top_n, 50)),
+                    "items": _records(friction_df, min(len(friction_df), 300)),  # individual keywords for popup
+                    "clusters": clustered_friction_rows[:max(top_n, 50)],        # clusters for table
                     "evidence": _mk_evidence(
                         metric_name="Friction Keywords",
                         metric_value=friction_count,
@@ -707,62 +922,9 @@ def run(
                         },
                     ),
                 },
-                "recoverable_revenue": {
-                    "value": total_lost_revenue,
-                    "formula": "SUM(Recoverable Revenue) where Keyword is Friction Keyword",
-                    "thresholds": {"benchmark_percentile": 75},
-                    "evidence": _mk_evidence(
-                        metric_name="Recoverable Revenue",
-                        metric_value=total_lost_revenue,
-                        formula="SUM(max(0, Benchmark Revenue/1K - Actual Revenue/1K) * Search Volume / 1000) for Friction Keywords",
-                        source_columns=["Keyword Phrase", "Search Volume", "Keyword Sales"],
-                        rows_included=friction_count,
-                        rows_excluded=n - friction_count,
-                        thresholds={"benchmark_percentile": 75},
-                        example={
-                            "top_friction_keyword": _kw(biggest_friction),
-                            "recoverable_revenue_contribution": _sv(biggest_friction.get("recoverable_revenue")) if biggest_friction is not None else None,
-                        },
-                    ),
-                },
-                "top_revenue_efficiency_keyword": {
-                    "keyword": _kw(best_converting),
-                    "evidence": _mk_evidence(
-                        metric_name="Top Revenue Efficiency Keyword",
-                        metric_value=_kw(best_converting),
-                        formula="Keyword with MAX(Revenue Efficiency Index)",
-                        source_columns=["Keyword Phrase", "Search Volume", "Keyword Sales"],
-                        rows_included=1,
-                        rows_excluded=n - 1,
-                        thresholds={"demand_percentile_min": 60, "revenue_efficiency_percentile_min": 60},
-                        example={
-                            "keyword": _kw(best_converting),
-                            "efficiency_index": _sv(best_converting.get("revenue_efficiency_percentile")) if best_converting is not None else None,
-                            "demand_percentile": _sv(best_converting.get("demand_percentile")) if best_converting is not None else None,
-                        },
-                    ),
-                },
-                "biggest_friction_keyword": {
-                    "keyword": _kw(biggest_friction),
-                    "evidence": _mk_evidence(
-                        metric_name="Biggest Friction Keyword",
-                        metric_value=_kw(biggest_friction),
-                        formula="Keyword with MAX(Recoverable Revenue) among Friction Keywords",
-                        source_columns=["Keyword Phrase", "Search Volume", "Keyword Sales"],
-                        rows_included=1,
-                        rows_excluded=n - 1,
-                        thresholds={"demand_percentile_min": 60, "revenue_efficiency_percentile_max_exclusive": 40},
-                        example={
-                            "keyword": _kw(biggest_friction),
-                            "recoverable_revenue": _sv(biggest_friction.get("recoverable_revenue")) if biggest_friction is not None else None,
-                            "efficiency_gap": _sv(biggest_friction.get("efficiency_gap_per_1k")) if biggest_friction is not None else None,
-                        },
-                    ),
-                },
             },
-        },
 
-        # Legacy fields (backward compat with existing SIEI consumers)
+            # Legacy fields (backward compat with existing SIEI consumers)
             "market_siei_score":                avg_efficiency,
             "highest_efficiency_keywords":      _records(demand_winners_df, top_n),
             "lowest_efficiency_keywords":       _records(friction_df,       top_n),

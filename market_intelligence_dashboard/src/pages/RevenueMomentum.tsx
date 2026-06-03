@@ -22,6 +22,8 @@ type LedgerRow = {
   market_power_score?: number;
   revenue_percentile?: number;
   sales_percentile?: number;
+  revenue_tier?: string;
+  classification_reason?: string;
   evidence?: MetricEvidence;
 };
 
@@ -61,6 +63,7 @@ type RevenueMomentumPayload = {
   };
   momentum_ledger: LedgerRow[];
   classification_rules?: { rule_text?: string };
+  classification_summary?: any;
 };
 
 const GROUP_META: Record<string, { title: string; ruleLabel: string; cardClass: string }> = {
@@ -169,8 +172,7 @@ export default function RevenueMomentum() {
     { header: 'Parent Level Revenue', accessorKey: 'parent_revenue', cell: (r) => `$${Number(r.parent_revenue || 0).toLocaleString()}` },
     { header: 'Market Share %', accessorKey: 'revenue_share', cell: (r) => `${Number(r.revenue_share || 0).toFixed(2)}%` },
     { header: 'Market Power', accessorKey: 'market_power_score', cell: (r) => <span className="font-mono text-muted-foreground">{Number(r.market_power_score || 0).toFixed(2)}</span> },
-    { header: 'Revenue Percentile', accessorKey: 'revenue_percentile', cell: (r) => <span className="font-mono text-muted-foreground">{Number((r as any).revenue_percentile || 0).toFixed(1)}</span> },
-    { header: 'Sales Percentile', accessorKey: 'sales_percentile', cell: (r) => <span className="font-mono text-muted-foreground">{Number((r as any).sales_percentile || 0).toFixed(1)}</span> },
+    { header: 'Revenue Tier', accessorKey: 'revenue_tier', cell: (r) => <span className="font-mono text-muted-foreground">{r.revenue_tier || 'N/A'}</span> },
     { header: 'Momentum Score', accessorKey: 'momentum_score', cell: (r) => <ScoreBar score={Number(r.momentum_score || 0)} onClick={() => setSelectedEvidence(r.evidence || null)} /> },
     { header: 'Growth Driver', accessorKey: 'primary_engine', cell: (r) => <Badge variant="outline">{r.primary_engine || 'N/A'}</Badge> },
     { header: 'Classification', accessorKey: 'classification', cell: (r) => <Badge variant="outline">{r.classification}</Badge> },
@@ -182,7 +184,7 @@ export default function RevenueMomentum() {
     { header: 'Ticker / Brand', accessorKey: 'brand', cell: (r) => <span className="font-bold text-foreground uppercase tracking-wide">{r.brand}</span> },
     { header: 'Market Share %', accessorKey: 'revenue_share', cell: (r) => <span className="font-mono">{Number(r.revenue_share || 0).toFixed(2)}%</span> },
     { header: 'Momentum', accessorKey: 'momentum_score', cell: (r) => <ScoreBar score={Number(r.momentum_score || 0)} onClick={(e) => { e?.stopPropagation(); setSelectedEvidence(r.evidence || null); }} /> },
-    { header: 'Market Power', accessorKey: 'market_power_score', cell: (r) => <span className="font-mono">{Number(r.market_power_score || 0).toFixed(2)}</span> },
+    { header: 'Power / Tier', accessorKey: 'market_power_score', cell: (r) => <span className="font-mono">{Number(r.market_power_score || 0).toFixed(0)} / {r.revenue_tier || 'N/A'}</span> },
     { header: 'Growth Driver', accessorKey: 'primary_engine', cell: (r) => <Badge variant="outline">{r.primary_engine || 'N/A'}</Badge> },
     { header: 'Classification', accessorKey: 'classification', cell: (r) => <Badge variant="outline">{r.classification}</Badge> },
     { header: 'Calculation / Evidence', accessorKey: 'evidence', cell: (r) => <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); setSelectedEvidence(r.evidence || null); }}>View</Button> },
@@ -225,7 +227,9 @@ export default function RevenueMomentum() {
               <div className="flex justify-between items-start mb-4">
                 <div>
                   <h3 className="font-bold text-lg">{g.meta.title}</h3>
-                  <p className="text-xs opacity-80 uppercase tracking-wider font-mono mt-0.5">{g.meta.ruleLabel}</p>
+                  <p className="text-xs opacity-80 uppercase tracking-wider font-mono mt-0.5">
+                    {rm.classification_summary?.group_definitions?.[g.meta.title] || g.meta.ruleLabel}
+                  </p>
                 </div>
                 <div className="text-3xl font-black font-mono">{g.block.count}</div>
               </div>
@@ -270,7 +274,9 @@ export default function RevenueMomentum() {
         {selectedGroup && selectedGroupMeta && (
           <div className="space-y-5">
             <div className="rounded-lg border border-border bg-muted/20 p-5 space-y-4 shadow-sm">
-              <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground border-b border-border/50 pb-2 mb-2">{selectedGroupMeta.ruleLabel}</p>
+              <p className="text-xs font-bold uppercase tracking-widest text-muted-foreground border-b border-border/50 pb-2 mb-2">
+                {rm.classification_summary?.group_definitions?.[selectedGroupMeta.title] || selectedGroupMeta.ruleLabel}
+              </p>
               
               {!selectedGroup.ai_insight ? (
                 <div className="text-sm italic text-muted-foreground">AI Insight Unavailable</div>

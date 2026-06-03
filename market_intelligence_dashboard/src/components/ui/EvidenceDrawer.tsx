@@ -12,6 +12,7 @@ export interface MetricEvidence {
   calculation_steps?: string[];
   classification_rule?: string;
   time_computed?: string;
+  formula?: string;
 }
 
 interface EvidenceDrawerProps {
@@ -125,7 +126,29 @@ export function EvidenceDrawer({ evidence, onClose }: EvidenceDrawerProps) {
           </button>
         </div>
         
-        <div className="p-4">
+        <div className="p-4 space-y-6">
+          {(evidence.formula || (evidence as any).intermediate_values?.calculation) && (
+            <div className="pt-2">
+              <h3 className="font-semibold text-sm mb-2 text-gray-900 border-b pb-1">Calculation Details</h3>
+              {evidence.formula && (
+                <div className="mb-3">
+                  <span className="text-xs font-bold uppercase text-gray-500 block mb-1">Formula</span>
+                  <div className="bg-blue-50 p-2 rounded text-xs font-mono text-blue-900 border border-blue-100">
+                    {evidence.formula}
+                  </div>
+                </div>
+              )}
+              {(evidence as any).intermediate_values?.calculation && (
+                <div>
+                  <span className="text-xs font-bold uppercase text-gray-500 block mb-1">Calculation Steps</span>
+                  <div className="bg-gray-50 p-2 rounded text-xs font-mono text-gray-800 whitespace-pre-wrap border border-gray-200">
+                    {(evidence as any).intermediate_values.calculation}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          
           <SourceRowsSection evidence={evidence} />
         </div>
       </motion.div>
