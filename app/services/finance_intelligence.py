@@ -274,6 +274,8 @@ def run(
             "margin_compression": mcr,
             "capital_efficiency": ces,
             "entry_metrics": entry_metrics,
+            # Flat aliases for frontend compatibility
+            "entry_cost": entry_metrics,
             "radar_chart": radar,
             "economic_risk_gauge": economic_risk,
             "economic_verdict": economic_verdict,

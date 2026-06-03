@@ -1,60 +1,34 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../services/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/Card';
 import { DataTable, type Column } from '../components/tables/DataTable';
 import { Drawer } from '../components/ui/Drawer';
-import { formatCurrency, cn } from '../utils/cn';
+import { cn } from '../utils/cn';
 import { isEngineOk, getEngineErrorMessage } from '../utils/analysisStatus';
-import {
-  AlertCircle, Loader2, TrendingUp, TrendingDown, Zap,
-  Target, Lightbulb, Info, AlertTriangle, ShieldCheck, X
-} from 'lucide-react';
-import {
-  ScatterChart, Scatter, XAxis, YAxis, CartesianGrid,
-  Tooltip as ReTooltip, ResponsiveContainer, ReferenceLine, Cell,
-} from 'recharts';
-import { motion } from 'framer-motion';
+import { AlertCircle, Info, Loader2, TrendingDown, TrendingUp, X, Zap, Target } from 'lucide-react';
+import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip as ReTooltip, ResponsiveContainer, ReferenceLine, Cell } from 'recharts';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 function efficiencyColor(score: number): string {
-  if (score >= 75) return 'text-emerald-500';
-  if (score >= 50) return 'text-cyan-500';
-  if (score >= 25) return 'text-orange-500';
+  if (score >= 60) return 'text-emerald-500';
+  if (score >= 40) return 'text-amber-500';
   return 'text-red-500';
 }
 
-function efficiencyBar(score: number): string {
-  if (score >= 75) return 'bg-emerald-500';
-  if (score >= 50) return 'bg-cyan-500';
-  if (score >= 25) return 'bg-orange-500';
-  return 'bg-red-500';
-}
-
-function opportunityBadge(level: string, quadrant: string, dollarImpact?: number | null): { label: string, colorClass: string, impact: string | null } {
-  const impactStr = dollarImpact != null ? formatCurrency(dollarImpact) : null;
-  
-  if (quadrant === 'Demand Winner' || quadrant === 'Hidden Gem') {
-    switch (level) {
-      case 'Critical':
-      case 'High': return { label: 'Strong Performer', colorClass: 'bg-emerald-500/15 text-emerald-500 border-emerald-500/30', impact: impactStr };
-      case 'Moderate': return { label: 'Moderate Potential', colorClass: 'bg-blue-500/15 text-blue-500 border-blue-500/30', impact: impactStr };
-      case 'Low':
-      default: return { label: 'Low Risk', colorClass: 'bg-slate-500/15 text-slate-500 border-slate-500/30', impact: impactStr };
-    }
-  } else if (quadrant === 'Friction Keyword') {
-    switch (level) {
-      case 'Critical':
-      case 'High': return { label: 'Major Leakage', colorClass: 'bg-red-500/15 text-red-500 border-red-500/30', impact: impactStr };
-      case 'Moderate': return { label: 'Moderate Leakage', colorClass: 'bg-orange-500/15 text-orange-500 border-orange-500/30', impact: impactStr };
-      case 'Low':
-      default: return { label: 'Minor Leakage', colorClass: 'bg-yellow-500/15 text-yellow-500 border-yellow-500/30', impact: impactStr };
-    }
-  }
-  return { label: level || '—', colorClass: 'bg-muted text-muted-foreground border-border', impact: null };
+function formatCurrencyPrecise(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(Number(value))) return '—';
+  const n = Number(value);
+  const fractionDigits = Math.abs(n) < 1 ? 2 : 2;
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: fractionDigits,
+    maximumFractionDigits: fractionDigits,
+  }).format(n);
 }
 
 function quadrantDotColor(q: string): string {
@@ -67,12 +41,7 @@ function quadrantDotColor(q: string): string {
   }
 }
 
-function formatShare(v: number | null | undefined): string {
-  if (v == null) return '—';
-  return v <= 1 ? `${(v * 100).toFixed(3)}%` : `${v.toFixed(3)}`;
-}
-
-const valOrMissing = (val: any, formatFn?: (v: any) => React.ReactNode) => {
+const valOrMissing = (val: any, formatFn?: (v: any) => any) => {
   if (val == null || val === '') return <span className="text-[10px] uppercase font-bold text-muted-foreground/60 italic">Not Available In Source Data</span>;
   return formatFn ? formatFn(val) : val;
 };
@@ -81,7 +50,7 @@ const valOrMissing = (val: any, formatFn?: (v: any) => React.ReactNode) => {
 // Tooltip wrapper
 // ---------------------------------------------------------------------------
 
-function Tip({ text, children }: { text: string; children: React.ReactNode }) {
+function Tip({ text, children }: { text: string; children: any }) {
   return (
     <div className="relative group/tip inline-flex">
       {children}
@@ -101,30 +70,29 @@ function Tip({ text, children }: { text: string; children: React.ReactNode }) {
 
 interface KpiProps {
   title: string;
-  value: string | number | React.ReactNode;
+  value: any;
   sub?: string;
-  icon: React.ReactNode;
+  icon: any;
   color?: string;
   bg?: string;
   tooltip?: string;
-  isActive?: boolean;
   onClick?: () => void;
 }
 
-function KpiCard({ title, value, sub, icon, color = 'text-primary', bg = 'bg-primary/10 border-primary/20', tooltip, isActive, onClick }: KpiProps) {
+function KpiCard({ title, value, sub, icon, color = 'text-primary', bg = 'bg-primary/10 border-primary/20', tooltip, onClick }: KpiProps) {
   return (
     <Card 
       className={cn(
         'transition-all duration-200 relative overflow-hidden', 
         onClick && 'cursor-pointer hover:border-primary/50 hover:shadow-md',
-        isActive ? 'ring-2 ring-primary ring-offset-2 ring-offset-background border-primary/50 bg-primary/5' : 'hover-card-anim'
+        'hover-card-anim'
       )}
       onClick={onClick}
     >
       <CardContent className="p-5">
         <div className="flex items-start justify-between mb-3">
           <div className="flex items-center gap-1.5">
-            <p className={cn("text-xs font-medium uppercase tracking-wider", isActive ? "text-primary font-bold" : "text-muted-foreground")}>{title}</p>
+            <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{title}</p>
             {tooltip && (
               <Tip text={tooltip}>
                 <Info className="w-3 h-3 text-muted-foreground/50 cursor-help" />
@@ -153,27 +121,86 @@ function ScatterTip({ active, payload }: any) {
     <div className="bg-card border border-border rounded-lg p-3 shadow-lg text-sm space-y-1 max-w-[240px]">
       <p className="font-semibold text-xs leading-snug">{d.keyword || '—'}</p>
       <div className="border-t border-border/50 pt-1 space-y-0.5">
-        <p className="text-muted-foreground">Search Volume: <span className="text-foreground font-medium">{valOrMissing(d.search_volume, v => v.toLocaleString())}</span></p>
-        <p className="text-muted-foreground">Est. Market Revenue: <span className="text-foreground font-medium">{valOrMissing(d.revenue, formatCurrency)}</span></p>
-        <p className="text-muted-foreground">Rev Efficiency Index: <span className={cn('font-medium', efficiencyColor(d.efficiency_score ?? 0))}>{(d.efficiency_score ?? 0).toFixed(1)}/100</span></p>
+        <p className="text-muted-foreground">Search Volume: <span className="text-foreground font-medium">{valOrMissing(d.search_volume, (v) => v.toLocaleString())}</span></p>
+        <p className="text-muted-foreground">Keyword Sales Revenue: <span className="text-foreground font-medium">{valOrMissing(d.revenue, formatCurrencyPrecise)}</span></p>
+        <p className="text-muted-foreground">Revenue / 1K Searches: <span className="text-foreground font-medium">{valOrMissing(d.revenue_per_1000_searches, formatCurrencyPrecise)}</span></p>
+        <p className="text-muted-foreground">Revenue Efficiency Index: <span className={cn('font-medium', efficiencyColor(d.efficiency_score ?? 0))}>{(d.efficiency_score ?? 0).toFixed(1)}</span></p>
         <span className="text-xs text-muted-foreground font-bold mt-1 block">{d.quadrant}</span>
       </div>
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// Main page
-// ---------------------------------------------------------------------------
-
 export default function IntentEfficiency() {
-  const [activeFilter, setActiveFilter] = useState<'high_intent' | 'friction' | 'all'>('all');
+  const [activeFilter, setActiveFilter] = useState<'all' | 'demand' | 'friction' | 'hidden' | 'low'>('all');
   const [selectedKeyword, setSelectedKeyword] = useState<any | null>(null);
+  const [selectedEvidence, setSelectedEvidence] = useState<any | null>(null);
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ['intent-efficiency'],
-    queryFn: () => api.getSearchIntentEfficiency(200), // Requesting more for the scatter
+    queryFn: () => api.getSearchIntentEfficiency(300),
   });
+
+  const r = data?.data?.results ?? {};
+  const keywordConversion = r.keyword_conversion ?? {};
+  const summaryCards = r.summary_cards ?? keywordConversion.summary_cards ?? {};
+  const benchmarks = r.benchmarks ?? keywordConversion.benchmarks ?? {};
+  const rows: any[] = r.keyword_rows ?? keywordConversion.keyword_rows ?? r.all_keywords ?? [];
+  const friction: any[] = r.friction_rows ?? keywordConversion.friction_rows ?? r.friction_keywords ?? summaryCards.friction_keywords?.items ?? [];
+  const matrix = r.matrix ?? keywordConversion.matrix ?? {};
+  const scatterRaw: any[] = matrix.points ?? r.scatter_data ?? [];
+  const qs = matrix.segment_counts ?? r.quadrant_summary ?? {};
+  const topRevenueEfficiency = r.top_revenue_efficiency_keyword ?? summaryCards.top_revenue_efficiency_keyword ?? {};
+  const biggestFriction = r.biggest_friction_keyword ?? summaryCards.biggest_friction_keyword ?? {};
+  const totalKeywords = r.total_keywords_analysed ?? rows.length ?? 0;
+
+  const scatter: any[] = useMemo(() => {
+    const sorted = [...scatterRaw].sort((a, b) => (b.search_volume ?? 0) - (a.search_volume ?? 0));
+    return sorted.slice(0, 300);
+  }, [scatterRaw]);
+  const displayScatter = useMemo(() => {
+    return scatter.filter((pt) => {
+      if (activeFilter === 'demand') return pt.quadrant === 'Demand Winner';
+      if (activeFilter === 'friction') return pt.quadrant === 'Friction Keyword';
+      if (activeFilter === 'hidden') return pt.quadrant === 'Hidden Gem';
+      if (activeFilter === 'low') return pt.quadrant === 'Low Priority';
+      return true;
+    });
+  }, [scatter, activeFilter]);
+
+  const filteredKeywordRows = useMemo(() => {
+    if (activeFilter === 'demand') return rows.filter((row) => row.segment === 'Demand Winner' || row.quadrant === 'Demand Winner');
+    if (activeFilter === 'friction') return rows.filter((row) => row.segment === 'Friction Keyword' || row.quadrant === 'Friction Keyword');
+    if (activeFilter === 'hidden') return rows.filter((row) => row.segment === 'Hidden Gem' || row.quadrant === 'Hidden Gem');
+    if (activeFilter === 'low') return rows.filter((row) => row.segment === 'Low Priority' || row.quadrant === 'Low Priority');
+    return rows;
+  }, [rows, activeFilter]);
+
+  const frictionRowsSorted = useMemo(() => {
+    return [...friction].sort((a, b) => (b.estimated_revenue_leakage ?? b.recoverable_revenue ?? 0) - (a.estimated_revenue_leakage ?? a.recoverable_revenue ?? 0));
+  }, [friction]);
+
+  const keywordColumns: Column<any>[] = [
+    { header: 'Keyword', accessorKey: 'keyword' },
+    { header: 'Search Volume', accessorKey: 'search_volume', cell: (row) => valOrMissing(row.search_volume, (v) => Number(v).toLocaleString()) },
+    { header: 'Keyword Sales Revenue', accessorKey: 'keyword_revenue', cell: (row) => valOrMissing(row.keyword_revenue ?? row.revenue, formatCurrencyPrecise) },
+    { header: 'Revenue / 1K Searches', accessorKey: 'revenue_per_1000_searches', cell: (row) => valOrMissing(row.revenue_per_1000_searches, formatCurrencyPrecise) },
+    { header: 'Revenue Efficiency Index', accessorKey: 'efficiency_score', cell: (row) => <span className={cn('font-mono', efficiencyColor(row.efficiency_score ?? 0))}>{(row.efficiency_score ?? 0).toFixed(2)}</span> },
+    { header: 'Demand Percentile', accessorKey: 'demand_percentile', cell: (row) => <span className="font-mono">{(row.demand_percentile ?? 0).toFixed(2)}</span> },
+    { header: 'Segment', accessorKey: 'quadrant' },
+  ];
+
+  const frictionColumns: Column<any>[] = [
+    { header: 'Keyword', accessorKey: 'keyword' },
+    { header: 'Search Volume', accessorKey: 'search_volume', cell: (row) => valOrMissing(row.search_volume, (v) => Number(v).toLocaleString()) },
+    { header: 'Keyword Sales Revenue', accessorKey: 'keyword_revenue', cell: (row) => valOrMissing(row.keyword_revenue ?? row.revenue, formatCurrencyPrecise) },
+    { header: 'Revenue / 1K Searches', accessorKey: 'revenue_per_1000_searches', cell: (row) => valOrMissing(row.revenue_per_1000_searches, formatCurrencyPrecise) },
+    { header: 'Benchmark Revenue / 1K Searches', accessorKey: 'benchmark_revenue_per_1000_searches', cell: (row) => valOrMissing(row.benchmark_revenue_per_1000_searches, formatCurrencyPrecise) },
+    { header: 'Estimated Revenue Leakage', accessorKey: 'recoverable_revenue', cell: (row) => <span className="font-mono text-red-500">{valOrMissing(row.estimated_revenue_leakage ?? row.recoverable_revenue ?? row.lost_revenue_estimate, formatCurrencyPrecise)}</span> },
+    { header: 'Root Cause', accessorKey: 'root_cause' },
+    { header: 'Opportunity Level', accessorKey: 'opportunity_level' },
+    { header: 'View Explanation', accessorKey: 'view_explanation', cell: () => <span className="text-primary text-xs">Open</span>, sortable: false },
+  ];
 
   if (isLoading) {
     return (
@@ -195,134 +222,8 @@ export default function IntentEfficiency() {
     );
   }
 
-  const r = data.data?.results || {};
-  const scatter: any[]        = r.scatter_data         || [];
-  const winners: any[]        = r.demand_winners        || [];
-  const friction: any[]       = r.friction_keywords     || [];
-  const hiddenGems: any[]     = r.hidden_gems           || [];
-  const qs                    = r.quadrant_summary      || {};
-  const ch                    = r.category_health       || {};
-  const topRevenueEfficiency  = r.top_revenue_efficiency_keyword  || {};
-  const biggestFriction       = r.biggest_friction_keyword || {};
-  const totalKeywords         = r.total_keywords_analysed  ?? 1;
-  const dataQualityWarning    = ch.data_quality_warning    ?? false;
-  const confidenceLevel       = r.confidence_level || 'Low';
-
-  // Apply filtering to the datasets
-  const displayScatter = scatter.filter(pt => {
-    if (activeFilter === 'high_intent') return pt.quadrant === 'Demand Winner' || pt.quadrant === 'Hidden Gem';
-    if (activeFilter === 'friction') return pt.quadrant === 'Friction Keyword';
-    return true;
-  });
-
-  // Table Helpers
-  const filterEmptyColumns = (cols: Column<any>[], dataset: any[]) => {
-    if (!dataset || dataset.length === 0) return cols;
-    return cols.filter(c => {
-      if (!c.accessorKey) return true;
-      if (['keyword', 'search_volume', 'efficiency_score', 'lost_revenue_estimate', 'root_cause', 'revenue'].includes(c.accessorKey as string)) return true;
-      let missingCount = 0;
-      dataset.forEach(row => {
-        if (row[c.accessorKey as string] == null || row[c.accessorKey as string] === '') missingCount++;
-      });
-      return (missingCount / dataset.length) < 0.9;
-    });
-  };
-
-  // Base columns
-  const keywordCol: Column<any> = {
-    header: 'Keyword',
-    accessorKey: 'keyword',
-    cell: (row) => (
-      <button onClick={() => setSelectedKeyword(row)} className="font-semibold text-sm hover:text-primary transition-colors text-left flex items-center gap-1.5 group">
-        {row.keyword || '—'}
-        <TrendingUp className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity" />
-      </button>
-    ),
-  };
-  
-  const searchVolCol: Column<any> = {
-    header: 'Search Volume',
-    accessorKey: 'search_volume',
-    cell: (row) => <span className="font-mono text-sm">{valOrMissing(row.search_volume, v => v.toLocaleString())}</span>,
-  };
-
-  const revenueCol: Column<any> = {
-    header: 'Est. Market Revenue',
-    accessorKey: 'revenue',
-    cell: (row) => <span className="font-mono text-sm">{valOrMissing(row.revenue, formatCurrency)}</span>,
-  };
-
-  const efficiencyCol: Column<any> = {
-    header: 'Revenue Efficiency Index',
-    accessorKey: 'efficiency_score',
-    cell: (row) => {
-      const s = row.efficiency_score ?? 0;
-      return (
-        <div className="flex items-center gap-2">
-          <div className="w-12 h-1.5 bg-muted rounded-full overflow-hidden">
-            <div className={cn('h-full rounded-full', efficiencyBar(s))} style={{ width: `${s}%` }} />
-          </div>
-          <span className={cn('font-mono text-sm font-bold', efficiencyColor(s))}>{s.toFixed(1)}</span>
-        </div>
-      );
-    },
-  };
-
-  const revenuePerSearchCol: Column<any> = {
-    header: 'Revenue/Search',
-    accessorKey: 'revenue_per_search',
-    cell: (row) => <span className="font-mono text-sm font-bold text-emerald-600">{valOrMissing(row.revenue_per_search, v => formatCurrency(v))}</span>,
-  };
-
-  const revenuePer1000Col: Column<any> = {
-    header: 'Revenue / 1K Searches',
-    accessorKey: 'revenue_per_1000_searches',
-    cell: (row) => <span className="font-mono text-sm">{valOrMissing(row.revenue_per_1000_searches, v => formatCurrency(v))}</span>,
-  };
-
-  const badgeCol: Column<any> = {
-    header: 'Opportunity Level',
-    accessorKey: 'opportunity_level',
-    cell: (row) => {
-      const b = opportunityBadge(row.opportunity_level ?? '', row.quadrant ?? '', row.lost_revenue_estimate);
-      return (
-        <Tip text={b.impact ? `Impact: ${b.impact}` : 'No dollar impact available'}>
-          <span className={cn('text-[11px] uppercase tracking-wider px-2 py-0.5 rounded-sm font-bold border cursor-help', b.colorClass)}>
-            {b.label}
-          </span>
-        </Tip>
-      );
-    },
-  };
-
-  const rootCauseCol: Column<any> = {
-    header: 'Root Cause',
-    accessorKey: 'root_cause',
-    cell: (row) => valOrMissing(row.root_cause, v => (
-      <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-1 rounded-sm bg-red-500/10 text-red-500">
-        {v}
-      </span>
-    )),
-  };
-
-  const lostRevCol: Column<any> = {
-    header: 'Est. Market Rev Leakage',
-    accessorKey: 'lost_revenue_estimate',
-    cell: (row) => <span className="font-mono text-sm font-bold text-red-600">{valOrMissing(row.lost_revenue_estimate, formatCurrency)}</span>,
-  };
-
-  // Build strict tables
-  const winnersColumns = filterEmptyColumns([keywordCol, searchVolCol, revenueCol, revenuePerSearchCol, revenuePer1000Col, efficiencyCol, badgeCol], winners);
-  const frictionColumns = filterEmptyColumns([keywordCol, searchVolCol, revenueCol, revenuePerSearchCol, lostRevCol, rootCauseCol, badgeCol], friction);
-
-  // Status computation for audit card
-  const processedCount = totalKeywords;
-  const classifiedCount = (qs.demand_winners ?? 0) + (qs.hidden_gems ?? 0) + (qs.friction_keywords ?? 0) + (qs.low_priority ?? 0);
-  const auditStatus = processedCount === classifiedCount ? 'Verified' : 'Warning';
-
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
+    <div className="space-y-6">
 
       {/* Header & Data Verification Panel */}
       <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-6">
@@ -336,7 +237,7 @@ export default function IntentEfficiency() {
             <div className="mt-4 flex items-center gap-3">
               <span className="text-sm font-semibold text-muted-foreground">Active Filter:</span>
               <span className="text-xs font-bold uppercase tracking-wider bg-primary/10 text-primary px-3 py-1 rounded-full">
-                {activeFilter === 'high_intent' ? 'High Intent (Winners & Gems)' : 'Friction Keywords'}
+                {activeFilter}
               </span>
               <button onClick={() => setActiveFilter('all')} className="text-xs font-bold text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors">
                 <X className="w-3 h-3" /> Clear Filter
@@ -345,68 +246,48 @@ export default function IntentEfficiency() {
           )}
         </div>
         
-        {/* Compact Audit Card */}
-        <div className="bg-card border border-border/50 rounded-xl p-4 shadow-sm flex flex-col gap-3 min-w-[280px]">
-          <div className="flex items-center justify-between border-b border-border/50 pb-2">
-            <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Data Verification</span>
-            <div className={cn('flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider', auditStatus === 'Verified' ? 'bg-emerald-500/10 text-emerald-500' : 'bg-yellow-500/10 text-yellow-600')}>
-              {auditStatus === 'Verified' ? <ShieldCheck className="w-3 h-3" /> : <AlertTriangle className="w-3 h-3" />}
-              {auditStatus}
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
-            <div className="flex justify-between"><span className="text-muted-foreground">Processed</span><span className="font-mono font-semibold">{processedCount}</span></div>
-            <div className="flex justify-between"><span className="text-muted-foreground">Classified</span><span className="font-mono font-semibold">{classifiedCount}</span></div>
-            <div className="flex justify-between"><span className="text-muted-foreground">Displayed</span><span className="font-mono font-semibold">{displayScatter.length}</span></div>
-            <div className="flex justify-between"><span className="text-muted-foreground">Data Confidence</span><span className={cn('font-bold', confidenceLevel === 'High' ? 'text-emerald-500' : 'text-amber-500')}>{confidenceLevel}</span></div>
-          </div>
+        <div className="bg-card border border-border/50 rounded-xl p-4 shadow-sm min-w-[260px]">
+          <p className="text-xs text-muted-foreground uppercase">Keywords Analyzed</p>
+          <p className="text-2xl font-mono font-bold">{totalKeywords}</p>
         </div>
       </div>
 
-      {dataQualityWarning && (
-        <Card className="border-yellow-500/30 bg-yellow-500/5">
-          <CardContent className="p-4 flex items-start gap-3">
-            <AlertTriangle className="w-5 h-5 text-yellow-500 flex-shrink-0 mt-0.5" />
-            <div>
-              <p className="text-sm font-semibold text-yellow-600 dark:text-yellow-400">Data Quality Warning</p>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                More than 80% of Conversion Share values are identical in this dataset. Efficiency scores may not be meaningful.
-                Ensure the Magnet export includes valid ABA Total Conv. Share data before interpreting results.
-              </p>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* KPI Row */}
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
         <KpiCard
-          title={confidenceLevel === 'High' ? 'High Intent Keywords' : 'High Revenue Potential Keywords'}
-          value={r.high_intent_count ?? 0}
-          sub="Click to filter Demand Winners & Gems"
+          title="High Revenue Potential Keywords"
+          value={summaryCards.high_revenue_potential?.count ?? r.high_intent_count ?? 0}
+          sub="Demand percentile >= 60 and efficiency percentile >= 60"
           icon={<TrendingUp className="w-4 h-4" />}
           color="text-emerald-500"
           bg="bg-emerald-500/10 border-emerald-500/30"
-          isActive={activeFilter === 'high_intent'}
-          onClick={() => setActiveFilter(activeFilter === 'high_intent' ? 'all' : 'high_intent')}
+          onClick={() => {
+            setActiveFilter('demand');
+            setSelectedEvidence(summaryCards.high_revenue_potential?.evidence || null);
+          }}
         />
         <KpiCard
-          title={confidenceLevel === 'High' ? 'Friction Keywords' : 'Low Revenue Efficiency Keywords'}
-          value={r.friction_count ?? 0}
-          sub="Click to filter Conversion Leaks"
+          title="Friction Keywords"
+          value={summaryCards.friction_keywords?.count ?? r.friction_count ?? 0}
+          sub="Demand percentile >= 60 and efficiency percentile < 40"
           icon={<TrendingDown className="w-4 h-4" />}
           color="text-red-500"
           bg="bg-red-500/10 border-red-500/30"
-          isActive={activeFilter === 'friction'}
-          onClick={() => setActiveFilter(activeFilter === 'friction' ? 'all' : 'friction')}
+          onClick={() => {
+            setActiveFilter('friction');
+            setSelectedEvidence(summaryCards.friction_keywords?.evidence || null);
+          }}
         />
         <KpiCard
           title="Recoverable Revenue"
-          value={valOrMissing(r.total_lost_revenue, formatCurrency)}
-          sub="Estimated market revenue trapped in friction"
+          value={valOrMissing(summaryCards.recoverable_revenue?.value ?? r.total_lost_revenue, formatCurrencyPrecise)}
+          sub="From friction keywords only"
           icon={<Target className="w-4 h-4" />}
           color="text-amber-500"
           bg="bg-amber-500/10 border-amber-500/30"
+          onClick={() => {
+            setActiveFilter('friction');
+            setSelectedEvidence(summaryCards.recoverable_revenue?.evidence || null);
+          }}
         />
         <KpiCard
           title="Top Revenue Efficiency Keyword"
@@ -415,10 +296,14 @@ export default function IntentEfficiency() {
             ? <button onClick={() => setSelectedKeyword(topRevenueEfficiency)} className="hover:underline underline-offset-4 decoration-emerald-500/50">{topRevenueEfficiency.keyword.slice(0, 18) + (topRevenueEfficiency.keyword.length > 18 ? '…' : '')}</button>
             : valOrMissing(null)
           }
-          sub={topRevenueEfficiency.efficiency != null ? `${topRevenueEfficiency.efficiency.toFixed(1)}/100 index` : 'Click to drill down'}
+          sub={topRevenueEfficiency.efficiency != null ? `Index ${topRevenueEfficiency.efficiency.toFixed(2)}` : 'Click for formula'}
           icon={<Zap className="w-4 h-4" />}
           color="text-emerald-500"
           bg="bg-emerald-500/10 border-emerald-500/30"
+          onClick={() => {
+            if (topRevenueEfficiency.keyword) setSelectedKeyword(topRevenueEfficiency);
+            setSelectedEvidence(summaryCards.top_revenue_efficiency_keyword?.evidence || null);
+          }}
         />
         <KpiCard
           title="Biggest Friction Keyword"
@@ -427,17 +312,19 @@ export default function IntentEfficiency() {
             ? <button onClick={() => setSelectedKeyword(biggestFriction)} className="hover:underline underline-offset-4 decoration-red-500/50">{biggestFriction.keyword.slice(0, 18) + (biggestFriction.keyword.length > 18 ? '…' : '')}</button>
             : valOrMissing(null)
           }
-          sub={biggestFriction.gap != null ? `${biggestFriction.gap.toFixed(1)} pts gap` : 'Click to drill down'}
-          icon={<AlertTriangle className="w-4 h-4" />}
+          sub={biggestFriction.recoverable_revenue != null ? formatCurrencyPrecise(biggestFriction.recoverable_revenue) : 'Click for formula'}
+          icon={<Target className="w-4 h-4" />}
           color="text-red-500"
           bg="bg-red-500/10 border-red-500/30"
+          onClick={() => {
+            setActiveFilter('friction');
+            if (biggestFriction.keyword) setSelectedKeyword(biggestFriction);
+            setSelectedEvidence(summaryCards.biggest_friction_keyword?.evidence || null);
+          }}
         />
       </div>
 
-      {/* Keyword Opportunity Matrix + Category Health */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-
-        {/* Scatter — 2/3 width */}
         <Card className="lg:col-span-2">
           <CardHeader className="pb-2 border-b border-border/50">
             <CardTitle className="text-base flex justify-between items-center">
@@ -456,12 +343,12 @@ export default function IntentEfficiency() {
                     label={{ value: 'Demand Intensity (Search Volume Percentile)', position: 'insideBottom', offset: -28, fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
                     tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false} />
                   <YAxis type="number" dataKey="efficiency_score" domain={[0, 100]} name="Revenue Per Search Percentile"
-                    label={{ value: 'Monetization Efficiency (Revenue Per Search Percentile)', angle: -90, position: 'insideLeft', offset: -24, style: { textAnchor: 'middle' }, fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
+                    label={{ value: 'Revenue Efficiency Percentile', angle: -90, position: 'insideLeft', offset: -24, style: { textAnchor: 'middle' }, fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
                     tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false} />
                   <ReferenceLine x={50} stroke="hsl(var(--border))" strokeDasharray="4 4" strokeWidth={1.5} />
                   <ReferenceLine y={50} stroke="hsl(var(--border))" strokeDasharray="4 4" strokeWidth={1.5} />
                   <ReTooltip content={<ScatterTip />} />
-                  <Scatter data={displayScatter} isAnimationActive={false} onClick={(e) => { if(e && e.payload) setSelectedKeyword(e.payload); }}>
+                  <Scatter data={displayScatter} isAnimationActive={false} onClick={(e) => { if (e && e.payload) setSelectedKeyword(e.payload); }}>
                     {displayScatter.map((pt, i) => (
                       <Cell key={i} fill={quadrantDotColor(pt.quadrant)} fillOpacity={0.8} className="cursor-pointer hover:stroke-foreground stroke-[2px]" />
                     ))}
@@ -470,128 +357,62 @@ export default function IntentEfficiency() {
               </ResponsiveContainer>
             </div>
             
-            {/* Visual Legend */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6 border-t border-border/50 pt-4">
-              <Tip text="Keywords successfully converting demand into revenue. High priority for continued investment.">
-                <div className="flex flex-col gap-1 cursor-help group">
-                  <span className="flex items-center gap-1.5 text-xs font-bold text-foreground group-hover:text-purple-400 transition-colors"><span className="w-2.5 h-2.5 rounded-full bg-purple-500" /> Demand Winners ({qs.demand_winners})</span>
-                  <span className="text-[10px] text-muted-foreground leading-tight">High demand + strong monetization</span>
-                </div>
-              </Tip>
-              <Tip text="Smaller demand but exceptionally efficient monetization. Great for targeted, high-ROI campaigns.">
-                <div className="flex flex-col gap-1 cursor-help group">
-                  <span className="flex items-center gap-1.5 text-xs font-bold text-foreground group-hover:text-emerald-500 transition-colors"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500" /> Hidden Gems ({qs.hidden_gems})</span>
-                  <span className="text-[10px] text-muted-foreground leading-tight">Lower demand + exceptional monetization</span>
-                </div>
-              </Tip>
-              <Tip text="Demand exists but revenue capture is weak. Fixing these prevents market revenue leakage.">
-                <div className="flex flex-col gap-1 cursor-help group">
-                  <span className="flex items-center gap-1.5 text-xs font-bold text-foreground group-hover:text-red-500 transition-colors"><span className="w-2.5 h-2.5 rounded-full bg-red-500" /> Friction Keywords ({qs.friction_keywords})</span>
-                  <span className="text-[10px] text-muted-foreground leading-tight">High demand + poor monetization</span>
-                </div>
-              </Tip>
-              <Tip text="Limited demand and limited revenue impact. Deprioritize effort here.">
-                <div className="flex flex-col gap-1 cursor-help group">
-                  <span className="flex items-center gap-1.5 text-xs font-bold text-foreground group-hover:text-slate-400 transition-colors"><span className="w-2.5 h-2.5 rounded-full bg-slate-500" /> Low Priority ({qs.low_priority})</span>
-                  <span className="text-[10px] text-muted-foreground leading-tight">Low demand + low monetization</span>
-                </div>
-              </Tip>
+              <button className="text-left" onClick={() => setActiveFilter(activeFilter === 'demand' ? 'all' : 'demand')}><span className="text-xs font-bold">Demand Winners ({activeFilter === 'demand' ? filteredKeywordRows.length : qs.demand_winners ?? qs.Demand_Winner ?? 0})</span></button>
+              <button className="text-left" onClick={() => setActiveFilter(activeFilter === 'hidden' ? 'all' : 'hidden')}><span className="text-xs font-bold">Hidden Gems ({activeFilter === 'hidden' ? filteredKeywordRows.length : qs.hidden_gems ?? qs.Hidden_Gem ?? 0})</span></button>
+              <button className="text-left" onClick={() => setActiveFilter(activeFilter === 'friction' ? 'all' : 'friction')}><span className="text-xs font-bold">Friction ({activeFilter === 'friction' ? filteredKeywordRows.length : qs.friction_keywords ?? qs.Friction_Keyword ?? 0})</span></button>
+              <button className="text-left" onClick={() => setActiveFilter(activeFilter === 'low' ? 'all' : 'low')}><span className="text-xs font-bold">Low Priority ({activeFilter === 'low' ? filteredKeywordRows.length : qs.low_priority ?? qs.Low_Priority ?? 0})</span></button>
             </div>
           </CardContent>
         </Card>
 
-        {/* Category Health Benchmarks — 1/3 */}
         <div className="space-y-4">
-          <Card className="h-full flex flex-col">
+          <Card>
             <CardHeader className="pb-2 border-b border-border/50">
               <CardTitle className="text-base">Category Benchmarks</CardTitle>
             </CardHeader>
-            <CardContent className="pt-4 flex-1 flex flex-col gap-6">
-              
-              <div>
-                <div className="flex justify-between items-end mb-1">
-                  <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Current Efficiency</span>
-                  <span className="font-mono text-sm font-bold">{ch.average_conversion_efficiency ?? 0}/100</span>
-                </div>
-                <div className="h-2 bg-muted rounded-full overflow-hidden mb-1">
-                  <div className={cn("h-full rounded-full", efficiencyBar(ch.average_conversion_efficiency ?? 0))} style={{ width: `${ch.average_conversion_efficiency ?? 0}%` }} />
-                </div>
-                <div className="flex justify-between text-[10px] text-muted-foreground">
-                  <span>Cat. Avg: {Math.round((ch.average_conversion_efficiency ?? 0) * 0.8)}</span>
-                  <span>Top Quartile: {Math.round(Math.min((ch.average_conversion_efficiency ?? 0) * 1.3, 95))}</span>
-                </div>
-              </div>
-
-              <div>
-                <div className="flex justify-between items-end mb-1">
-                  <span className="text-xs font-bold uppercase tracking-wider text-muted-foreground">Current Leakage Rate</span>
-                  <span className="font-mono text-sm font-bold text-red-500">{ch.conversion_leak_rate ?? '—'}</span>
-                </div>
-                <p className="text-[10px] text-muted-foreground">Benchmark: Category average leakage is typically 15-20%.</p>
-              </div>
-
-              <div className="mt-auto p-4 rounded-xl bg-amber-500/5 border border-amber-500/20">
-                <div className="flex justify-between items-start mb-2">
-                  <span className="text-xs font-bold uppercase tracking-wider text-amber-600 dark:text-amber-500">Recoverable Revenue</span>
-                  <span className="font-mono text-lg font-black text-amber-600 dark:text-amber-500">{valOrMissing(ch.recoverable_revenue_pool, formatCurrency)}</span>
-                </div>
-                <p className="text-[10px] font-medium text-amber-600/80 dark:text-amber-500/80 leading-tight">
-                  This represents the total opportunity pool currently lost to friction keywords.
-                </p>
-              </div>
-
+            <CardContent className="pt-4 space-y-3">
+              <button className="w-full text-left p-3 rounded border" onClick={() => setSelectedEvidence(benchmarks.evidence)}>
+                <p className="text-xs text-muted-foreground">Current Efficiency</p>
+                <p className="font-mono">{valOrMissing(benchmarks.current_efficiency?.value, formatCurrencyPrecise)}</p>
+              </button>
+              <button className="w-full text-left p-3 rounded border" onClick={() => setSelectedEvidence(benchmarks.evidence)}>
+                <p className="text-xs text-muted-foreground">Top Quartile</p>
+                <p className="font-mono">{valOrMissing(benchmarks.top_quartile?.value, formatCurrencyPrecise)}</p>
+              </button>
+              <button className="w-full text-left p-3 rounded border" onClick={() => setSelectedEvidence(benchmarks.evidence)}>
+                <p className="text-xs text-muted-foreground">Category Average</p>
+                <p className="font-mono">{valOrMissing(benchmarks.category_average?.value, (v) => Number(v).toFixed(2))}</p>
+              </button>
+              <button className="w-full text-left p-3 rounded border" onClick={() => setSelectedEvidence(benchmarks.evidence)}>
+                <p className="text-xs text-muted-foreground">Keyword Leakage Rate</p>
+                <p className="font-mono">{valOrMissing(benchmarks.keyword_leakage_rate?.value, (v) => `${Number(v).toFixed(2)}%`)}</p>
+              </button>
             </CardContent>
           </Card>
         </div>
       </div>
 
-      {/* Table 1: Demand Winners */}
-      {(activeFilter === 'all' || activeFilter === 'high_intent') && (
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="flex items-center gap-2">
-                  <TrendingUp className="w-4 h-4 text-purple-400" />
-                  <CardTitle className="text-base">Demand Winners</CardTitle>
-                </div>
-                <CardDescription>
-                  Keywords combining strong search demand with high conversion efficiency. These drive the most revenue per search.
-                </CardDescription>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent>
-            {winners.length === 0
-              ? <p className="text-sm text-muted-foreground py-8 text-center bg-muted/20 rounded-lg border border-dashed border-border/50">No demand winners detected in this dataset.</p>
-              : <DataTable columns={winnersColumns} data={winners} pageSize={10} />
-            }
-          </CardContent>
-        </Card>
-      )}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Keyword Rows</CardTitle>
+          <CardDescription>Click a row for full explainability details.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <DataTable columns={keywordColumns} data={filteredKeywordRows} pageSize={10} onRowClick={(row) => setSelectedKeyword(row)} />
+        </CardContent>
+      </Card>
 
-      {/* Table 2: Conversion Leaks */}
-      {(activeFilter === 'all' || activeFilter === 'friction') && (
-        <Card>
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <TrendingDown className="w-4 h-4 text-red-500" />
-              <CardTitle className="text-base">Conversion Leaks (Friction Keywords)</CardTitle>
-            </div>
-            <CardDescription>
-              Keywords attracting high demand but failing to monetize effectively. Fixing these represents the highest revenue recovery opportunity.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {friction.length === 0
-              ? <p className="text-sm text-muted-foreground py-8 text-center bg-muted/20 rounded-lg border border-dashed border-border/50">No friction keywords detected.</p>
-              : <DataTable columns={frictionColumns} data={friction} pageSize={10} />
-            }
-          </CardContent>
-        </Card>
-      )}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2"><TrendingDown className="w-4 h-4 text-red-500" />Conversion Leaks / Friction</CardTitle>
+          <CardDescription>Deterministic leakage from benchmark gap; each row is explainable.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <DataTable columns={frictionColumns} data={frictionRowsSorted} pageSize={10} onRowClick={(row) => setSelectedKeyword(row)} />
+        </CardContent>
+      </Card>
 
-      {/* ── UNIFIED KEYWORD DRILLDOWN DRAWER ── */}
       <Drawer
         isOpen={!!selectedKeyword}
         onClose={() => setSelectedKeyword(null)}
@@ -599,43 +420,29 @@ export default function IntentEfficiency() {
       >
         {selectedKeyword && (() => {
           const k = selectedKeyword;
-          const badge = opportunityBadge(k.opportunity_level ?? '', k.quadrant ?? '', k.lost_revenue_estimate);
-          
-          let explanation = "This keyword exhibits standard performance metrics for the category.";
-          if (k.quadrant === 'Demand Winner') explanation = "Successfully converts high demand into revenue. Revenue per search significantly exceeds category average.";
-          else if (k.quadrant === 'Hidden Gem') explanation = "Lower overall demand, but exceptionally efficient monetization. Highly profitable on a per-search basis.";
-          else if (k.quadrant === 'Friction Keyword') explanation = "High search demand but weak revenue capture. A significant portion of market demand is not converting into expected sales for this rank.";
-          else if (k.quadrant === 'Low Priority') explanation = "Limited demand and limited revenue impact. Optimization here yields minimal ROI.";
-
           return (
             <div className="space-y-6">
               <div className="pb-4 border-b border-border/50">
                 <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Selected Keyword</p>
                 <h2 className="text-2xl font-black text-foreground">{k.keyword}</h2>
                 <div className="flex flex-wrap items-center gap-2 mt-3">
-                  <span className={cn('text-xs font-bold px-2.5 py-1 rounded-sm border flex items-center gap-1.5', badge.colorClass)}>
+                  <span className="text-xs font-bold px-2.5 py-1 rounded-sm border flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full" style={{ backgroundColor: quadrantDotColor(k.quadrant) }} />
-                    {badge.label}
+                    {k.demand_percentile >= 60 ? 'High Demand' : 'Low Demand'}
                   </span>
                   <span className="text-xs font-bold px-2.5 py-1 rounded-sm bg-muted text-muted-foreground border border-border/50">
-                    {k.quadrant}
+                    {k.segment || k.quadrant}
+                  </span>
+                  <span className="text-xs font-bold px-2.5 py-1 rounded-sm border border-border/60">
+                    {k.opportunity_level || 'Opportunity Unknown'}
                   </span>
                 </div>
               </div>
 
               <div className="bg-primary/5 border border-primary/20 rounded-xl p-4">
-                <div className="flex items-start gap-3">
-                  <Lightbulb className="w-5 h-5 text-primary flex-shrink-0 mt-0.5" />
-                  <div>
-                    <p className="text-xs font-bold uppercase tracking-wider text-primary mb-1">Classification Explanation</p>
-                    <p className="text-sm font-medium text-foreground/90 leading-relaxed">{explanation}</p>
-                    {k.root_cause && (
-                      <p className="text-xs font-bold text-red-500 mt-2 bg-red-500/10 px-2 py-1 rounded-sm inline-block">
-                        Root Cause: {k.root_cause}
-                      </p>
-                    )}
-                  </div>
-                </div>
+                <p className="text-xs font-bold uppercase tracking-wider text-primary mb-2">Rule-based Explanation</p>
+                <p className="text-sm">{k.rule_based_explanation || 'Classification is derived from demand and revenue efficiency percentile rules.'}</p>
+                <p className="text-xs text-muted-foreground mt-2">{k.llm_explanation || 'LLM unavailable. Showing rule-based explanation.'}</p>
               </div>
 
               <div className="grid grid-cols-2 gap-4">
@@ -644,50 +451,53 @@ export default function IntentEfficiency() {
                   <p className="text-xl font-mono font-black">{valOrMissing(k.search_volume, v => v.toLocaleString())}</p>
                 </div>
                 <div className="bg-card border border-border/50 p-4 rounded-xl shadow-sm">
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Est. Market Revenue</p>
-                  <p className="text-xl font-mono font-black text-emerald-600">{valOrMissing(k.revenue, formatCurrency)}</p>
-                </div>
-                <div className="bg-primary/5 border border-primary/20 p-4 rounded-xl shadow-sm">
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-primary mb-1">Revenue/Search</p>
-                  <p className="text-xl font-mono font-black text-primary">{valOrMissing(k.revenue_per_search, formatCurrency)}</p>
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Keyword Revenue</p>
+                  <p className="text-xl font-mono font-black text-emerald-600">{valOrMissing(k.keyword_revenue ?? k.revenue, formatCurrencyPrecise)}</p>
                 </div>
                 <div className="bg-card border border-border/50 p-4 rounded-xl shadow-sm">
                   <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Revenue / 1K Searches</p>
-                  <p className="text-xl font-mono font-black">{valOrMissing(k.revenue_per_1000_searches, formatCurrency)}</p>
+                  <p className="text-xl font-mono font-black">{valOrMissing(k.revenue_per_1000_searches, formatCurrencyPrecise)}</p>
                 </div>
-                {k.lost_revenue_estimate > 0 && (
+                {(k.estimated_revenue_leakage ?? k.recoverable_revenue ?? k.lost_revenue_estimate) > 0 && (
                   <div className="bg-red-500/5 border border-red-500/20 p-4 rounded-xl shadow-sm col-span-2">
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-red-600 mb-1">Est. Market Rev Leakage</p>
-                    <p className="text-xl font-mono font-black text-red-600">{formatCurrency(k.lost_revenue_estimate)}</p>
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-red-600 mb-1">Recoverable Revenue</p>
+                    <p className="text-xl font-mono font-black text-red-600">{formatCurrencyPrecise(k.estimated_revenue_leakage ?? k.recoverable_revenue ?? k.lost_revenue_estimate)}</p>
                   </div>
                 )}
               </div>
 
               <div className="bg-card border border-border/50 p-4 rounded-xl shadow-sm space-y-4">
-                <div>
-                  <div className="flex justify-between items-end mb-1">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Revenue Efficiency Index</span>
-                    <span className={cn('font-mono text-sm font-bold', efficiencyColor(k.efficiency_score ?? 0))}>{(k.efficiency_score ?? 0).toFixed(1)}/100</span>
-                  </div>
-                  <div className="h-2 bg-muted rounded-full overflow-hidden">
-                    <div className={cn("h-full rounded-full", efficiencyBar(k.efficiency_score ?? 0))} style={{ width: `${k.efficiency_score ?? 0}%` }} />
-                  </div>
-                </div>
-                
                 <div className="grid grid-cols-2 gap-4 pt-3 border-t border-border/50">
                   <div>
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Search Volume Pct</p>
-                    <p className="font-mono text-sm font-semibold">Top {Math.round(100 - (k.demand_percentile ?? 0))}%</p>
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Revenue Efficiency Index</p>
+                    <p className="font-mono text-sm font-semibold">{(k.efficiency_score ?? 0).toFixed(2)}</p>
                   </div>
                   <div>
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Revenue/Search Pct</p>
-                    <p className="font-mono text-sm font-semibold">Top {Math.round(100 - (k.efficiency_score ?? 0))}%</p>
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Demand Percentile</p>
+                    <p className="font-mono text-sm font-semibold">{(k.demand_percentile ?? 0).toFixed(2)}</p>
                   </div>
+                  <div className="col-span-2 text-xs text-muted-foreground">
+                    Formula: Revenue / 1K Searches = Keyword Sales / Search Volume * 1000
+                  </div>
+                  {k.quadrant === 'Friction Keyword' && (
+                    <>
+                      <div>
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Benchmark Revenue / 1K</p>
+                        <p className="font-mono text-sm font-semibold">{valOrMissing(k.benchmark_revenue_per_1000_searches, formatCurrencyPrecise)}</p>
+                      </div>
+                      <div>
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Efficiency Gap</p>
+                        <p className="font-mono text-sm font-semibold">{valOrMissing(k.efficiency_gap_per_1000_searches, formatCurrencyPrecise)}</p>
+                      </div>
+                      <div className="col-span-2">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Root Cause</p>
+                        <p className="text-sm">{k.root_cause || '—'}</p>
+                      </div>
+                    </>
+                  )}
                   <div className="col-span-2">
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Missing Metrics</p>
-                    <p className="text-xs text-muted-foreground italic leading-tight">
-                      {confidenceLevel === 'High' ? 'All required conversion metrics are present.' : 'Raw Clicks, Orders, and Conversion Rate are not available in source data.'}
-                    </p>
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-1">Source Columns</p>
+                    <p className="text-sm">Keyword Phrase, Search Volume, Keyword Sales{(k.classification || '').length > 0 ? ', Classification' : ''}</p>
                   </div>
                 </div>
               </div>
@@ -695,7 +505,20 @@ export default function IntentEfficiency() {
           );
         })()}
       </Drawer>
-
-    </motion.div>
+      <Drawer isOpen={!!selectedEvidence} onClose={() => setSelectedEvidence(null)} title={selectedEvidence?.metric_name || 'Metric Explanation'}>
+        {selectedEvidence && (
+          <div className="space-y-3 text-sm">
+            <p><strong>Source Dataset:</strong> {selectedEvidence.source_dataset}</p>
+            <p><strong>Source Columns:</strong> {(selectedEvidence.source_columns || []).join(', ')}</p>
+            <p><strong>Formula:</strong> {selectedEvidence.formula}</p>
+            <p><strong>Thresholds:</strong> {JSON.stringify(selectedEvidence.thresholds)}</p>
+            <p><strong>Rows Included:</strong> {selectedEvidence.rows_included ?? selectedEvidence.rows_matched ?? '—'}</p>
+            <p><strong>Rows Excluded:</strong> {selectedEvidence.rows_excluded ?? '—'}</p>
+            <p><strong>Excluded Reason:</strong> {selectedEvidence.excluded_reason}</p>
+            <p><strong>Example Calculation:</strong> {JSON.stringify(selectedEvidence.example_calculation)}</p>
+          </div>
+        )}
+      </Drawer>
+    </div>
   );
 }

@@ -1,49 +1,86 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../services/api';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/Card';
 import { DataTable, type Column } from '../components/tables/DataTable';
-import { formatCurrency, formatNumber, cn } from '../utils/cn';
+import { formatNumber, cn } from '../utils/cn';
 import { isEngineOk, getEngineErrorMessage } from '../utils/analysisStatus';
 import {
   AlertCircle, Loader2, Target, Zap, TrendingUp,
-  DollarSign, Lightbulb, Info, Layers, X,
+  DollarSign, Lightbulb, Info, Layers, X, ChevronDown,
 } from 'lucide-react';
 import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  CartesianGrid,
+  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
 } from 'recharts';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 
-type WhitespaceKeyword = {
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type EvidenceMeta = {
+  formula?: Record<string, string>;
+  source_dataset?: string;
+  columns_used?: Record<string, string | null>;
+  rows_included?: number;
+  rows_excluded?: number;
+  total_keywords?: number;
+  extreme_threshold?: number;
+  high_threshold?: number;
+  score_weights?: Record<string, number>;
+  competition_column_used?: string | null;
+  title_density_reliable?: boolean;
+  revenue_signal_source?: string;
+  revenue_capped?: boolean;
+  revenue_cap_threshold_pct?: number;
+  top_extreme_keywords?: Array<Record<string, unknown>>;
+};
+
+type WsKeyword = {
   keyword?: string;
   search_volume?: number;
   keyword_sales?: number;
   title_density?: number | null;
   whitespace_score?: number;
+  opportunity_score?: number;
   opportunity_label?: string;
   opportunity_driver?: string;
+  click_share?: number | null;
+  conversion_share?: number | null;
+  conversion_efficiency_score?: number | null;
+  source_dataset?: string;
+  // legacy aliases
+  efficiency_score?: number | null;
+  source?: string;
 };
 
-type SegmentKeyword = {
+type SegmentKeywordRaw = {
   keyword?: string;
   search_volume?: number;
   click_share?: number | null;
   conversion_share?: number | null;
   keyword_sales?: number;
-  efficiency_score?: number;
+  conversion_efficiency_score?: number | null;
+  efficiency_score?: number | null;
   classification?: string;
+  source_dataset?: string;
   source?: string;
+  opportunity_score?: number | null;
+  opportunity_driver?: string;
+  title_density?: number | null;
 };
 
-type CombinedKeyword = WhitespaceKeyword & SegmentKeyword;
-
-type SegmentKeywordDetailsResponse = {
+type SegmentKeywordResponse = {
   success?: boolean;
-  keywords?: SegmentKeyword[];
+  message?: string;
+  keywords?: SegmentKeywordRaw[];
   keyword_count?: number;
   raw_row_count?: number;
+  raw_rows_before_dedupe?: number;
   duplicate_removed_count?: number;
+  duplicate_rows_removed?: number;
+  opportunity_revenue?: number;
+  competitive_intensity?: string;
+  primary_driver?: string;
+  recommended_priority?: string;
 };
 
 type EntrySegment = {
@@ -57,19 +94,12 @@ type EntrySegment = {
   primary_driver?: string;
   competitive_intensity?: string;
   recommended_action?: string;
+  keywords?: SegmentKeywordRaw[];
+  raw_rows_before_dedupe?: number;
+  duplicate_rows_removed?: number;
 };
 
-type TopEntrySegment = {
-  segment: string;
-  revenue_opportunity: number;
-  keyword_count: number;
-  primary_driver: string;
-  competitive_intensity: string;
-  recommended_action: string;
-  avg_opportunity_score: number;
-  recommended_priority: string;
-  rank: number;
-};
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function opportunityBadge(label: string): string {
   switch (label) {
@@ -104,546 +134,333 @@ function scoreColor(score: number): string {
 function formatPct(count: number, total: number): string {
   if (total <= 0) return '0.0%';
   const pct = (count / total) * 100;
-  return pct < 10 ? pct.toFixed(1) : pct.toFixed(0);
+  return `${pct < 10 ? pct.toFixed(1) : pct.toFixed(0)}%`;
 }
 
-function Tip({ text, children }: { text: string; children: React.ReactNode }) {
+function effScore(kw: SegmentKeywordRaw): number | null {
+  return kw.conversion_efficiency_score ?? kw.efficiency_score ?? null;
+}
+
+function srcDataset(kw: SegmentKeywordRaw): string {
+  return kw.source_dataset ?? kw.source ?? 'Magnet';
+}
+
+// ─── Evidence Drawer ─────────────────────────────────────────────────────────
+
+type DrawerMode =
+  | { kind: 'kpi'; title: string; body: React.ReactNode }
+  | { kind: 'segment'; segment: EntrySegment }
+  | { kind: 'keyword'; keyword: WsKeyword | SegmentKeywordRaw; titleDensityReliable: boolean }
+  | null;
+
+function EvidenceDrawer({ mode, onClose }: { mode: DrawerMode; onClose: () => void }) {
+  if (!mode) return null;
   return (
-    <div className="relative group/tip inline-flex">
-      {children}
-      <div className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50 hidden group-hover/tip:block w-60">
-        <div className="bg-popover border border-border rounded-lg px-3 py-2 text-xs text-muted-foreground shadow-lg leading-relaxed">
-          {text}
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-end md:items-center justify-center p-4 overflow-y-auto">
+      <motion.div
+        initial={{ opacity: 0, y: 40 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: 40 }}
+        className="bg-background border border-border rounded-2xl shadow-2xl w-full max-w-2xl max-h-[88vh] overflow-y-auto"
+      >
+        <div className="flex items-center justify-between p-5 border-b border-border sticky top-0 bg-background z-10">
+          <h2 className="text-lg font-bold">
+            {mode.kind === 'kpi' && mode.title}
+            {mode.kind === 'segment' && `Segment: ${mode.segment.segment}`}
+            {mode.kind === 'keyword' && `Keyword: ${(mode.keyword as WsKeyword).keyword ?? '—'}`}
+          </h2>
+          <button type="button" onClick={onClose} className="p-2 rounded-full hover:bg-muted">
+            <X className="w-4 h-4" />
+          </button>
         </div>
-        <div className="w-2 h-2 bg-popover border-r border-b border-border rotate-45 mx-auto -mt-1" />
-      </div>
+        <div className="p-5 space-y-5">
+          {mode.kind === 'kpi' && mode.body}
+          {mode.kind === 'segment' && <SegmentDrawerBody seg={mode.segment} />}
+          {mode.kind === 'keyword' && <KeywordDrawerBody kw={mode.keyword} titleDensityReliable={mode.titleDensityReliable} />}
+        </div>
+      </motion.div>
     </div>
   );
 }
 
-interface KpiProps {
-  title: string;
-  value: string | number;
-  sub?: string;
-  highlight?: string;
-  icon: React.ReactNode;
-  color?: string;
-  bg?: string;
-  tooltip?: string;
-}
+// ─── Segment Drawer Body ──────────────────────────────────────────────────────
 
-function KpiCard({ title, value, sub, highlight, icon, color = 'text-primary', bg = 'bg-primary/10 border-primary/20', tooltip }: KpiProps) {
+function SegmentDrawerBody({ seg }: { seg: EntrySegment }) {
+  const kws = seg.keywords ?? [];
+  const hasClickShare = kws.some(k => k.click_share != null);
+  const hasConvShare = kws.some(k => k.conversion_share != null);
+  const hasEffScore = kws.some(k => (k.conversion_efficiency_score ?? k.efficiency_score) != null);
+  const hasTitleDensity = kws.some(k => k.title_density != null);
+
   return (
-    <Card className="hover-card-anim">
-      <CardContent className="p-5">
-        <div className="flex items-start justify-between mb-3">
-          <div className="flex items-center gap-1.5">
-            <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">{title}</p>
-            {tooltip && (
-              <Tip text={tooltip}>
-                <Info className="w-3 h-3 text-muted-foreground/50 cursor-help" />
-              </Tip>
-            )}
+    <div className="space-y-5">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {[
+          { label: 'Rank', value: `#${seg.rank}` },
+          { label: 'Keywords', value: seg.keyword_count.toLocaleString() },
+          { label: 'Revenue Signal', value: formatNumber(Math.round(seg.opportunity_revenue)) },
+          { label: 'Avg Score', value: seg.avg_opportunity_score != null ? `${seg.avg_opportunity_score.toFixed(1)}/100` : '—' },
+        ].map((m, i) => (
+          <div key={i} className="p-3 rounded-xl border border-border bg-muted/20">
+            <p className="text-xs text-muted-foreground uppercase tracking-wide">{m.label}</p>
+            <p className="text-lg font-bold mt-1">{m.value}</p>
           </div>
-          <div className={cn('p-2 rounded-lg border', bg)}>
-            <span className={color}>{icon}</span>
-          </div>
-        </div>
-        <p className={cn('text-2xl font-bold leading-tight', color)}>{value}</p>
-        {highlight && <p className={cn('text-base font-semibold mt-1', color)}>{highlight}</p>}
-        {sub && <p className="text-xs text-muted-foreground mt-1 leading-snug">{sub}</p>}
-      </CardContent>
-    </Card>
-  );
-}
-
-function SegmentRevenueTip({ active, payload }: { active?: boolean; payload?: Array<{ payload: EntrySegment }> }) {
-  if (!active || !payload?.length) return null;
-  const d = payload[0].payload;
-  return (
-    <div className="bg-card border border-border rounded-lg p-3 shadow-lg text-sm space-y-1">
-      <p className="font-semibold">Segment: {d.segment}</p>
-      <p className="text-muted-foreground">Revenue Opportunity: <span className="text-foreground font-medium">{formatCurrency(Math.round(d.opportunity_revenue))}</span></p>
-      <p className="text-muted-foreground">Unique Keywords: {d.keyword_count}</p>
-      <p className="text-muted-foreground">Score: {d.avg_opportunity_score}/100</p>
-      <p className="text-sm text-muted-foreground/80">Click to view included keywords</p>
-    </div>
-  );
-}
-
-export default function WhitespaceOpportunities() {
-  const [selectedSegment, setSelectedSegment] = useState<string | null>(null);
-  const { data: whitespaceData, isLoading, isError } = useQuery({
-    queryKey: ['whitespace-opportunities'],
-    queryFn: () => api.getWhitespaceOpportunities(20),
-  });
-
-  const {
-    data: segmentKeywordDetails,
-    isLoading: isSegmentLoading,
-    isError: isSegmentError,
-    refetch: refetchSegmentKeywords,
-  } = useQuery<SegmentKeywordDetailsResponse | null>({
-    queryKey: ['revenue-opportunity-segment-keywords', selectedSegment],
-    queryFn: async () => {
-      if (!selectedSegment) return null;
-      return api.getRevenueOpportunitySegmentKeywords(selectedSegment);
-    },
-    enabled: Boolean(selectedSegment),
-    placeholderData: (prev) => prev,
-  });
-
-  if (isLoading) {
-    return (
-      <div className="flex h-[80vh] items-center justify-center">
-        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+        ))}
       </div>
-    );
-  }
-
-  if (isError || !isEngineOk(whitespaceData)) {
-    return (
-      <Card className="border-red-500/30 bg-red-500/5 mt-10">
-        <CardContent className="p-8 flex flex-col items-center text-center">
-          <AlertCircle className="w-12 h-12 text-red-500 mb-4" />
-          <h2 className="text-xl font-bold text-red-500 mb-2">Whitespace Analysis Unavailable</h2>
-          <p className="text-red-500/80">{getEngineErrorMessage(whitespaceData, 'Requires Magnet with Search Volume.')}</p>
-        </CardContent>
-      </Card>
-    );
-  }
-
-  const r = whitespaceData.data?.results || {};
-  const wsKeywords: WhitespaceKeyword[] = r.top_whitespace_keywords || [];
-  const distribution = r.opportunity_distribution || {};
-  const insights: { category: string; text: string }[] = r.insights || [];
-  const revenueSignal = r.revenue_opportunity_pool ?? 0;
-  const totalKeywords = r.total_keywords_analyzed ?? 0;
-  const extremeCount = distribution.extreme_opportunity ?? 0;
-  const highCount = distribution.high_opportunity ?? 0;
-  const entrySegments: EntrySegment[] = (r.entry_segments || []).map((s: EntrySegment) => ({
-    ...s,
-    opportunity_revenue: s.opportunity_revenue ?? s.revenue_represented ?? 0,
-  }));
-  const topEntrySegments: TopEntrySegment[] = r.top_entry_segments?.length
-    ? r.top_entry_segments
-    : entrySegments.map((s) => ({
-        segment: s.segment,
-        revenue_opportunity: s.opportunity_revenue,
-        keyword_count: s.keyword_count,
-        primary_driver: s.primary_driver ?? '—',
-        competitive_intensity: s.competitive_intensity ?? '—',
-        recommended_action: s.recommended_action ?? 'Evaluate',
-        avg_opportunity_score: s.avg_opportunity_score,
-        recommended_priority: s.recommended_priority ?? 'Evaluate',
-        rank: s.rank,
-      }));
-  const bestEntryCluster: string | null = r.best_entry_cluster ?? null;
-  const titleDensityReliable = Boolean(r.title_density_reliable);
-  const revenuePctCategory = Number(r.revenue_pct_of_category_sales ?? 0);
-  const revenueCapped = Boolean(r.revenue_signal_capped);
-
-  const revenueKpiHighlight = revenueSignal > 0
-    ? `Represents ${revenuePctCategory}% of measurable category keyword sales`
-    : undefined;
-
-  const segmentKeywords: SegmentKeyword[] = (segmentKeywordDetails?.keywords || []) as SegmentKeyword[];
-  const segmentKeywordCount = segmentKeywordDetails?.keyword_count ?? 0;
-  const segmentRawRowCount = segmentKeywordDetails?.raw_row_count ?? 0;
-  const segmentDuplicateRemovedCount = segmentKeywordDetails?.duplicate_removed_count ?? 0;
-  const segmentModalTitle = selectedSegment ? `Keywords in ${selectedSegment}` : '';
-
-  const handleSegmentClick = (segment: string) => {
-    setSelectedSegment(segment);
-  };
-
-  const handleCloseSegmentModal = () => {
-    setSelectedSegment(null);
-  };
-
-  const exportSegmentKeywordsCsv = () => {
-    if (!segmentKeywordDetails || !segmentKeywords.length) return;
-    const header = [
-      'Keyword',
-      'Search Volume',
-      'Click Share',
-      'Conversion Share',
-      'Keyword Sales',
-      'Efficiency Score',
-      'Classification / Opportunity Type',
-      'Source Dataset',
-    ];
-    const rows = segmentKeywords.map((kw) => [
-      kw.keyword,
-      kw.search_volume ?? '',
-      kw.click_share != null ? kw.click_share.toString() : '',
-      kw.conversion_share != null ? kw.conversion_share.toString() : '',
-      kw.keyword_sales ?? '',
-      kw.efficiency_score != null ? kw.efficiency_score.toString() : '',
-      kw.classification ?? '',
-      kw.source ?? '',
-    ]);
-    const csvContent = [header, ...rows]
-      .map((row) => row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(','))
-      .join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', `${selectedSegment?.replace(/\s+/g, '_').toLowerCase()}_keywords.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-  };
-
-  const topEntryColumns: Column<TopEntrySegment>[] = [
-    { header: 'Segment', accessorKey: 'segment', cell: (row) => <span className="font-semibold text-sm">{row.segment}</span> },
-    {
-      header: 'Revenue Opportunity',
-      accessorKey: 'revenue_opportunity',
-      cell: (row) => <span className="font-mono text-sm">{formatNumber(Math.round(row.revenue_opportunity))}</span>,
-    },
-    {
-      header: 'Keyword Count',
-      accessorKey: 'keyword_count',
-      cell: (row) => <span className="font-mono text-sm">{row.keyword_count.toLocaleString()}</span>,
-    },
-    {
-      header: 'Primary Driver',
-      accessorKey: 'primary_driver',
-      cell: (row) => <span className="text-xs text-muted-foreground">{row.primary_driver}</span>,
-    },
-    {
-      header: 'Competitive Intensity',
-      accessorKey: 'competitive_intensity',
-      cell: (row) => (
-        <span className={cn('text-sm font-medium', intensityColor(row.competitive_intensity))}>
-          {row.competitive_intensity}
-        </span>
-      ),
-    },
-    {
-      header: 'Recommended Action',
-      accessorKey: 'recommended_action',
-      cell: (row) => <span className="text-sm text-foreground/90 leading-snug">{row.recommended_action}</span>,
-    },
-  ];
-
-  const segmentTableColumns: Column<EntrySegment>[] = [
-    { header: 'Rank', accessorKey: 'rank', cell: (row) => <span className="font-mono font-bold text-sm">{row.rank}</span> },
-    { header: 'Segment', accessorKey: 'segment', cell: (row) => <span className="font-semibold text-sm">{row.segment}</span> },
-    {
-      header: 'Opportunity Revenue',
-      accessorKey: 'opportunity_revenue',
-      cell: (row) => <span className="font-mono text-sm">{formatNumber(Math.round(row.opportunity_revenue))}</span>,
-    },
-    {
-      header: 'Opportunity Keywords',
-      accessorKey: 'keyword_count',
-      cell: (row) => <span className="font-mono text-sm">{row.keyword_count.toLocaleString()}</span>,
-    },
-    {
-      header: 'Avg Opportunity Score',
-      accessorKey: 'avg_opportunity_score',
-      cell: (row) => (
-        <span className={cn('font-mono text-sm font-medium', scoreColor(row.avg_opportunity_score))}>
-          {row.avg_opportunity_score.toFixed(1)}
-        </span>
-      ),
-    },
-    {
-      header: 'Recommended Priority',
-      accessorKey: 'recommended_priority',
-      cell: (row) => (
-        <span className={cn('text-xs px-2 py-0.5 rounded-full font-medium', priorityBadge(row.recommended_priority ?? ''))}>
-          {row.recommended_priority ?? '—'}
-        </span>
-      ),
-    },
-  ];
-
-  const keywordColumns: Column<CombinedKeyword>[] = [
-    { header: 'Keyword', accessorKey: 'keyword', cell: (row) => <span className="font-medium text-sm">{row.keyword || '—'}</span> },
-    { header: 'Search Volume', accessorKey: 'search_volume', cell: (row) => <span className="font-mono text-sm">{formatNumber(row.search_volume ?? 0)}</span> },
-    { header: 'Click Share', accessorKey: 'click_share', cell: (row) => <span className="font-mono text-sm">{row.click_share != null ? `${row.click_share.toFixed(1)}%` : '—'}</span> },
-    { header: 'Conversion Share', accessorKey: 'conversion_share', cell: (row) => <span className="font-mono text-sm">{row.conversion_share != null ? `${row.conversion_share.toFixed(1)}%` : '—'}</span> },
-    { header: 'Keyword Sales', accessorKey: 'keyword_sales', cell: (row) => <span className="font-mono text-sm">{formatNumber(row.keyword_sales ?? 0)}</span> },
-    { header: 'Efficiency Score', accessorKey: 'efficiency_score', cell: (row) => <span className="font-mono text-sm">{row.efficiency_score != null ? row.efficiency_score.toFixed(1) : '—'}</span> },
-    { header: 'Classification / Opportunity Type', accessorKey: 'classification', cell: (row) => <span className="text-sm text-muted-foreground">{row.classification ?? '—'}</span> },
-    { header: 'Source Dataset', accessorKey: 'source', cell: (row) => <span className="text-sm text-muted-foreground">{row.source ?? 'Magnet'}</span> },
-    {
-      header: 'Title Density',
-      accessorKey: 'title_density',
-      cell: (row) => (
-        <span className="font-mono text-sm text-muted-foreground">
-          {titleDensityReliable && row.title_density != null
-            ? formatNumber(row.title_density)
-            : 'N/A'}
-        </span>
-      ),
-    },
-    {
-      header: 'Opportunity Tier',
-      accessorKey: 'opportunity_label',
-      cell: (row) => (
-        <span className={cn('text-xs px-2 py-0.5 rounded-full font-medium', opportunityBadge(row.opportunity_label ?? ''))}>
-          {row.opportunity_label ?? '—'}
-        </span>
-      ),
-    },
-    {
-      header: 'Opportunity Driver',
-      accessorKey: 'opportunity_driver',
-      cell: (row) => <span className="text-xs text-muted-foreground font-medium">{row.opportunity_driver ?? '—'}</span>,
-    },
-  ];
-
-  const insightStyles: Record<string, { border: string; badge: string; dot: string }> = {
-    'Key Finding': { border: 'border-l-4 border-l-purple-500 border-purple-500/30', badge: 'bg-purple-500/10 text-purple-400', dot: 'bg-purple-500' },
-    'Leading Segment': { border: 'border-l-4 border-l-emerald-500 border-emerald-500/30', badge: 'bg-emerald-500/10 text-emerald-400', dot: 'bg-emerald-500' },
-    'Market Gap': { border: 'border-l-4 border-l-blue-500 border-blue-500/30', badge: 'bg-blue-500/10 text-blue-400', dot: 'bg-blue-500' },
-    'Recommended Entry': { border: 'border-l-4 border-l-amber-500 border-amber-500/30', badge: 'bg-amber-500/10 text-amber-400', dot: 'bg-amber-500' },
-  };
-
-  return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
-
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight text-gradient-primary">Whitespace Opportunities</h1>
-        <p className="text-muted-foreground mt-1">
-          Segment-first entry analysis — where to enter, why opportunity exists, and relative size vs the category.
+      <div className="space-y-1.5 text-sm">
+        {seg.recommended_priority && <div className="flex justify-between"><span className="text-muted-foreground">Priority</span><span className={cn('font-semibold', priorityBadge(seg.recommended_priority).replace('border', '').replace('border-emerald-500/30','').replace('border-amber-500/30',''))}>{seg.recommended_priority}</span></div>}
+        {seg.primary_driver && <div className="flex justify-between"><span className="text-muted-foreground">Primary Driver</span><span>{seg.primary_driver}</span></div>}
+        {seg.competitive_intensity && <div className="flex justify-between"><span className="text-muted-foreground">Competitive Intensity</span><span className={intensityColor(seg.competitive_intensity)}>{seg.competitive_intensity}</span></div>}
+        {seg.recommended_action && <div className="flex justify-between gap-3"><span className="text-muted-foreground shrink-0">Action</span><span className="text-right">{seg.recommended_action}</span></div>}
+        {(seg.raw_rows_before_dedupe ?? 0) > 0 && (
+          <>
+            <div className="flex justify-between"><span className="text-muted-foreground">Raw rows (before dedupe)</span><span>{(seg.raw_rows_before_dedupe ?? 0).toLocaleString()}</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">Unique keywords (after dedupe)</span><span>{seg.keyword_count.toLocaleString()}</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">Duplicates removed</span><span>{(seg.duplicate_rows_removed ?? 0).toLocaleString()}</span></div>
+          </>
+        )}
+      </div>
+      <div className="p-3 bg-muted/20 rounded-xl">
+        <p className="text-xs font-bold text-muted-foreground uppercase tracking-wide mb-1">Revenue Signal Formula</p>
+        <p className="text-xs font-mono text-foreground/80">
+          Segment Revenue = SUM(Keyword Sales of opportunity keywords in this segment).
+          Keyword Sales from Magnet dataset. Only keywords scored ≥65 (High or Extreme Opportunity) included.
         </p>
       </div>
-
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
-        <KpiCard
-          title="Overall Whitespace Score"
-          value={`${Number(r.overall_whitespace_score ?? 0).toFixed(1)} / 100`}
-          sub="Category-wide opportunity level"
-          icon={<Target className="w-4 h-4" />}
-          color={(r.overall_whitespace_score ?? 0) >= 65 ? 'text-emerald-500' : (r.overall_whitespace_score ?? 0) >= 50 ? 'text-yellow-500' : 'text-muted-foreground'}
-          bg={(r.overall_whitespace_score ?? 0) >= 65 ? 'bg-emerald-500/10 border-emerald-500/30' : (r.overall_whitespace_score ?? 0) >= 50 ? 'bg-yellow-500/10 border-yellow-500/30' : 'bg-muted border-border'}
-          tooltip="Mean opportunity score after percentile ranking across all keywords."
-        />
-        <KpiCard
-          title="Extreme Opportunities"
-          value={extremeCount.toLocaleString()}
-          highlight={`(${formatPct(extremeCount, totalKeywords)}% of keyword universe)`}
-          icon={<Zap className="w-4 h-4" />}
-          color="text-purple-400"
-          bg="bg-purple-500/10 border-purple-500/30"
-          tooltip="Top 20% of keywords by composite opportunity score."
-        />
-        <KpiCard
-          title="High Opportunities"
-          value={highCount.toLocaleString()}
-          highlight={`(${formatPct(highCount, totalKeywords)}% of keyword universe)`}
-          icon={<TrendingUp className="w-4 h-4" />}
-          color="text-emerald-500"
-          bg="bg-emerald-500/10 border-emerald-500/30"
-          tooltip="Strong opportunity band (65–79 percentile rank)."
-        />
-        <KpiCard
-          title="Opportunity Revenue Signal"
-          value={revenueSignal > 0 ? formatNumber(Math.round(revenueSignal)) : '—'}
-          highlight={revenueKpiHighlight}
-          sub={
-            revenueCapped
-              ? 'Conservative addressable estimate (capped for realism)'
-              : 'Addressable revenue from extreme + partial high-tier keyword sales'
-          }
-          icon={<DollarSign className="w-4 h-4" />}
-          color="text-amber-500"
-          bg="bg-amber-500/10 border-amber-500/30"
-          tooltip={String(r.revenue_signal_method ?? 'Tier-weighted sales signal, not total capturable category revenue.')}
-        />
-        <KpiCard
-          title="Best Entry Cluster"
-          value={bestEntryCluster ?? '—'}
-          sub={bestEntryCluster ? 'Highest opportunity revenue segment' : 'Awaiting segment analysis'}
-          icon={<Layers className="w-4 h-4" />}
-          color={bestEntryCluster ? 'text-cyan-400' : 'text-muted-foreground'}
-          bg={bestEntryCluster ? 'bg-cyan-500/10 border-cyan-500/30' : 'bg-muted border-border'}
-          tooltip="Segment with the largest addressable opportunity revenue."
-        />
-      </div>
-
-      {insights.length > 0 && (
-        <Card>
-          <CardHeader className="pb-3">
-            <div className="flex items-center gap-2">
-              <Lightbulb className="w-4 h-4 text-yellow-500" />
-              <CardTitle className="text-base">Segment Intelligence</CardTitle>
-            </div>
-            <CardDescription>Segment-level findings and recommended entry sequence</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
-              {insights.map((ins, i) => {
-                const s = insightStyles[ins.category] ?? { border: 'border-border', badge: 'bg-muted text-muted-foreground', dot: 'bg-muted-foreground' };
-                return (
-                  <motion.div key={i} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.07 }}
-                    className={cn('rounded-xl border p-4 space-y-2', s.border)}>
-                    <div className="flex items-center gap-2">
-                      <span className={cn('w-1.5 h-1.5 rounded-full flex-shrink-0', s.dot)} />
-                      <span className={cn('text-[11px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full', s.badge)}>
-                        {ins.category}
-                      </span>
-                    </div>
-                    <p className="text-sm text-foreground/90 leading-relaxed">{ins.text}</p>
-                  </motion.div>
-                );
-              })}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {entrySegments.length > 0 && (
-        <>
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base">Revenue Opportunity by Segment</CardTitle>
-              <CardDescription>Addressable revenue by product theme — sorted by revenue opportunity descending</CardDescription>
-            </CardHeader>
-            <CardContent className="h-[360px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={entrySegments.slice(0, 12)} margin={{ top: 12, right: 16, left: 0, bottom: 56 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-                  <XAxis dataKey="segment" stroke="hsl(var(--muted-foreground))" fontSize={10} angle={-32} textAnchor="end" height={80} interval={0} />
-                  <YAxis stroke="hsl(var(--muted-foreground))" fontSize={11} tickFormatter={(v) => formatNumber(v)} axisLine={false} tickLine={false} />
-                  <Tooltip content={<SegmentRevenueTip />} />
-                  <Bar
-                    dataKey="opportunity_revenue"
-                    fill="#f59e0b"
-                    radius={[4, 4, 0, 0]}
-                    maxBarSize={48}
-                    cursor="pointer"
-                    onClick={(event) => {
-                      if (event && 'payload' in event && event.payload?.segment) {
-                        handleSegmentClick(event.payload.segment);
-                      }
-                    }}
-                  />
-                </BarChart>
-              </ResponsiveContainer>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Segment Opportunity Table</CardTitle>
-              <CardDescription>Full segment comparison with percentile-scaled attractiveness scores (0–100)</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <DataTable columns={segmentTableColumns} data={entrySegments} pageSize={12} />
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Top Entry Segments Analysis</CardTitle>
-              <CardDescription>Actionable segment view — primary driver, competition, and recommended next step</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <DataTable columns={topEntryColumns} data={topEntrySegments} pageSize={10} />
-            </CardContent>
-          </Card>
-        </>
-      )}
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Representative Opportunity Keywords</CardTitle>
-          <CardDescription>
-            Supporting keyword evidence for segment decisions — not the primary scoring view
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <DataTable columns={keywordColumns} data={wsKeywords} pageSize={10} />
-        </CardContent>
-      </Card>
-
-      {selectedSegment && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/40 p-4 md:p-8">
-          <div className="mx-auto max-w-6xl rounded-3xl bg-background shadow-2xl border border-border overflow-hidden">
-            <div className="flex items-start justify-between gap-4 border-b border-border p-6">
-              <div>
-                <h2 className="text-xl font-semibold">{segmentModalTitle}</h2>
-                <p className="text-sm text-muted-foreground mt-1">
-                  {segmentKeywordCount.toLocaleString()} unique keywords counted in this segment
-                </p>
-              </div>
-              <button
-                type="button"
-                className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-muted text-muted-foreground hover:bg-muted/80"
-                onClick={handleCloseSegmentModal}
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            <div className="border-b border-border p-6 space-y-4">
-              <p className="text-sm text-muted-foreground">
-                Keyword count is calculated as the number of unique normalized keyword phrases assigned to this segment. Duplicates and blank keywords are removed before counting.
-              </p>
-              <div className="grid gap-3 sm:grid-cols-3">
-                <div className="rounded-xl border border-border bg-card p-4">
-                  <p className="text-xs text-muted-foreground uppercase tracking-wide">Raw rows before dedupe</p>
-                  <p className="mt-2 text-lg font-semibold">{segmentRawRowCount.toLocaleString()}</p>
-                </div>
-                <div className="rounded-xl border border-border bg-card p-4">
-                  <p className="text-xs text-muted-foreground uppercase tracking-wide">Unique keywords after dedupe</p>
-                  <p className="mt-2 text-lg font-semibold">{segmentKeywordCount.toLocaleString()}</p>
-                </div>
-                <div className="rounded-xl border border-border bg-card p-4">
-                  <p className="text-xs text-muted-foreground uppercase tracking-wide">Duplicate rows removed</p>
-                  <p className="mt-2 text-lg font-semibold">{segmentDuplicateRemovedCount.toLocaleString()}</p>
-                </div>
-              </div>
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                <div className="text-sm text-muted-foreground">
-                  {segmentKeywordDetails?.success === false
-                    ? 'Unable to load keywords for this segment.'
-                    : 'Search and sort the table to inspect the keywords counted in the selected segment.'}
-                </div>
-                <button
-                  type="button"
-                  className="inline-flex items-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-                  onClick={exportSegmentKeywordsCsv}
-                  disabled={!segmentKeywords.length}
-                >
-                  Export CSV
-                </button>
-              </div>
-            </div>
-            <div className="p-6">
-              {isSegmentLoading ? (
-                <div className="flex h-48 items-center justify-center text-muted-foreground">
-                  Loading keywords...
-                </div>
-              ) : (
-                <DataTable
-                  columns={[
-                    { header: 'Keyword', accessorKey: 'keyword', cell: (row) => <span className="font-medium text-sm">{row.keyword}</span> },
-                    { header: 'Search Volume', accessorKey: 'search_volume', cell: (row) => <span className="font-mono text-sm">{formatNumber(row.search_volume ?? 0)}</span> },
-                    { header: 'Click Share', accessorKey: 'click_share', cell: (row) => <span className="font-mono text-sm">{row.click_share != null ? `${row.click_share.toFixed(1)}%` : '—'}</span> },
-                    { header: 'Conversion Share', accessorKey: 'conversion_share', cell: (row) => <span className="font-mono text-sm">{row.conversion_share != null ? `${row.conversion_share.toFixed(1)}%` : '—'}</span> },
-                    { header: 'Keyword Sales', accessorKey: 'keyword_sales', cell: (row) => <span className="font-mono text-sm">{formatNumber(row.keyword_sales ?? 0)}</span> },
-                    { header: 'Efficiency Score', accessorKey: 'efficiency_score', cell: (row) => <span className="font-mono text-sm">{row.efficiency_score != null ? row.efficiency_score.toFixed(1) : '—'}</span> },
-                    { header: 'Classification / Opportunity Type', accessorKey: 'classification', cell: (row) => <span className="text-sm text-muted-foreground">{row.classification ?? '—'}</span> },
-                    { header: 'Source Dataset', accessorKey: 'source', cell: (row) => <span className="text-sm text-muted-foreground">{row.source ?? 'Magnet'}</span> },
-                  ]}
-                  data={segmentKeywords}
-                  pageSize={15}
-                  searchable={true}
-                />
-              )}
-            </div>
+      {kws.length > 0 && (
+        <div>
+          <p className="text-xs font-bold text-muted-foreground uppercase tracking-wide mb-2">
+            Top Keywords ({kws.length.toLocaleString()} total)
+          </p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border">
+                  <th className="text-left py-2 pr-4 text-xs text-muted-foreground font-medium">Keyword</th>
+                  <th className="text-right py-2 pr-4 text-xs text-muted-foreground font-medium">Search Vol</th>
+                  <th className="text-right py-2 pr-4 text-xs text-muted-foreground font-medium">KW Sales</th>
+                  <th className="text-right py-2 text-xs text-muted-foreground font-medium">Score</th>
+                  {hasClickShare && <th className="text-right py-2 pr-4 text-xs text-muted-foreground font-medium">Click%</th>}
+                  {hasConvShare && <th className="text-right py-2 pr-4 text-xs text-muted-foreground font-medium">Conv%</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {kws.slice(0, 20).map((kw, i) => (
+                  <tr key={i} className="border-b border-border/50 hover:bg-muted/20">
+                    <td className="py-1.5 pr-4 font-medium max-w-[200px] truncate">{kw.keyword ?? '—'}</td>
+                    <td className="py-1.5 pr-4 text-right font-mono">{formatNumber(kw.search_volume ?? 0)}</td>
+                    <td className="py-1.5 pr-4 text-right font-mono">{formatNumber(kw.keyword_sales ?? 0)}</td>
+                    <td className="py-1.5 text-right font-mono">
+                      <span className={scoreColor(kw.opportunity_score ?? 0)}>{kw.opportunity_score?.toFixed(1) ?? '—'}</span>
+                    </td>
+                    {hasClickShare && <td className="py-1.5 pr-4 text-right font-mono text-muted-foreground">{kw.click_share != null ? `${kw.click_share.toFixed(1)}%` : '—'}</td>}
+                    {hasConvShare && <td className="py-1.5 pr-4 text-right font-mono text-muted-foreground">{kw.conversion_share != null ? `${kw.conversion_share.toFixed(1)}%` : '—'}</td>}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {kws.length > 20 && <p className="text-xs text-muted-foreground mt-2">Showing first 20 of {kws.length.toLocaleString()} keywords.</p>}
           </div>
         </div>
       )}
+    </div>
+  );
+}
 
-    </motion.div>
+// ─── Keyword Drawer Body ──────────────────────────────────────────────────────
+
+function KeywordDrawerBody({ kw, titleDensityReliable }: { kw: WsKeyword | SegmentKeywordRaw; titleDensityReliable: boolean }) {
+  const eff = effScore(kw as SegmentKeywordRaw);
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3">
+        {[
+          { label: 'Search Volume', value: formatNumber((kw as WsKeyword).search_volume ?? 0) },
+          { label: 'Keyword Sales', value: formatNumber((kw as WsKeyword).keyword_sales ?? 0) },
+          { label: 'Opportunity Score', value: (kw as WsKeyword).opportunity_score != null ? `${Number((kw as WsKeyword).opportunity_score).toFixed(1)}/100` : '—' },
+          { label: 'Opportunity Tier', value: (kw as WsKeyword).opportunity_label ?? (kw as SegmentKeywordRaw).classification ?? '—' },
+        ].map((m, i) => (
+          <div key={i} className="p-3 rounded-xl border border-border bg-muted/20">
+            <p className="text-xs text-muted-foreground uppercase tracking-wide">{m.label}</p>
+            <p className="text-base font-bold mt-1">{m.value}</p>
+          </div>
+        ))}
+      </div>
+      <div className="space-y-1.5 text-sm">
+        {(kw as WsKeyword).opportunity_driver && <div className="flex justify-between"><span className="text-muted-foreground">Opportunity Driver</span><span>{(kw as WsKeyword).opportunity_driver}</span></div>}
+        {(kw as WsKeyword).click_share != null && <div className="flex justify-between"><span className="text-muted-foreground">ABA Click Share</span><span>{Number((kw as WsKeyword).click_share).toFixed(2)}%</span></div>}
+        {(kw as WsKeyword).conversion_share != null && <div className="flex justify-between"><span className="text-muted-foreground">ABA Conversion Share</span><span>{Number((kw as WsKeyword).conversion_share).toFixed(2)}%</span></div>}
+        {eff != null && <div className="flex justify-between"><span className="text-muted-foreground">Conversion Efficiency</span><span>{eff.toFixed(1)}/100</span></div>}
+        {titleDensityReliable && (kw as WsKeyword).title_density != null && (
+          <div className="flex justify-between"><span className="text-muted-foreground">Title Density</span><span>{(kw as WsKeyword).title_density}</span></div>
+        )}
+        <div className="flex justify-between"><span className="text-muted-foreground">Source Dataset</span><span>{srcDataset(kw as SegmentKeywordRaw)}</span></div>
+      </div>
+      <div className="p-3 bg-muted/20 rounded-xl">
+        <p className="text-xs font-bold text-muted-foreground uppercase tracking-wide mb-1">Score Calculation</p>
+        <p className="text-xs font-mono text-foreground/80">
+          Opportunity Score = percentile-rank(Search Volume × 40% + Keyword Sales × 35% + Inverse Competition × 25%).
+          Score represents where this keyword ranks within the full keyword universe.
+          Extreme ≥80, High 65–79, Moderate 50–64, Low &lt;50.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ─── KPI Evidence bodies ──────────────────────────────────────────────────────
+
+function OverallScoreEvidence({ score, evidence, n }: { score: number; evidence: EvidenceMeta; n: number }) {
+  const cols = evidence.columns_used ?? {};
+  const weights = evidence.score_weights ?? {};
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3 p-4 bg-muted/30 rounded-xl">
+        <span className="text-4xl font-black font-mono">{score.toFixed(1)}</span>
+        <div>
+          <p className="text-xs text-muted-foreground uppercase tracking-wide">Overall Whitespace Score / 100</p>
+          <p className="text-xs text-muted-foreground mt-0.5">Mean opportunity score across all {n.toLocaleString()} valid keywords</p>
+        </div>
+      </div>
+      <div>
+        <p className="text-xs font-bold text-muted-foreground uppercase tracking-wide mb-2">Formula</p>
+        <p className="text-xs font-mono bg-muted/20 rounded-lg p-3 leading-relaxed">
+          {evidence.formula?.opportunity_score ?? 'Opportunity Score = percentile-rank(Search Volume×40% + Keyword Sales×35% + Inverse Competition×25%)'}
+        </p>
+      </div>
+      <div>
+        <p className="text-xs font-bold text-muted-foreground uppercase tracking-wide mb-2">Components &amp; Weights</p>
+        <div className="space-y-1.5">
+          {[
+            { label: 'Search Volume', weight: weights.search_volume_pct ?? 0.40, col: cols.search_volume },
+            { label: 'Keyword Sales', weight: weights.keyword_sales_pct ?? 0.35, col: cols.keyword_sales },
+            { label: 'Inverse Competition', weight: weights.inv_competition_pct ?? 0.25, col: cols.competition },
+          ].map((c, i) => (
+            <div key={i} className="flex justify-between items-center text-sm p-2 border border-border rounded-lg">
+              <span>{c.label}</span>
+              <div className="flex items-center gap-2">
+                {c.col ? <span className="text-xs text-primary bg-primary/10 px-2 py-0.5 rounded-full">{c.col}</span> : <span className="text-xs text-muted-foreground">unavailable</span>}
+                <span className="font-mono font-bold">{(c.weight * 100).toFixed(0)}%</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3 text-sm">
+        <div className="p-3 border border-border rounded-xl"><p className="text-xs text-muted-foreground">Rows Included</p><p className="font-bold mt-1">{(evidence.rows_included ?? 0).toLocaleString()}</p></div>
+        <div className="p-3 border border-border rounded-xl"><p className="text-xs text-muted-foreground">Rows Excluded</p><p className="font-bold mt-1">{(evidence.rows_excluded ?? 0).toLocaleString()}</p></div>
+      </div>
+      <p className="text-xs text-muted-foreground">Source dataset: {evidence.source_dataset ?? 'Magnet'}</p>
+    </div>
+  );
+}
+
+function TierEvidence({ tier, count, total, threshold, evidence }: {
+  tier: 'extreme' | 'high'; count: number; total: number; threshold: number; evidence: EvidenceMeta;
+}) {
+  const isExtreme = tier === 'extreme';
+  const topKws = evidence.top_extreme_keywords ?? [];
+  return (
+    <div className="space-y-4">
+      <div className={cn('p-4 rounded-xl', isExtreme ? 'bg-purple-500/10 border border-purple-500/20' : 'bg-emerald-500/10 border border-emerald-500/20')}>
+        <p className={cn('text-3xl font-black font-mono', isExtreme ? 'text-purple-400' : 'text-emerald-500')}>{count.toLocaleString()}</p>
+        <p className="text-xs text-muted-foreground mt-1">{formatPct(count, total)} of {total.toLocaleString()} total keywords</p>
+      </div>
+      <div>
+        <p className="text-xs font-bold text-muted-foreground uppercase tracking-wide mb-2">Definition</p>
+        <p className="text-xs font-mono bg-muted/20 rounded-lg p-3 leading-relaxed">
+          {isExtreme ? evidence.formula?.extreme_opportunity : evidence.formula?.high_opportunity}
+        </p>
+      </div>
+      <div className="text-sm space-y-1">
+        <div className="flex justify-between"><span className="text-muted-foreground">Threshold</span><span className="font-mono font-bold">Opportunity Score ≥ {threshold}</span></div>
+        <div className="flex justify-between"><span className="text-muted-foreground">Formula</span><span className="font-mono text-xs">percentile-rank(SV×40% + KS×35% + InvComp×25%)</span></div>
+        <div className="flex justify-between"><span className="text-muted-foreground">Competition Signal</span><span>{evidence.competition_column_used ?? 'Competing Products or Title Density'}</span></div>
+      </div>
+      {topKws.length > 0 && (
+        <div>
+          <p className="text-xs font-bold text-muted-foreground uppercase tracking-wide mb-2">Top Example Keywords</p>
+          {topKws.slice(0, 5).map((k, i) => (
+            <div key={i} className="flex justify-between items-center py-1.5 border-b border-border/50 text-sm">
+              <span className="font-medium truncate max-w-[220px]">{String(k.keyword ?? '—')}</span>
+              <span className={cn('font-mono font-bold', scoreColor(Number(k.opportunity_score ?? 0)))}>{Number(k.opportunity_score ?? 0).toFixed(1)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RevenueSignalEvidence({ value, evidence, pctCategory, capped }: {
+  value: number; evidence: EvidenceMeta; pctCategory: number; capped: boolean;
+}) {
+  return (
+    <div className="space-y-4">
+      <div className="p-4 bg-amber-500/10 border border-amber-500/20 rounded-xl">
+        <p className="text-3xl font-black font-mono text-amber-500">{formatNumber(Math.round(value))}</p>
+        <p className="text-xs text-muted-foreground mt-1">Keyword Sales units — represents {pctCategory.toFixed(1)}% of measurable category keyword sales</p>
+      </div>
+      <div>
+        <p className="text-xs font-bold text-muted-foreground uppercase tracking-wide mb-2">Formula</p>
+        <p className="text-xs font-mono bg-muted/20 rounded-lg p-3 leading-relaxed">
+          {evidence.formula?.revenue_signal}
+        </p>
+      </div>
+      <div className="text-sm space-y-1.5">
+        <div className="flex justify-between"><span className="text-muted-foreground">Source</span><span>{evidence.revenue_signal_source ?? 'Keyword Sales'}</span></div>
+        <div className="flex justify-between"><span className="text-muted-foreground">Source Dataset</span><span>Magnet</span></div>
+        {evidence.columns_used?.keyword_sales && <div className="flex justify-between"><span className="text-muted-foreground">Column Used</span><span className="font-mono text-xs">{evidence.columns_used.keyword_sales}</span></div>}
+        <div className="flex justify-between"><span className="text-muted-foreground">Cap Applied?</span><span>{capped ? `Yes — capped at ${evidence.revenue_cap_threshold_pct ?? 60}% of category sales` : 'No — within threshold'}</span></div>
+      </div>
+      <p className="text-xs text-muted-foreground bg-yellow-500/5 border border-yellow-500/20 rounded-lg p-3">
+        This is a keyword-level sales signal, not a product revenue forecast. It reflects the search-demand-weighted sales units associated with opportunity keywords.
+      </p>
+    </div>
+  );
+}
+
+function BestClusterEvidence({ cluster, segments }: { cluster: string; segments: EntrySegment[] }) {
+  const seg = segments.find(s => s.segment === cluster) ?? segments[0];
+  if (!seg) return <p className="text-sm text-muted-foreground">No segment data available.</p>;
+
+  const isBroad = ['generic', 'other', 'general search terms', 'general'].includes(cluster.toLowerCase());
+  const actionable = segments.filter(s => !['generic', 'other', 'general search terms', 'general'].includes(s.segment.toLowerCase()));
+
+  return (
+    <div className="space-y-4">
+      <div className="p-4 bg-cyan-500/10 border border-cyan-500/20 rounded-xl">
+        <p className="text-2xl font-bold text-cyan-400">{cluster}</p>
+        {isBroad && <p className="text-xs text-yellow-500 mt-1">⚠ This is a broad catch-all segment. Consider the actionable segments below instead.</p>}
+      </div>
+      <div className="text-sm space-y-1.5">
+        <div className="flex justify-between"><span className="text-muted-foreground">Revenue Signal</span><span className="font-mono">{formatNumber(Math.round(seg.opportunity_revenue))}</span></div>
+        <div className="flex justify-between"><span className="text-muted-foreground">Opportunity Keywords</span><span className="font-mono">{seg.keyword_count.toLocaleString()}</span></div>
+        <div className="flex justify-between"><span className="text-muted-foreground">Avg Opportunity Score</span><span className={cn('font-mono', scoreColor(seg.avg_opportunity_score ?? 0))}>{seg.avg_opportunity_score?.toFixed(1) ?? '—'}/100</span></div>
+        <div className="flex justify-between"><span className="text-muted-foreground">Priority</span><span>{seg.recommended_priority}</span></div>
+        {seg.competitive_intensity && <div className="flex justify-between"><span className="text-muted-foreground">Competitive Intensity</span><span className={intensityColor(seg.competitive_intensity)}>{seg.competitive_intensity}</span></div>}
+      </div>
+      <div>
+        <p className="text-xs font-bold text-muted-foreground uppercase tracking-wide mb-2">Ranking Formula</p>
+        <p className="text-xs font-mono bg-muted/20 rounded-lg p-3">
+          Best Entry Cluster Score = Revenue × 40% + Keyword Count × 25% + Avg Score × 25% + Accessibility × 10%.
+          Broad catch-all segments are deprioritised in favour of actionable named segments.
+        </p>
+      </div>
+      {actionable.length > 0 && (
+        <div>
+          <p className="text-xs font-bold text-muted-foreground uppercase tracking-wide mb-2">Actionable Segments to Consider</p>
+          {actionable.slice(0, 5).map((s, i) => (
+            <div key={i} className="flex justify-between items-center py-1.5 border-b border-border/50 text-sm">
+              <span className="font-medium">{s.segment}</span>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">{s.keyword_count.toLocaleString()} kws</span>
+                <span className={cn('font-mono font-bold', scoreColor(s.avg_opportunity_score ?? 0))}>{s.avg_opportunity_score?.toFixed(1) ?? '—'}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

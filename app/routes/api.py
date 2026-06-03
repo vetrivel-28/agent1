@@ -439,12 +439,13 @@ def demand_velocity(top_n: int = 10):
 def search_intent_efficiency(top_n: int = 10):
     logger.info(f"SIEI requested (top_n={top_n})")
     magnet_df = registry.get_magnet()
+    kc_df = registry.get_keyword_classification()
     if is_empty_dataframe(magnet_df):
         return _datasets_not_loaded("Search Intent Efficiency Index (SIEI)", "magnet")
     cached = analysis_cache.get_engine("siei")
     if cached:
         return format_response(cached)
-    return format_response(siei_engine.run(magnet_df, top_n=top_n))
+    return format_response(siei_engine.run(magnet_df, keyword_classification_df=kc_df, top_n=top_n))
 
 
 @router.post(
@@ -497,7 +498,8 @@ def whitespace_opportunities(top_n: int = 15):
     cached = analysis_cache.get_engine("whitespace")
     if cached:
         return format_response(cached)
-    result = whitespace_engine.run(magnet_df, None, top_n=top_n)
+    kc_df = registry.get_keyword_classification()
+    result = whitespace_engine.run(magnet_df, None, keyword_classification_df=kc_df, top_n=top_n)
     logger.info(
         f"Whitespace Opportunity complete — status={result['status']}, "
         f"score={result.get('results', {}).get('overall_whitespace_score', 'n/a')}"
@@ -515,6 +517,62 @@ def whitespace_opportunities(top_n: int = 15):
 )
 def revenue_opportunity_segment_keywords(segment_name: str):
     logger.info(f"Revenue Opportunity keywords requested for segment={segment_name}")
+
+    # ── Primary path: read from the cached whitespace run (exact same segments) ──
+    cached_ws = analysis_cache.get_engine("whitespace")
+    if cached_ws and cached_ws.get("status") == "success":
+        entry_segments = cached_ws.get("results", {}).get("entry_segments", [])
+        # Exact match first, then case-insensitive fallback
+        matched = next(
+            (s for s in entry_segments if s.get("segment") == segment_name), None
+        )
+        if matched is None:
+            matched = next(
+                (s for s in entry_segments
+                 if str(s.get("segment", "")).strip().lower() == segment_name.strip().lower()),
+                None,
+            )
+        if matched is not None:
+            kw_list = matched.get("keywords", [])
+            raw_count = matched.get("raw_rows_before_dedupe", len(kw_list))
+            dupe_count = matched.get("duplicate_rows_removed", 0)
+            return {
+                "success": True,
+                "segment": segment_name,
+                "opportunity_revenue": matched.get("opportunity_revenue", 0.0),
+                "opportunity_keywords": matched.get("opportunity_keywords", len(kw_list)),
+                "keyword_count": len(kw_list),
+                "avg_opportunity_score": matched.get("avg_opportunity_score"),
+                "raw_rows_before_dedupe": raw_count,
+                "unique_keywords_after_dedupe": len(kw_list),
+                "duplicate_rows_removed": dupe_count,
+                "raw_row_count": raw_count,
+                "duplicate_removed_count": dupe_count,
+                "recommended_priority": matched.get("recommended_priority", "Evaluate"),
+                "competitive_intensity": matched.get("competitive_intensity", "—"),
+                "primary_driver": matched.get("primary_driver", "—"),
+                "keywords": kw_list,
+            }
+        # Segment not found in cache — return not-found with segment list for debugging
+        available = [s.get("segment") for s in entry_segments]
+        logger.warning(
+            f"Segment '{segment_name}' not found in cached whitespace. "
+            f"Available: {available}"
+        )
+        return {
+            "success": False,
+            "segment": segment_name,
+            "keyword_count": 0,
+            "raw_row_count": 0,
+            "duplicate_removed_count": 0,
+            "keywords": [],
+            "message": (
+                f"Segment '{segment_name}' not found in whitespace analysis. "
+                f"Available segments: {', '.join(str(a) for a in available[:10])}."
+            ),
+        }
+
+    # ── Fallback: re-run with kc_df so segment names are consistent ──────────
     magnet_df = registry.get_magnet()
     if is_empty_dataframe(magnet_df):
         return {
@@ -526,7 +584,8 @@ def revenue_opportunity_segment_keywords(segment_name: str):
             "keywords": [],
             "message": "Magnet keyword dataset not uploaded or is empty.",
         }
-    return whitespace_engine.get_revenue_segment_keywords(magnet_df, segment_name)
+    kc_df = registry.get_keyword_classification()
+    return whitespace_engine.get_revenue_segment_keywords(magnet_df, segment_name, kc_df)
 
 
 @router.post(

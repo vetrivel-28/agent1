@@ -106,7 +106,7 @@ def compute_premium_viability(
         "revenue_share_q4": round(q4_share * 100, 2),
         "price_elasticity_heatmap": heatmap,
         "columns_used": [price_col, revenue_col],
-        "formula_used": "PVS = ((RawPVS + 100) / 200) x 100; RawPVS = RevenueShare(Q4) - RevenueShare(Q1) in pp",
+        "formula_used": "Price Positioning Potential measures whether higher-priced products (Q4) capture meaningfully more revenue than lower-priced products (Q1). Formula: ((Q4 Share - Q1 Share + 100) / 200) * 100",
         "raw_pvs": round(raw_pvs, 2),
         "mini_insight": (
             f"Market is {classification.lower()} with top-quartile revenue share "

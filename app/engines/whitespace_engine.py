@@ -559,6 +559,53 @@ def run(
             f"Overall opportunity score: {overall_score}/100."
         )
 
+    # ── Evidence metadata for frontend drawers ──────────────────────────────
+    competition_source = title_density_col if title_density_reliable else comp_col
+    evidence_metadata = {
+        "formula": {
+            "opportunity_score": (
+                "Opportunity Score = percentile-rank("
+                "Search Volume × 40% + Keyword Sales × 35% + Inverse Competition × 25%"
+                "). Final score = percentile rank of the composite within all valid keywords."
+            ),
+            "extreme_opportunity": "Opportunity Score ≥ 80 (top tier — highest demand + revenue + accessibility)",
+            "high_opportunity": "Opportunity Score ≥ 65 and < 80 (strong but not top tier)",
+            "revenue_signal": (
+                "Revenue Signal = (Extreme-tier keyword sales) + 0.35 × (High-tier keyword sales), "
+                "capped at 60% of total measurable category keyword sales."
+            ),
+        },
+        "source_dataset": "Magnet",
+        "columns_used": {
+            "search_volume": search_vol_col,
+            "keyword_sales": sales_col,
+            "competition": competition_source,
+            "title_density": title_density_col if title_density_reliable else None,
+            "click_share": click_share_col,
+            "conversion_share": conv_share_col,
+        },
+        "rows_included": rows_after,
+        "rows_excluded": rows_skipped,
+        "total_keywords": n,
+        "extreme_threshold": 80,
+        "high_threshold": 65,
+        "score_weights": {
+            "search_volume_pct": 0.40,
+            "keyword_sales_pct": 0.35,
+            "inv_competition_pct": 0.25,
+        },
+        "competition_column_used": competition_source,
+        "title_density_reliable": title_density_reliable,
+        "revenue_signal_source": "Keyword Sales" if sales_col else "Not available",
+        "revenue_capped": revenue_capped,
+        "revenue_cap_threshold_pct": 60,
+        "top_extreme_keywords": [
+            {k: v for k, v in kw.items() if k in ("keyword", "search_volume", "keyword_sales", "opportunity_score", "opportunity_driver")}
+            for kw in top_keywords[:5]
+            if kw.get("opportunity_score", 0) >= 80
+        ] or [{k: v for k, v in kw.items() if k in ("keyword", "search_volume", "keyword_sales", "opportunity_score", "opportunity_driver")} for kw in top_keywords[:3]],
+    }
+
     elapsed = round(time.time() - t0, 3)
     logger.info(
         f"Whitespace engine complete: n={n}, score={overall_score}, "
@@ -601,6 +648,7 @@ def run(
                 "capped at 60% of measurable category sales to reflect realistic addressable opportunity."
             ),
             "insights":                         insights,
+            "evidence_metadata":                evidence_metadata,
         },
         "validation": {
             "rows_before_cleaning":    rows_before,
@@ -813,7 +861,23 @@ def _build_entry_segments(
         )
         seg["recommended_action"] = _recommended_action(priority)
 
+    _BROAD_CATCHALL_NAMES = {
+        "generic", "other", "general search terms", "general", "misc", "miscellaneous",
+        "broad", "catch-all", "catchall", "unclassified",
+    }
+
+    def _is_broad_catchall(name: str) -> bool:
+        return name.strip().lower() in _BROAD_CATCHALL_NAMES
+
     best = segments[0]["segment"] if segments else None
+    # Prefer the first actionable (non-catchall) segment if the top segment is a broad catch-all
+    if best and _is_broad_catchall(best):
+        for seg in segments[1:]:
+            if not _is_broad_catchall(seg["segment"]):
+                # Only prefer it if it has meaningful keywords
+                if seg.get("keyword_count", 0) >= 3:
+                    best = seg["segment"]
+                    break
     reliable = (
         len(segments) >= 2
         and segments[0]["keyword_count"] >= min_cluster_size
@@ -825,6 +889,7 @@ def _build_entry_segments(
 def get_revenue_segment_keywords(
     magnet_df: Optional[pd.DataFrame],
     segment_name: str,
+    keyword_classification_df: Optional[pd.DataFrame] = None,
 ) -> Dict[str, Any]:
     if magnet_df is None or magnet_df.empty:
         return {
@@ -907,27 +972,32 @@ def get_revenue_segment_keywords(
 
     high_extreme_mask = df_valid["_opp_label"].isin(["High Opportunity", "Extreme Opportunity"])
     df_high_extreme = df_valid.loc[high_extreme_mask] if high_extreme_mask.any() else df_valid.head(0)
-    classification_map = _build_keyword_classification_map(None)
+    classification_map = _build_keyword_classification_map(keyword_classification_df)
     segments, _, _ = _build_entry_segments(df_high_extreme, keyword_col, classification_map)
 
     for seg in segments:
-        if seg["segment"] == segment_name:
+        seg_key = seg["segment"]
+        if seg_key == segment_name or seg_key.strip().lower() == segment_name.strip().lower():
+            kw_list = seg.get("keywords", [])
+            raw_count = seg.get("raw_rows_before_dedupe", len(kw_list))
+            dupe_count = seg.get("duplicate_rows_removed", 0)
             return {
                 "success": True,
                 "segment": segment_name,
                 "opportunity_revenue": seg.get("opportunity_revenue", 0.0),
-                "opportunity_keywords": seg.get("opportunity_keywords", 0),
-                "keyword_count": seg.get("keyword_count", 0),
+                "opportunity_keywords": seg.get("opportunity_keywords", len(kw_list)),
+                "keyword_count": len(kw_list),
                 "avg_opportunity_score": seg.get("avg_opportunity_score"),
-                "raw_rows_before_dedupe": seg.get("raw_rows_before_dedupe", 0),
-                "unique_keywords_after_dedupe": seg.get("unique_keywords_after_dedupe", 0),
-                "duplicate_rows_removed": seg.get("duplicate_rows_removed", 0),
-                "raw_row_count": seg.get("raw_rows_before_dedupe", 0),
-                "duplicate_removed_count": seg.get("duplicate_rows_removed", 0),
+                "raw_rows_before_dedupe": raw_count,
+                "unique_keywords_after_dedupe": len(kw_list),
+                "duplicate_rows_removed": dupe_count,
+                "raw_row_count": raw_count,
+                "duplicate_removed_count": dupe_count,
                 "recommended_priority": seg.get("recommended_priority", "Evaluate"),
-                "keywords": seg.get("keywords", []),
+                "keywords": kw_list,
             }
 
+    available = [s.get("segment") for s in segments]
     return {
         "success": False,
         "segment": segment_name,
@@ -942,6 +1012,10 @@ def get_revenue_segment_keywords(
         "duplicate_removed_count": 0,
         "recommended_priority": "Evaluate",
         "keywords": [],
+        "message": (
+            f"Segment '{segment_name}' not found. "
+            f"Available: {', '.join(str(a) for a in available[:10])}."
+        ),
     }
 
 

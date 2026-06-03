@@ -59,8 +59,8 @@ def run_all_engines(top_n: int = DEFAULT_TOP_N) -> Dict[str, Any]:
             futures["direct_competitors"] = executor.submit(direct_competitor_engine.run, None, blackbox_df, top_n)
 
         if not is_empty_dataframe(magnet_df):
-            futures["siei"] = executor.submit(siei_engine.run, magnet_df, top_n)
-            futures["whitespace"] = executor.submit(whitespace_engine.run, magnet_df, None, top_n)
+            futures["siei"] = executor.submit(siei_engine.run, magnet_df, kc_df, top_n)
+            futures["whitespace"] = executor.submit(whitespace_engine.run, magnet_df, None, kc_df, top_n)
             futures["demand_velocity"] = executor.submit(demand_velocity_engine.run, magnet_df, blackbox_df, top_n)
 
         if not (is_empty_dataframe(kc_df) or is_empty_dataframe(blackbox_df)):

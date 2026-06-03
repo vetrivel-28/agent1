@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 
 from app.utils.column_mapper import find_column
-from app.utils.normalization import min_max_normalize
+from app.utils.normalization import min_max_normalize, safe_log_normalize
 from app.utils.logger import get_logger
 from app.utils.numeric_cleaner import clean_numeric_series
 from app.utils.category_rules import get_matching_categories, get_category_formula
@@ -764,7 +764,7 @@ def run(
                 f"cleaned={sv_stats['cleaned_count']}, "
                 f"nan={sv_stats['nan_introduced']}"
             )
-            sv_norm = min_max_normalize(sv_clean)
+            sv_norm = safe_log_normalize(sv_clean)
             sv_mean = float(sv_norm.mean(skipna=True))
             if not np.isnan(sv_mean):
                 metrics_available.append("Search Volume")
@@ -787,7 +787,7 @@ def run(
                 f"cleaned={ks_stats['cleaned_count']}, "
                 f"nan={ks_stats['nan_introduced']}"
             )
-            ks_norm = min_max_normalize(ks_clean)
+            ks_norm = safe_log_normalize(ks_clean)
             ks_mean = float(ks_norm.mean(skipna=True))
             if not np.isnan(ks_mean):
                 metrics_available.append("Keyword Sales")
@@ -811,7 +811,7 @@ def run(
                 f"cleaned={as_stats['cleaned_count']}, "
                 f"nan={as_stats['nan_introduced']}"
             )
-            as_norm = min_max_normalize(as_clean)
+            as_norm = safe_log_normalize(as_clean)
             as_mean = float(as_norm.mean(skipna=True))
             if not np.isnan(as_mean):
                 metrics_available.append("ASIN Sales")
@@ -834,7 +834,7 @@ def run(
                 f"cleaned={rev_stats['cleaned_count']}, "
                 f"nan={rev_stats['nan_introduced']}"
             )
-            rev_norm = min_max_normalize(rev_clean)
+            rev_norm = safe_log_normalize(rev_clean)
             rev_mean = float(rev_norm.mean(skipna=True))
             if not np.isnan(rev_mean):
                 metrics_available.append("Revenue")
@@ -1110,7 +1110,7 @@ def run(
             "Demand Concentration = HHI of segment search-volume shares; "
             "Segments = semantic business-category classification (no phrase clustering); "
             "Competition Index = keyword_count / demand_share; "
-            "Market Demand Index (report pillar only) from weighted normalized metrics."
+            "Market Demand Index (report pillar only) from weighted log-normalized metrics."
         ),
         "results": {
             "market_demand_index": market_demand_index,
