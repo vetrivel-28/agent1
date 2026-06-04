@@ -2,7 +2,26 @@ from collections import Counter
 import re
 from typing import List, Dict, Tuple
 
-STOP_WORDS = {"for", "and", "the", "with", "in", "of", "to", "a", "on", "para", "de", "or"}
+STOP_WORDS = {
+    "for", "and", "the", "with", "in", "of", "to", "a", "on", "at", "by", "an",
+    "is", "it", "as", "or", "be", "from", "that", "this", "your", "best", "top",
+    "para", "de", "el", "la", "product", "item", "set", "kit",
+}
+
+GENERIC_SINGLE_WORDS = {
+    "towel", "towels", "set", "sets", "best", "product", "item", "bag", "bottle",
+}
+
+
+def _is_generic_phrase(phrase: str) -> bool:
+    words = phrase.lower().split()
+    if not words:
+        return True
+    if all(w in GENERIC_SINGLE_WORDS for w in words):
+        return True
+    if len(words) == 1 and words[0] in GENERIC_SINGLE_WORDS:
+        return True
+    return False
 
 def extract_dynamic_themes(keywords: List[str], search_volumes: List[float], num_themes: int = 8) -> List[str]:
     """
@@ -38,6 +57,8 @@ def extract_dynamic_themes(keywords: List[str], search_volumes: List[float], num
     
     for term, _ in sorted_candidates:
         if len(themes) >= num_themes: break
+        if _is_generic_phrase(term):
+            continue
         overlap = False
         for t in themes:
             if term in t or t in term:
@@ -53,6 +74,8 @@ def extract_dynamic_themes(keywords: List[str], search_volumes: List[float], num
                 single_word_scores[phrase] = vol
         for term, _ in single_word_scores.most_common():
             if len(themes) >= num_themes: break
+            if _is_generic_phrase(term):
+                continue
             overlap = False
             for t in themes:
                 if term in t or t in term:

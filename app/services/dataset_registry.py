@@ -51,6 +51,7 @@ class DatasetRegistry:
         logger.info(f"BlackBox stored: {len(df)} rows, {len(df.columns)} cols")
 
     def set_magnet(self, df: pd.DataFrame) -> None:
+        search_volume_aggregator.clear()
         # Apply global search volume aggregation
         df = search_volume_aggregator.apply_global_aggregation(df)
         self._magnet = df.copy()

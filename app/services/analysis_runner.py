@@ -48,7 +48,9 @@ def run_all_engines(top_n: int = DEFAULT_TOP_N) -> Dict[str, Any]:
     futures = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=6) as executor:
         if not is_empty_dataframe(blackbox_df) or not is_empty_dataframe(magnet_df):
-            futures["demand"] = executor.submit(demand_engine.run, magnet_df, blackbox_df, top_n)
+            futures["demand"] = executor.submit(
+                demand_engine.run, magnet_df, blackbox_df, top_n, kc_df,
+            )
 
         if not is_empty_dataframe(blackbox_df):
             futures["sales_momentum"] = executor.submit(sales_momentum_engine.run, blackbox_df, top_n)

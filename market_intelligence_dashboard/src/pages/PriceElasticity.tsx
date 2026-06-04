@@ -19,7 +19,6 @@ import { motion } from 'framer-motion';
 // Unified Layouts
 import { PageHeader } from '../components/layout/PageHeader';
 import { PageSection } from '../components/layout/PageSection';
-import { ExecutiveNarrative } from '../components/intelligence/ExecutiveNarrative';
 import { ChartContainer } from '../components/ui/ChartContainer';
 import { DashboardSkeleton } from '../components/ui/Skeletons';
 
@@ -580,8 +579,6 @@ export default function PriceElasticity() {
     },
   ];
 
-  const narrative = `The market's price floor sits at ${formatCurrency(struct.price_floor)}, extending up to a ceiling of ${formatCurrency(struct.price_ceiling)}, yielding a price spread of ${formatCurrency(struct.price_spread)}. The optimal strategic sweet spot is ${pi.market_sweet_spot.range_label} (${pi.market_sweet_spot.tier}), which currently commands ${formatCurrency(pi.market_sweet_spot.parent_revenue)} in Parent Level Revenue. The recommended entry range is ${pi.entry_price_recommendation.recommended_range}.`;
-
   return (
     <>
     <div className="pb-16 max-w-[1400px] mx-auto px-6">
@@ -591,8 +588,6 @@ export default function PriceElasticity() {
         title="Price Economics & Strategy"
         description="Structural analysis utilizing Parent Level Revenue to calculate distribution, sweet spots, and entry recommendations across refined market tiers."
       />
-
-      <ExecutiveNarrative content={narrative} />
 
       {/* TIER DEFINITIONS */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
@@ -615,7 +610,7 @@ export default function PriceElasticity() {
         ))}
       </div>
 
-      <PageSection title="1. Market Price Structure" icon={Scale}>
+      <PageSection title="1. Market Price Structure">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <KpiCard title="Price Floor" value={formatCurrency(struct.price_floor)} icon={<Maximize className="w-4 h-4" />} color="text-muted-foreground" bg="bg-muted border-border" tooltip="Lowest statistically significant price point in market" onClick={() => setModalState({ type: 'evidence', title: "Market Price Structure", evidence: struct.evidence })} />
           <KpiCard title="Price Ceiling" value={formatCurrency(struct.price_ceiling)} icon={<Maximize className="w-4 h-4" />} color="text-muted-foreground" bg="bg-muted border-border" tooltip="Highest statistically significant price point in market" onClick={() => setModalState({ type: 'evidence', title: "Market Price Structure", evidence: struct.evidence })} />
@@ -624,7 +619,7 @@ export default function PriceElasticity() {
       </PageSection>
 
       {/* SECTION: PRODUCT POSITIONING MAP */}
-      <PageSection title="2. Product Positioning Map" icon={Target}>
+      <PageSection title="2. Product Positioning Map">
         <ChartContainer 
           title="Price vs Revenue Distribution"
           yAxisLabel="Parent Level Revenue"
@@ -685,7 +680,7 @@ export default function PriceElasticity() {
       </PageSection>
 
       {/* STRATEGIC INSIGHTS */}
-      <PageSection title="3. Strategic Price Economics" icon={Activity}>
+      <PageSection title="3. Strategic Price Economics">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         
         {/* Market Sweet Spot */}
@@ -764,7 +759,7 @@ export default function PriceElasticity() {
       </PageSection>
 
       {/* SECTIONS 3 & 4: CHARTS */}
-      <PageSection title="4. Pricing Demographics" icon={Layers}>
+      <PageSection title="4. Pricing Demographics">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         
         {/* Revenue Pricing Chart */}

@@ -22,6 +22,7 @@ type DetectedFile = {
   matchedSchema: string[];
   missingColumns: string[];
   debugReason: string;
+  duplicateHeaders: string[];
 };
 
 export default function DatasetUpload() {
@@ -105,7 +106,37 @@ export default function DatasetUpload() {
         skipEmptyLines: true,
         dynamicTyping: false,
         complete: (results) => {
-          const headers = results.meta.fields || [];
+          const rawHeaders: string[] = results.meta.fields || [];
+
+          // ── Normalise duplicate headers ───────────────────────────────
+          // PapaParse renames duplicates internally (e.g. "Search Volume_1")
+          // but we want deterministic names and a transparent audit trail.
+          const seenCounts: Record<string, number> = {};
+          const normalisedHeaders: string[] = [];
+          const duplicateHeaders: string[] = [];
+
+          for (const h of rawHeaders) {
+            const key = h.trim();
+            if (seenCounts[key] == null) {
+              seenCounts[key] = 0;
+              normalisedHeaders.push(key);
+            } else {
+              seenCounts[key]++;
+              const renamed = `${key}_${seenCounts[key] + 1}`;
+              normalisedHeaders.push(renamed);
+              if (!duplicateHeaders.includes(key)) duplicateHeaders.push(key);
+            }
+          }
+
+          if (duplicateHeaders.length > 0) {
+            console.warn(
+              `[DatasetUpload] Duplicate headers in "${results.meta.fields ? 'file' : 'unknown'}":`,
+              duplicateHeaders,
+              '— renamed to avoid silent ambiguity.'
+            );
+          }
+
+          const headers = normalisedHeaders;
           const headerStr = headers.map(h => h.toLowerCase().trim());
           const rows = results.data.length;
           const columns = headers.length;
@@ -152,10 +183,10 @@ export default function DatasetUpload() {
             }
           }
 
-          resolve({ file, type, rows, columns, confidence, matchedSchema, missingColumns, debugReason });
+          resolve({ file, type, rows, columns, confidence, matchedSchema, missingColumns, debugReason, duplicateHeaders });
         },
         error: (err) => {
-          resolve({ file, type: 'unknown', rows: 0, columns: 0, confidence: 0, matchedSchema: [], missingColumns: [], debugReason: err.message });
+          resolve({ file, type: 'unknown', rows: 0, columns: 0, confidence: 0, matchedSchema: [], missingColumns: [], debugReason: err.message, duplicateHeaders: [] });
         }
       });
     });

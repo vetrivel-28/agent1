@@ -8,48 +8,21 @@ interface Opportunity {
   title?: string;
   type?: string;
   evidence?: string;
+  action_title?: string;
+  priority?: string;
+  difficulty?: string;
+  priority_score?: number;
+  difficulty_score?: number;
+  impact?: string;
+  evidence_obj?: any;
 }
 
 interface RecommendedActionsProps {
   opportunities: Opportunity[];
+  onOpenEvidence?: (evidence: any) => void;
 }
 
-// Derive Priority based on opportunity type or evidence keywords
-const getPriority = (opp: Opportunity) => {
-  const text = `${opp.title} ${opp.evidence}`.toLowerCase();
-  if (text.includes('high') || text.includes('strong') || text.includes('immediate')) return 'High';
-  if (text.includes('moderate') || text.includes('medium') || text.includes('growing')) return 'Medium';
-  return 'Low';
-};
-
-// Derive Difficulty based on what action is required
-const getDifficulty = (type: string) => {
-  const t = type.toLowerCase();
-  if (t.includes('product') || t.includes('launch')) return 'Hard';
-  if (t.includes('price') || t.includes('bundle')) return 'Easy';
-  return 'Medium';
-};
-
-// Estimate a dynamic impact based on a seeded hash of the title (to keep it deterministic but varied)
-const estimateImpact = (title: string) => {
-  let hash = 0;
-  for (let i = 0; i < title.length; i++) {
-    hash = ((hash << 5) - hash) + title.charCodeAt(i);
-    hash |= 0; 
-  }
-  const baseRevenue = 2000 + (Math.abs(hash) % 15000);
-  return `Est. $${baseRevenue.toLocaleString()}/mo`;
-};
-
-const formatAction = (opp: Opportunity) => {
-  const type = (opp.type || '').toLowerCase();
-  if (type.includes('pricing')) return `Optimize pricing strategy for ${opp.title}`;
-  if (type.includes('product')) return `Launch new variant: ${opp.title}`;
-  if (type.includes('keyword')) return `Target unoptimized keyword: ${opp.title}`;
-  return `Investigate opportunity: ${opp.title}`;
-};
-
-export function RecommendedActions({ opportunities }: RecommendedActionsProps) {
+export function RecommendedActions({ opportunities, onOpenEvidence }: RecommendedActionsProps) {
   const validOpps = opportunities.filter(o => o.title && o.title !== 'N/A');
 
   if (validOpps.length === 0) return null;
@@ -65,10 +38,10 @@ export function RecommendedActions({ opportunities }: RecommendedActionsProps) {
       <CardContent className="p-0">
         <div className="divide-y divide-border">
           {validOpps.map((opp, idx) => {
-            const priority = getPriority(opp);
-            const difficulty = getDifficulty(opp.type || '');
-            const impact = estimateImpact(opp.title || '');
-            const actionText = formatAction(opp);
+            const priority = opp.priority || 'Medium';
+            const difficulty = opp.difficulty || 'Medium';
+            const impact = opp.impact || 'N/A';
+            const actionText = opp.action_title || `Investigate opportunity: ${opp.title}`;
 
             return (
               <motion.div 
@@ -76,7 +49,8 @@ export function RecommendedActions({ opportunities }: RecommendedActionsProps) {
                 initial={{ opacity: 0, x: -10 }}
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: idx * 0.1 }}
-                className="p-4 sm:p-6 hover:bg-slate-50 transition-colors group"
+                className="p-4 sm:p-6 hover:bg-slate-50 transition-colors group cursor-pointer"
+                onClick={() => onOpenEvidence && onOpenEvidence(opp.evidence_obj)}
               >
                 <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
                   <div className="space-y-3 flex-1">
@@ -91,6 +65,9 @@ export function RecommendedActions({ opportunities }: RecommendedActionsProps) {
                       <Badge variant="outline" className="bg-muted text-muted-foreground border-transparent">
                         Difficulty: {difficulty}
                       </Badge>
+                      {opp.priority_score && (
+                        <span className="text-xs text-muted-foreground font-mono ml-2">Score: {opp.priority_score}</span>
+                      )}
                     </div>
                     
                     <div>

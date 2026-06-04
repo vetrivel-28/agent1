@@ -7,8 +7,7 @@ import { DataTable, type Column } from '../components/tables/DataTable';
 import { cn } from '../utils/cn';
 import { isEngineOk, getEngineErrorMessage } from '../utils/analysisStatus';
 import {
-  AlertCircle, Info, Loader2, TrendingDown, TrendingUp, X,
-  Zap, Target, Search, Database, ChevronDown, ChevronUp, Activity
+  AlertCircle, Info, TrendingDown, TrendingUp, X, Database
 } from 'lucide-react';
 import {
   ScatterChart, Scatter, XAxis, YAxis, CartesianGrid,
@@ -19,12 +18,59 @@ import { motion, AnimatePresence } from 'framer-motion';
 // Unified Layouts
 import { PageHeader } from '../components/layout/PageHeader';
 import { PageSection } from '../components/layout/PageSection';
-import { ExecutiveNarrative } from '../components/intelligence/ExecutiveNarrative';
-import { KPICard } from '../components/ui/KPICard';
+import { EvidenceModal, type EvidenceData } from '../components/ui/EvidenceModal';
 import { ChartContainer } from '../components/ui/ChartContainer';
 import { DashboardSkeleton } from '../components/ui/Skeletons';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/** Central segment normalization — ensures consistent segment labels across backend variants */
+function normalizeSegment(value: string | null | undefined): string {
+  if (!value) return 'Low Priority';
+  
+  const cleaned = value.trim().toLowerCase().replace(/[_\s]+/g, ' ');
+  
+  if (cleaned === 'demand winner' || cleaned === 'demand winners') return 'Demand Winner';
+  if (cleaned === 'hidden gem' || cleaned === 'hidden gems') return 'Hidden Gem';
+  if (cleaned === 'friction keyword' || cleaned === 'friction keywords') return 'Friction Keyword';
+  if (cleaned === 'low priority') return 'Low Priority';
+  
+  // Return original value if no match (fallback)
+  return value.trim();
+}
+
+/** Segment colors — centralized color mapping */
+const SEGMENT_COLORS: Record<string, string> = {
+  'Demand Winner': '#8B5CF6',
+  'Hidden Gem': '#10B981',
+  'Friction Keyword': '#EF4444',
+  'Low Priority': '#64748B',
+};
+
+/** Meaningful keyword validation — generic filter for all datasets */
+function isMeaningfulKeyword(kw: string | null | undefined): boolean {
+  if (!kw || typeof kw !== 'string') return false;
+  
+  const cleaned = kw.trim().toLowerCase();
+  if (cleaned.length === 0) return false;
+  
+  // Must contain at least one alphabetic character
+  if (!/[a-z]/i.test(cleaned)) return false;
+  
+  // Reject if only numbers/symbols/punctuation
+  if (/^[\d\s\-_.,;:!?'"()[\]{}\/\\]+$/.test(cleaned)) return false;
+  
+  // Reject common stopword-only patterns (very short single stopwords)
+  const stopwordsOnly = /^(a|an|the|for|and|or|but|of|to|in|on|at|by|from|with|as|is|was|are|be)$/i;
+  if (stopwordsOnly.test(cleaned)) return false;
+  
+  // Reject broken fragments (single letters, or very short with no vowels)
+  if (cleaned.length === 1) return false;
+  if (cleaned.length === 2 && !/[aeiou]/i.test(cleaned)) return false;
+  
+  // Accept everything else — includes valid short keywords like "table", "tote", "bin"
+  return true;
+}
 
 function efficiencyColor(score: number): string {
   if (score >= 60) return 'text-emerald-500';
@@ -42,20 +88,16 @@ function fmt$(value: number | null | undefined): string {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
 }
 
-function quadrantDotColor(q: string): string {
-  switch (q) {
-    case 'Demand Winner':    return '#a855f7';
-    case 'Hidden Gem':       return '#10b981';
-    case 'Friction Keyword': return '#ef4444';
-    default:                 return '#64748b';
-  }
+function quadrantDotColor(q: string | null | undefined): string {
+  const normalized = normalizeSegment(q);
+  return SEGMENT_COLORS[normalized] ?? '#64748b';
 }
 
 function quadrantLabel(key: string): string {
   switch (key) {
-    case 'demand': return 'Demand Winners';
-    case 'friction': return 'Friction Keywords';
-    case 'hidden': return 'Hidden Gems';
+    case 'demand': return 'Demand Winner';
+    case 'friction': return 'Friction Keyword';
+    case 'hidden': return 'Hidden Gem';
     case 'low': return 'Low Priority';
     default: return 'All';
   }
@@ -95,186 +137,41 @@ class IntentErrorBoundary extends Component<{ children: React.ReactNode }, EBSta
   }
 }
 
-// ─── Centered Modal ───────────────────────────────────────────────────────────
+// ─── Evidence Conversion Helpers ──────────────────────────────────────────────
 
-function CenteredModal({ isOpen, onClose, title, children }: {
-  isOpen: boolean; onClose: () => void; title: string; children: React.ReactNode;
-}) {
-  if (!isOpen) return null;
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 overflow-y-auto">
-      <motion.div
-        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-        className="fixed inset-0 bg-black/60 backdrop-blur-sm"
-        onClick={onClose}
-      />
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95, y: 12 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.95, y: 12 }}
-        transition={{ type: 'spring', damping: 26, stiffness: 300 }}
-        className="relative z-50 w-full max-w-2xl max-h-[90vh] bg-background border border-border rounded-2xl shadow-2xl flex flex-col"
-      >
-        <div className="flex items-center justify-between p-5 border-b border-border shrink-0 sticky top-0 bg-background z-10">
-          <h2 className="text-lg font-bold truncate max-w-[90%]">{title}</h2>
-          <button type="button" onClick={onClose} className="p-2 rounded-full hover:bg-muted shrink-0">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-        <div className="flex-1 overflow-y-auto p-5">{children}</div>
-      </motion.div>
-    </div>
-  );
+function backendEvidenceToData(be: any, displayValue: any, title: string): EvidenceData | null {
+  if (!be) return null;
+  
+  const topRecords = (be.items || []).slice(0, 10).map((item: any) => ({
+    keyword: item.keyword || '—',
+    search_volume: item.search_volume || 0,
+    revenue_per_1000_searches: item.revenue_per_1000_searches || 0,
+    efficiency_score: item.efficiency_score || 0,
+  }));
+
+  return {
+    title: title,
+    displayed_value: displayValue,
+    source_datasets: [be.source_dataset || 'Magnet Keyword Dataset'],
+    source_columns: be.source_columns || ['Keyword Phrase', 'Search Volume', 'Keyword Sales'],
+    source_row_count: be.rows_included || be.rows_matched || 0,
+    formula: be.formula || null,
+    calculation_steps: be.calculation_steps || [],
+    top_records: topRecords.length > 0 ? topRecords : undefined,
+    aggregation_method: be.aggregation_method || undefined,
+    thresholds: be.thresholds ? {
+      high: String(be.thresholds.high_demand_cutoff || be.thresholds.high || '≥ 60'),
+      medium: String(be.thresholds.medium || 'Between 40 and 60'),
+      low: String(be.thresholds.low_demand_cutoff || be.thresholds.low || '< 40'),
+    } : undefined,
+    classification_reason: be.interpretation || be.excluded_reason || undefined,
+    confidence_note: undefined,
+    data_quality_notes: be.rows_excluded ? [`${be.rows_excluded} rows excluded: ${be.excluded_reason || 'validation failed'}`] : undefined,
+    llm_used: false,
+  };
 }
 
-// ─── Evidence body — renders structured evidence, never raw JSON ──────────────
-
-function EvidenceBody({ ev }: { ev: Record<string, any> }) {
-  if (!ev) return <p className="text-sm text-muted-foreground">No evidence available.</p>;
-
-  const thresholds: Record<string, any> = ev.thresholds ?? {};
-  const exampleCalc: Record<string, any> = ev.example_calculation ?? {};
-  const items: any[] = ev.items ?? [];
-  const calcSteps: string[] = ev.calculation_steps ?? [];
-
-  return (
-    <div className="space-y-4 text-sm">
-      {/* Header metric */}
-      {ev.metric_name && (
-        <div className="p-3 bg-primary/5 border border-primary/20 rounded-xl">
-          <p className="text-xs font-bold uppercase tracking-wider text-primary mb-1">{ev.metric_name}</p>
-          <p className="text-2xl font-black font-mono">
-            {typeof ev.metric_value === 'number' ? ev.metric_value.toLocaleString() : String(ev.metric_value ?? '—')}
-          </p>
-        </div>
-      )}
-
-      {/* Source */}
-      <div className="grid grid-cols-2 gap-3">
-        <div className="p-3 border border-border rounded-xl bg-muted/20">
-          <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">Source Dataset</p>
-          <p className="font-mono font-semibold">{ev.source_dataset ?? 'Magnet Keyword Dataset'}</p>
-        </div>
-        <div className="p-3 border border-border rounded-xl bg-muted/20">
-          <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">Source Columns</p>
-          <p className="font-mono font-semibold text-xs">{(ev.source_columns ?? []).join(', ') || '—'}</p>
-        </div>
-      </div>
-
-      {/* Formula */}
-      {ev.formula && ev.formula !== '—' && (
-        <div className="p-3 bg-muted/20 rounded-xl">
-          <p className="text-xs font-bold text-muted-foreground uppercase tracking-wide mb-1">Formula</p>
-          <p className="text-xs font-mono leading-relaxed text-foreground/80">{ev.formula}</p>
-        </div>
-      )}
-
-      {/* Thresholds — structured, not JSON */}
-      {Object.keys(thresholds).length > 0 && (
-        <div className="p-3 border border-border rounded-xl">
-          <p className="text-xs font-bold text-muted-foreground uppercase tracking-wide mb-2">Thresholds</p>
-          <ul className="space-y-1">
-            {Object.entries(thresholds).map(([k, v], i) => (
-              <li key={i} className="text-xs font-mono flex gap-2">
-                <span className="text-primary">•</span>
-                <span className="text-muted-foreground">{k.replace(/_/g, ' ')}:</span>
-                <span className="font-semibold">{String(v)}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {/* Row counts */}
-      <div className="grid grid-cols-2 gap-3">
-        <div className="p-3 border border-border rounded-xl">
-          <p className="text-xs text-muted-foreground">Rows Included</p>
-          <p className="font-bold mt-0.5">{ev.rows_included?.toLocaleString() ?? ev.rows_matched?.toLocaleString() ?? '—'}</p>
-        </div>
-        <div className="p-3 border border-border rounded-xl">
-          <p className="text-xs text-muted-foreground">Rows Excluded</p>
-          <p className="font-bold mt-0.5">{ev.rows_excluded?.toLocaleString() ?? '—'}</p>
-        </div>
-      </div>
-      {ev.excluded_reason && (
-        <p className="text-xs text-muted-foreground border-l-2 border-border pl-2">{ev.excluded_reason}</p>
-      )}
-
-      {/* Calculation steps */}
-      {calcSteps.length > 0 && (
-        <div className="p-3 bg-muted/20 rounded-xl">
-          <p className="text-xs font-bold text-muted-foreground uppercase tracking-wide mb-2">Calculation Steps</p>
-          <ol className="space-y-1">
-            {calcSteps.map((step, i) => (
-              <li key={i} className="text-xs font-mono text-foreground/80 flex gap-2">
-                <span className="text-primary shrink-0">{i + 1}.</span>
-                <span>{step}</span>
-              </li>
-            ))}
-          </ol>
-        </div>
-      )}
-
-      {/* Example calculation — structured */}
-      {Object.keys(exampleCalc).length > 0 && (
-        <div className="p-3 border border-border rounded-xl">
-          <p className="text-xs font-bold text-muted-foreground uppercase tracking-wide mb-2">Example from Data</p>
-          <div className="space-y-1">
-            {Object.entries(exampleCalc).map(([k, v], i) => (
-              <div key={i} className="flex justify-between items-center border-b border-border/30 pb-1 last:border-0">
-                <span className="text-xs text-muted-foreground">{k.replace(/_/g, ' ')}</span>
-                <span className="text-xs font-mono font-semibold">{v == null ? '—' : typeof v === 'number' ? v.toFixed(4) : String(v)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Interpretation */}
-      {ev.interpretation && (
-        <div className="p-3 bg-primary/5 border border-primary/20 rounded-xl">
-          <p className="text-xs font-bold text-primary uppercase tracking-wide mb-1">Interpretation</p>
-          <p className="text-sm text-foreground/80 leading-relaxed">{ev.interpretation}</p>
-        </div>
-      )}
-
-      {/* Top examples list */}
-      {items.length > 0 && (
-        <div>
-          <p className="text-xs font-bold text-muted-foreground uppercase tracking-wide mb-2">Top Examples ({items.length})</p>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="border-b border-border">
-                  <th className="text-left py-1.5 pr-4 font-medium text-muted-foreground">Keyword</th>
-                  <th className="text-right py-1.5 pr-4 font-medium text-muted-foreground">Search Vol</th>
-                  <th className="text-right py-1.5 pr-4 font-medium text-muted-foreground">Rev/1K</th>
-                  <th className="text-right py-1.5 font-medium text-muted-foreground">Efficiency</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.slice(0, 10).map((row: any, i: number) => (
-                  <tr key={i} className="border-b border-border/40 hover:bg-muted/20">
-                    <td className="py-1 pr-4 max-w-[180px] truncate font-medium">{row.keyword ?? '—'}</td>
-                    <td className="py-1 pr-4 text-right font-mono">{row.search_volume?.toLocaleString() ?? '—'}</td>
-                    <td className="py-1 pr-4 text-right font-mono">{fmt$(row.revenue_per_1000_searches)}</td>
-                    <td className="py-1 text-right font-mono">
-                      <span className={efficiencyColor(row.efficiency_score ?? 0)}>{(row.efficiency_score ?? 0).toFixed(1)}</span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── Keyword Detail Modal Body ────────────────────────────────────────────────
-
-function KeywordDetailBody({ k, benchmark }: { k: any; benchmark: number }) {
+function keywordRowEvidence(k: any, benchmark: number): EvidenceData | null {
   const sv = Number(k.search_volume ?? 0);
   const ks = Number(k.keyword_revenue ?? k.revenue ?? 0);
   const rps = sv > 0 ? (ks / sv) * 1000 : 0;
@@ -283,118 +180,80 @@ function KeywordDetailBody({ k, benchmark }: { k: any; benchmark: number }) {
   const rec = Number(k.estimated_revenue_leakage ?? k.recoverable_revenue ?? 0);
   const gap = Number(k.efficiency_gap_per_1000_searches ?? k.gap ?? 0);
   const segment = k.segment ?? k.quadrant ?? 'Low Priority';
-  const isFriction = segment === 'Friction Keyword';
-
   const rpsActual = Number(k.revenue_per_1000_searches ?? rps);
 
-  // Segment rule explanation
-  const segmentRules: Record<string, { rule: string; interpretation: string }> = {
-    'Demand Winner':    { rule: 'Demand Percentile ≥ 60  AND  Revenue Efficiency Index ≥ 60', interpretation: 'High demand + strong revenue conversion — your best-performing keywords.' },
-    'Friction Keyword': { rule: 'Demand Percentile ≥ 60  AND  Revenue Efficiency Index < 40', interpretation: 'High demand but weak revenue efficiency — optimization priority.' },
-    'Hidden Gem':       { rule: 'Demand Percentile < 60  AND  Revenue Efficiency Index ≥ 60', interpretation: 'Lower demand but efficient conversion — niche strength.' },
-    'Low Priority':     { rule: 'Demand Percentile < 60  AND  Revenue Efficiency Index < 40', interpretation: 'Low demand and low efficiency — lowest optimization priority.' },
+  const segmentRules: Record<string, string> = {
+    'Demand Winner':    'Demand Percentile ≥ 60 AND Revenue Efficiency Index ≥ 60',
+    'Friction Keyword': 'Demand Percentile ≥ 60 AND Revenue Efficiency Index < 40',
+    'Hidden Gem':       'Demand Percentile < 60 AND Revenue Efficiency Index ≥ 60',
+    'Low Priority':     'Demand Percentile < 60 AND Revenue Efficiency Index < 40',
   };
-  const rule = segmentRules[segment] ?? { rule: 'See segment rules', interpretation: '' };
 
-  return (
-    <div className="space-y-4">
-      <div>
-        <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Keyword</p>
-        <h3 className="text-xl font-bold">{k.keyword ?? '—'}</h3>
-        <div className="flex gap-2 mt-2 flex-wrap">
-          <span className="text-xs font-semibold px-2 py-0.5 rounded-full" style={{ backgroundColor: `${quadrantDotColor(segment)}20`, color: quadrantDotColor(segment) }}>
-            {segment}
-          </span>
-          <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-muted text-muted-foreground border border-border">
-            {k.opportunity_level ?? '—'}
-          </span>
-        </div>
-      </div>
+  const calcSteps = [
+    `Revenue / 1K Searches = Keyword Sales / Search Volume × 1000 = ${fmt$(ks)} / ${sv.toLocaleString()} × 1000 = ${fmt$(rpsActual)}`,
+    `Revenue Efficiency Index = percentile_rank(Revenue / 1K Searches) × 100 = ${eff.toFixed(2)}`,
+    `Demand Percentile = percentile_rank(Search Volume) × 100 = ${dem.toFixed(2)}`,
+  ];
 
-      {/* Segment rule */}
-      <div className="p-3 bg-primary/5 border border-primary/20 rounded-xl">
-        <p className="text-xs font-bold uppercase tracking-wider text-primary mb-1">Segment Rule Matched</p>
-        <p className="text-xs font-mono">{rule.rule}</p>
-        <p className="text-xs text-muted-foreground mt-1">{rule.interpretation}</p>
-      </div>
+  if (segment === 'Friction Keyword') {
+    calcSteps.push(`Benchmark Revenue / 1K = 75th percentile = ${fmt$(benchmark)}`);
+    calcSteps.push(`Efficiency Gap = max(0, ${fmt$(benchmark)} − ${fmt$(rpsActual)}) = ${fmt$(gap)}`);
+    calcSteps.push(`Estimated Friction Revenue Gap = Gap × Search Volume / 1000 = ${fmt$(gap)} × ${sv.toLocaleString()} / 1000 = ${fmt$(rec)}`);
+  }
 
-      {/* Source values grid */}
-      <div className="grid grid-cols-2 gap-3">
-        {[
-          { label: 'Search Volume', value: sv.toLocaleString() },
-          { label: 'Keyword Sales', value: fmt$(ks) },
-          { label: 'Revenue Efficiency Index', value: `${eff.toFixed(2)} / 100` },
-          { label: 'Demand Percentile', value: `${dem.toFixed(2)} / 100` },
-        ].map((m, i) => (
-          <div key={i} className="p-3 rounded-xl border border-border bg-muted/20">
-            <p className="text-xs text-muted-foreground uppercase tracking-wide">{m.label}</p>
-            <p className="text-base font-bold mt-0.5">{m.value}</p>
-          </div>
-        ))}
-      </div>
-
-      {/* Calculation steps */}
-      <div className="p-3 bg-muted/20 rounded-xl space-y-2">
-        <p className="text-xs font-bold text-muted-foreground uppercase tracking-wide">Calculation Steps</p>
-        <div className="space-y-1.5 text-xs font-mono">
-          <div className="p-2 bg-background rounded border border-border/60">
-            <span className="text-muted-foreground">Revenue / 1K Searches = Keyword Sales / Search Volume × 1000</span><br />
-            <span className="text-primary">= {fmt$(ks)} / {sv.toLocaleString()} × 1000 = {fmt$(rpsActual)}</span>
-          </div>
-          <div className="p-2 bg-background rounded border border-border/60">
-            <span className="text-muted-foreground">Revenue Efficiency Index = percentile_rank(Revenue / 1K Searches) × 100</span><br />
-            <span className="text-primary">= {eff.toFixed(2)} / 100</span>
-          </div>
-          <div className="p-2 bg-background rounded border border-border/60">
-            <span className="text-muted-foreground">Demand Percentile = percentile_rank(Search Volume) × 100</span><br />
-            <span className="text-primary">= {dem.toFixed(2)} / 100</span>
-          </div>
-          {isFriction && (
-            <div className="p-2 bg-red-500/5 border border-red-500/20 rounded">
-              <span className="text-muted-foreground">Benchmark Revenue / 1K = 75th percentile = {fmt$(benchmark)}</span><br />
-              <span className="text-muted-foreground">Efficiency Gap = max(0, {fmt$(benchmark)} − {fmt$(rpsActual)}) = {fmt$(gap)}</span><br />
-              <span className="text-red-500 font-semibold">Estimated Friction Revenue Gap = Gap × Search Volume / 1000 = {fmt$(gap)} × {sv.toLocaleString()} / 1000 = {fmt$(rec)}</span>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Source */}
-      <div className="text-xs text-muted-foreground space-y-0.5 border-t border-border/40 pt-3">
-        <p>Source: Magnet Keyword Dataset</p>
-        <p>Columns: Keyword Phrase · Search Volume · Keyword Sales</p>
-      </div>
-
-      {/* Recommendation */}
-      <div className="p-3 bg-primary/5 border border-primary/20 rounded-xl">
-        <p className="text-xs font-bold uppercase tracking-wider text-primary mb-1">Recommendation</p>
-        <p className="text-sm leading-relaxed">
-          {segment === 'Demand Winner' && 'Protect and optimize this keyword — it drives both demand and revenue efficiently.'}
-          {segment === 'Friction Keyword' && `Diagnose listing conversion barriers. This keyword attracts significant traffic but underperforms the 75th-percentile benchmark by ${fmt$(gap)} per 1K searches, representing ${fmt$(rec)} in estimated friction revenue gap.`}
-          {segment === 'Hidden Gem' && 'Increase visibility with targeted PPC or listing optimization — this keyword converts well but attracts below-median traffic.'}
-          {segment === 'Low Priority' && 'Monitor only — low demand and low conversion efficiency. Re-evaluate if market conditions change.'}
-        </p>
-      </div>
-    </div>
-  );
+  return {
+    title: `Keyword: ${k.keyword}`,
+    displayed_value: segment,
+    source_datasets: ['Magnet Keyword Dataset'],
+    source_columns: ['Keyword Phrase', 'Search Volume', 'Keyword Sales'],
+    source_row_count: 1,
+    formula: 'Revenue Efficiency Index = percentile_rank(Keyword Sales / Search Volume × 1000) × 100; Demand Percentile = percentile_rank(Search Volume) × 100',
+    calculation_steps: calcSteps,
+    top_records: [{
+      keyword: k.keyword,
+      search_volume: sv,
+      keyword_sales: ks,
+      revenue_per_1000_searches: rpsActual,
+      efficiency_score: eff,
+      demand_percentile: dem,
+    }],
+    aggregation_method: 'Percentile ranking across all keywords',
+    thresholds: {
+      high: 'Demand ≥ 60 AND Efficiency ≥ 60 (Demand Winner)',
+      medium: 'Demand ≥ 60 AND Efficiency < 40 (Friction) OR Demand < 60 AND Efficiency ≥ 60 (Hidden Gem)',
+      low: 'Demand < 60 AND Efficiency < 40 (Low Priority)',
+    },
+    classification_reason: `${k.keyword} is classified as "${segment}" because: ${segmentRules[segment] || 'segment logic applied'}. ${segment === 'Friction Keyword' ? `Estimated friction revenue gap: ${fmt$(rec)}` : ''}`,
+    confidence_note: `Keyword ${isMeaningfulKeyword(k.keyword) ? 'passed' : 'did not pass'} meaningful keyword validation.`,
+    data_quality_notes: !isMeaningfulKeyword(k.keyword) ? ['Warning: This keyword may be a fragment or non-meaningful token.'] : undefined,
+    llm_used: false,
+  };
 }
 
-// ─── KPI Card ─────────────────────────────────────────────────────────────────
+// ─── KPI Card Component ───────────────────────────────────────────────────────
 
 interface KpiProps {
-  title: string; value: any; sub?: string; icon: any;
-  color?: string; bg?: string; onClick?: () => void;
+  label: string; 
+  value: any; 
+  implication?: string; 
+  confidence?: number;
+  icon: any;
+  onClick?: () => void;
 }
-function KpiCard({ title, value, sub, icon, color = 'text-primary', bg = 'bg-primary/10 border-primary/20', onClick }: KpiProps) {
+
+function KPICardLocal({ label, value, implication, confidence, icon: Icon, onClick }: KpiProps) {
   return (
     <Card className={cn('transition-all duration-200', onClick && 'cursor-pointer hover:border-primary/50 hover:shadow-md')} onClick={onClick}>
       <CardContent className="p-5">
         <div className="flex items-start justify-between mb-3">
-          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{title}</p>
-          <div className={cn('p-2 rounded-lg border', bg)}><span className={color}>{icon}</span></div>
+          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">{label}</p>
+          <div className="p-2 rounded-lg border bg-primary/10 border-primary/20">
+            <Icon className="w-4 h-4 text-primary" />
+          </div>
         </div>
-        <p className={cn('text-2xl font-black leading-tight', color)}>{value}</p>
-        {sub && <p className="text-[11px] font-medium text-muted-foreground mt-1.5 leading-snug">{sub}</p>}
+        <p className="text-2xl font-black leading-tight text-primary">{value}</p>
+        {implication && <p className="text-[11px] font-medium text-muted-foreground mt-1.5 leading-snug">{implication}</p>}
+        {confidence && <p className="text-[10px] text-muted-foreground/60 mt-1">Confidence: {confidence}%</p>}
       </CardContent>
     </Card>
   );
@@ -405,15 +264,23 @@ function KpiCard({ title, value, sub, icon, color = 'text-primary', bg = 'bg-pri
 function ScatterTip({ active, payload }: any) {
   if (!active || !payload?.length) return null;
   const d = payload[0].payload;
+  const segment = d.segment ?? d.quadrant ?? 'Low Priority';
+  const color = quadrantDotColor(segment);
   return (
-    <div className="bg-card border border-border rounded-lg p-3 shadow-lg text-sm space-y-1 max-w-[240px]">
-      <p className="font-semibold text-xs leading-snug">{d.keyword || '—'}</p>
-      <div className="border-t border-border/50 pt-1 space-y-0.5">
-        <p className="text-muted-foreground text-xs">Search Volume: <span className="text-foreground font-mono">{valOrMissing(d.search_volume, (v: any) => v.toLocaleString())}</span></p>
-        <p className="text-muted-foreground text-xs">Rev / 1K: <span className="text-foreground font-mono">{valOrMissing(d.revenue_per_1000_searches, fmt$)}</span></p>
-        <p className="text-muted-foreground text-xs">Efficiency: <span className={cn('font-mono', efficiencyColor(d.efficiency_score ?? 0))}>{(d.efficiency_score ?? 0).toFixed(1)}</span></p>
-        <p className="text-muted-foreground text-xs">Demand %: <span className="font-mono">{(d.demand_percentile ?? 0).toFixed(1)}</span></p>
-        <span className="text-xs font-bold block mt-1" style={{ color: quadrantDotColor(d.quadrant) }}>{d.quadrant}</span>
+    <div className="bg-card border border-border rounded-lg p-3 shadow-lg text-sm space-y-2 max-w-[260px]">
+      <div>
+        <p className="font-bold text-sm leading-snug break-words">{d.keyword || '—'}</p>
+        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full inline-block mt-1" style={{ backgroundColor: `${color}15`, color: color }}>
+          {segment}
+        </span>
+      </div>
+      <div className="border-t border-border/50 pt-2 grid grid-cols-2 gap-x-3 gap-y-1">
+        <p className="text-muted-foreground text-xs col-span-2">Search Volume: <span className="text-foreground font-mono">{valOrMissing(d.search_volume, (v: any) => v.toLocaleString())}</span></p>
+        <p className="text-muted-foreground text-xs col-span-2">Keyword Sales: <span className="text-foreground font-mono">{valOrMissing(d.keyword_revenue ?? d.revenue, fmt$)}</span></p>
+        <p className="text-muted-foreground text-xs col-span-2">Rev / 1K: <span className="text-foreground font-mono">{valOrMissing(d.revenue_per_1000_searches, fmt$)}</span></p>
+        <div className="col-span-2 border-t border-border/30 my-0.5"></div>
+        <p className="text-muted-foreground text-xs">Demand: <span className="text-foreground font-mono font-medium">{(d.demand_percentile ?? 0).toFixed(1)}</span></p>
+        <p className="text-muted-foreground text-xs">Efficiency: <span className={cn('font-mono font-medium', efficiencyColor(d.efficiency_score ?? 0))}>{(d.efficiency_score ?? 0).toFixed(1)}</span></p>
       </div>
     </div>
   );
@@ -424,8 +291,7 @@ function ScatterTip({ active, payload }: any) {
 function IntentEfficiencyInner() {
   // All hooks unconditionally at top — no early returns before these
   const [activeFilter, setActiveFilter] = useState<'all' | 'demand' | 'friction' | 'hidden' | 'low'>('all');
-  const [selectedKeyword, setSelectedKeyword] = useState<any | null>(null);
-  const [activeModal, setActiveModal] = useState<{ title: string; body: React.ReactNode } | null>(null);
+  const [selectedEvidence, setSelectedEvidence] = useState<EvidenceData | null>(null);
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ['intent-efficiency'],
@@ -434,9 +300,7 @@ function IntentEfficiencyInner() {
     refetchOnWindowFocus: false,
   });
 
-  const openModal = useCallback((title: string, body: React.ReactNode) => setActiveModal({ title, body }), []);
-  const closeModal = useCallback(() => setActiveModal(null), []);
-  const closeKeyword = useCallback(() => setSelectedKeyword(null), []);
+
 
   // Safe data extraction — all guarded inside useMemo
   const r = useMemo(() => (data?.data?.results ?? {}) as Record<string, any>, [data]);
@@ -446,11 +310,24 @@ function IntentEfficiencyInner() {
     return r.summary_cards ?? kc.summary_cards ?? {} as Record<string, any>;
   }, [r]);
 
-  const rows = useMemo<any[]>(() => r.keyword_rows ?? r.all_keywords ?? [], [r]);
+  const rows = useMemo<any[]>(() => {
+    const rawRows = r.keyword_rows ?? r.all_keywords ?? [];
+    // Filter out meaningless keywords and normalize segments
+    return rawRows
+      .filter((row: any) => isMeaningfulKeyword(row.keyword))
+      .map((row: any) => ({
+        ...row,
+        segment: normalizeSegment(row.segment ?? row.quadrant ?? row.classification),
+        demand_percentile: Number(row.demand_percentile ?? row.demandPercentile ?? row.demand_pct ?? 0),
+        efficiency_score: Number(row.efficiency_score ?? row.revenue_efficiency_index ?? row.revenueEfficiencyIndex ?? row.efficiencyScore ?? 0),
+      }));
+  }, [r]);
 
   const friction = useMemo<any[]>(() => {
     const kc = r.keyword_conversion ?? {};
-    return r.friction_rows ?? kc.friction_rows ?? r.friction_keywords ?? summaryCards.friction_keywords?.items ?? [];
+    const rawFriction = r.friction_rows ?? kc.friction_rows ?? r.friction_keywords ?? summaryCards.friction_keywords?.items ?? [];
+    // Filter out meaningless keywords
+    return rawFriction.filter((row: any) => isMeaningfulKeyword(row.keyword));
   }, [r, summaryCards]);
 
   const matrix = useMemo(() => {
@@ -458,7 +335,19 @@ function IntentEfficiencyInner() {
     return r.matrix ?? kc.matrix ?? {} as Record<string, any>;
   }, [r]);
 
-  const scatterRaw = useMemo<any[]>(() => matrix.points ?? r.scatter_data ?? [], [matrix, r]);
+  const scatterRaw = useMemo<any[]>(() => {
+    const rawScatter = matrix.points ?? r.scatter_data ?? [];
+    // Filter out meaningless keywords, normalize segments, ensure numeric fields
+    return rawScatter
+      .filter((pt: any) => isMeaningfulKeyword(pt.keyword))
+      .map((pt: any) => ({
+        ...pt,
+        segment: normalizeSegment(pt.segment ?? pt.quadrant ?? pt.classification),
+        demand_percentile: Number(pt.demand_percentile ?? pt.demandPercentile ?? pt.demand_pct ?? 0),
+        efficiency_score: Number(pt.efficiency_score ?? pt.revenue_efficiency_index ?? pt.revenueEfficiencyIndex ?? pt.efficiencyScore ?? 0),
+      }))
+      .filter((pt: any) => isFinite(pt.demand_percentile) && isFinite(pt.efficiency_score));
+  }, [matrix, r]);
 
   const qs = useMemo(() => matrix.segment_counts ?? r.quadrant_summary ?? {} as Record<string, any>, [matrix, r]);
 
@@ -475,21 +364,31 @@ function IntentEfficiencyInner() {
   }, [scatterRaw]);
 
   const displayScatter = useMemo(() => {
-    return scatter.filter(pt => {
-      if (activeFilter === 'demand')  return pt.quadrant === 'Demand Winner';
-      if (activeFilter === 'friction') return pt.quadrant === 'Friction Keyword';
-      if (activeFilter === 'hidden')  return pt.quadrant === 'Hidden Gem';
-      if (activeFilter === 'low')     return pt.quadrant === 'Low Priority';
-      return true;
-    });
+    if (activeFilter === 'all') return scatter;
+    
+    const targetSegment = 
+      activeFilter === 'demand' ? 'Demand Winner' :
+      activeFilter === 'friction' ? 'Friction Keyword' :
+      activeFilter === 'hidden' ? 'Hidden Gem' :
+      activeFilter === 'low' ? 'Low Priority' : null;
+    
+    if (!targetSegment) return scatter;
+    
+    return scatter.filter(pt => pt.segment === targetSegment);
   }, [scatter, activeFilter]);
 
   const filteredKeywordRows = useMemo(() => {
-    if (activeFilter === 'demand')  return rows.filter(r => r.segment === 'Demand Winner'   || r.quadrant === 'Demand Winner');
-    if (activeFilter === 'friction') return rows.filter(r => r.segment === 'Friction Keyword' || r.quadrant === 'Friction Keyword');
-    if (activeFilter === 'hidden')  return rows.filter(r => r.segment === 'Hidden Gem'      || r.quadrant === 'Hidden Gem');
-    if (activeFilter === 'low')     return rows.filter(r => r.segment === 'Low Priority'    || r.quadrant === 'Low Priority');
-    return rows;
+    if (activeFilter === 'all') return rows;
+    
+    const targetSegment = 
+      activeFilter === 'demand' ? 'Demand Winner' :
+      activeFilter === 'friction' ? 'Friction Keyword' :
+      activeFilter === 'hidden' ? 'Hidden Gem' :
+      activeFilter === 'low' ? 'Low Priority' : null;
+    
+    if (!targetSegment) return rows;
+    
+    return rows.filter(r => r.segment === targetSegment);
   }, [rows, activeFilter]);
 
   const frictionRowsSorted = useMemo(() => {
@@ -499,10 +398,10 @@ function IntentEfficiencyInner() {
     );
   }, [friction]);
 
-  // Column definitions — stable memoized objects using openDrawer from useCallback above
+  // Column definitions — stable memoized objects, Evidence column removed
   const keywordColumns = useMemo<Column<any>[]>(() => [
     { header: 'Keyword', accessorKey: 'keyword',
-      cell: row => <button className="text-left hover:text-primary transition-colors font-medium" onClick={() => setSelectedKeyword(row)}>{row.keyword ?? '—'}</button> },
+      cell: row => <button className="text-left hover:text-primary transition-colors font-medium" onClick={(e) => { e.stopPropagation(); setSelectedEvidence(keywordRowEvidence(row, benchmarkRps1k)); }}>{row.keyword ?? '—'}</button> },
     { header: 'Search Volume', accessorKey: 'search_volume',
       cell: row => valOrMissing(row.search_volume, (v: any) => Number(v).toLocaleString()) },
     { header: 'Keyword Sales Revenue', accessorKey: 'keyword_revenue',
@@ -515,16 +414,11 @@ function IntentEfficiencyInner() {
       cell: row => <span className="font-mono">{(row.demand_percentile ?? 0).toFixed(2)}</span> },
     { header: 'Segment', accessorKey: 'quadrant',
       cell: row => <span style={{ color: quadrantDotColor(row.quadrant ?? '') }} className="text-xs font-bold">{row.quadrant ?? '—'}</span> },
-    { header: 'Evidence', accessorKey: 'keyword', sortable: false,
-      cell: row => (
-        <button className="text-xs bg-primary/10 text-primary px-2 py-1 rounded hover:bg-primary/20 transition-colors"
-          onClick={() => setSelectedKeyword(row)}>Details</button>
-      ) },
-  ], []);
+  ], [benchmarkRps1k]);
 
   const frictionColumns = useMemo<Column<any>[]>(() => [
     { header: 'Keyword', accessorKey: 'keyword',
-      cell: row => <button className="text-left hover:text-primary transition-colors font-medium" onClick={() => setSelectedKeyword(row)}>{row.keyword ?? '—'}</button> },
+      cell: row => <button className="text-left hover:text-primary transition-colors font-medium" onClick={(e) => { e.stopPropagation(); setSelectedEvidence(keywordRowEvidence(row, benchmarkRps1k)); }}>{row.keyword ?? '—'}</button> },
     { header: 'Search Volume', accessorKey: 'search_volume',
       cell: row => valOrMissing(row.search_volume, (v: any) => Number(v).toLocaleString()) },
     { header: 'Keyword Sales Revenue', accessorKey: 'keyword_revenue',
@@ -535,14 +429,8 @@ function IntentEfficiencyInner() {
       cell: row => valOrMissing(row.benchmark_revenue_per_1000_searches, fmt$) },
     { header: 'Friction Revenue Gap', accessorKey: 'recoverable_revenue',
       cell: row => <span className="font-mono text-red-500">{valOrMissing(row.estimated_revenue_leakage ?? row.recoverable_revenue ?? row.lost_revenue_estimate, fmt$)}</span> },
-    { header: 'Root Cause', accessorKey: 'root_cause' },
     { header: 'Opportunity Level', accessorKey: 'opportunity_level' },
-    { header: 'Evidence', accessorKey: 'keyword', sortable: false,
-      cell: row => (
-        <button className="text-xs bg-primary/10 text-primary px-2 py-1 rounded hover:bg-primary/20"
-          onClick={() => setSelectedKeyword(row)}>Open</button>
-      ) },
-  ], []);
+  ], [benchmarkRps1k]);
 
   // ── ALL hooks declared. Conditional returns safe from here. ───────────────
 
@@ -569,76 +457,14 @@ function IntentEfficiencyInner() {
   const frictionEvidence = summaryCards.friction_keywords?.evidence ?? {};
   const gapEvidence      = summaryCards.recoverable_revenue?.evidence ?? {};
 
-  // Counts for matrix legend
-  const dw = activeFilter === 'demand'  ? filteredKeywordRows.length : (qs.demand_winners   ?? qs.Demand_Winner   ?? 0);
-  const hg = activeFilter === 'hidden'  ? filteredKeywordRows.length : (qs.hidden_gems      ?? qs.Hidden_Gem      ?? 0);
-  const fk = activeFilter === 'friction'? filteredKeywordRows.length : (qs.friction_keywords ?? qs.Friction_Keyword ?? 0);
-  const lp = activeFilter === 'low'     ? filteredKeywordRows.length : (qs.low_priority     ?? qs.Low_Priority    ?? 0);
-
-  // Keywords Analyzed evidence body
-  const keywordsAnalyzedBody = (
-    <div className="space-y-4 text-sm">
-      <div className="p-4 bg-primary/5 border border-primary/20 rounded-xl">
-        <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">Total Keywords Analyzed</p>
-        <p className="text-3xl font-black font-mono">{totalKeywords.toLocaleString()}</p>
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <div className="p-3 border border-border rounded-xl bg-muted/20">
-          <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">Source Dataset</p>
-          <p className="font-mono font-semibold">Magnet Keyword Dataset</p>
-        </div>
-        <div className="p-3 border border-border rounded-xl bg-muted/20">
-          <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">Source Columns</p>
-          <p className="font-mono text-xs">Keyword Phrase · Search Volume · Keyword Sales</p>
-        </div>
-      </div>
-      <div className="p-3 bg-muted/20 rounded-xl">
-        <p className="text-xs font-bold text-muted-foreground uppercase tracking-wide mb-2">Validity Rules (a keyword row is included when)</p>
-        <ul className="space-y-1">
-          {[
-            'Keyword Phrase exists and is non-empty',
-            'Search Volume > 0 (positive numeric)',
-            'Keyword Sales is numeric and ≥ 0',
-          ].map((rule, i) => (
-            <li key={i} className="text-xs font-mono flex gap-2"><span className="text-emerald-500">✓</span>{rule}</li>
-          ))}
-        </ul>
-      </div>
-      <div className="p-3 border border-red-500/20 bg-red-500/5 rounded-xl">
-        <p className="text-xs font-bold text-red-500 uppercase tracking-wide mb-2">Excluded rows (not counted)</p>
-        <ul className="space-y-1">
-          {[
-            'Blank or missing Keyword Phrase',
-            'Missing or zero/negative Search Volume',
-            'Non-numeric or missing Keyword Sales',
-          ].map((rule, i) => (
-            <li key={i} className="text-xs font-mono flex gap-2"><span className="text-red-500">✗</span>{rule}</li>
-          ))}
-        </ul>
-      </div>
-      <div className="p-3 bg-muted/20 rounded-xl">
-        <p className="text-xs font-bold text-muted-foreground uppercase tracking-wide mb-1">Formula</p>
-        <p className="text-xs font-mono">Valid Keywords = rows where Keyword Phrase ≠ blank AND Search Volume &gt; 0 AND Keyword Sales is numeric</p>
-      </div>
-    </div>
-  );
-
-  const narrative = `Analysis of ${totalKeywords.toLocaleString()} keywords reveals ${highRevPotCount} high-efficiency demand drivers and ${frictionCount} friction keywords that bleed conversion momentum. Addressing the friction keywords could recover an estimated ${fmt$(frictionRevGap)} in monthly revenue efficiency.`;
+  // Counts for matrix legend — ALWAYS calculate from full dataset, never from filtered data
+  const dw = useMemo(() => rows.filter(r => r.segment === 'Demand Winner').length, [rows]);
+  const hg = useMemo(() => rows.filter(r => r.segment === 'Hidden Gem').length, [rows]);
+  const fk = useMemo(() => rows.filter(r => r.segment === 'Friction Keyword').length, [rows]);
+  const lp = useMemo(() => rows.filter(r => r.segment === 'Low Priority').length, [rows]);
 
   return (
     <div className="pb-16 max-w-[1400px] mx-auto px-6">
-      <AnimatePresence>
-        {activeModal && (
-          <CenteredModal isOpen={true} onClose={closeModal} title={activeModal.title}>
-            {activeModal.body}
-          </CenteredModal>
-        )}
-        {selectedKeyword && (
-          <CenteredModal isOpen={true} onClose={closeKeyword} title={`Keyword: ${selectedKeyword.keyword ?? '—'}`}>
-            <KeywordDetailBody k={selectedKeyword} benchmark={benchmarkRps1k} />
-          </CenteredModal>
-        )}
-      </AnimatePresence>
 
       <PageHeader 
         badge="Efficiency Intelligence"
@@ -648,7 +474,31 @@ function IntentEfficiencyInner() {
           <div className="mt-4 flex flex-col sm:flex-row sm:items-center gap-4 border-t border-border/40 pt-4">
             <button
               className="flex items-center gap-2 p-2 bg-muted/20 border border-border/50 rounded-lg hover:border-primary/40 transition-colors"
-              onClick={() => openModal('Keywords Analyzed', keywordsAnalyzedBody)}
+              onClick={() => {
+                const ev: EvidenceData = {
+                  title: 'Keywords Analyzed',
+                  displayed_value: totalKeywords.toLocaleString(),
+                  source_datasets: ['Magnet Keyword Dataset'],
+                  source_columns: ['Keyword Phrase', 'Search Volume', 'Keyword Sales'],
+                  source_row_count: totalKeywords,
+                  formula: 'Valid Keywords = rows where Keyword Phrase ≠ blank AND Search Volume > 0 AND Keyword Sales is numeric',
+                  calculation_steps: [
+                    'Filter rows where Keyword Phrase exists and is non-empty',
+                    'Filter rows where Search Volume > 0 (positive numeric)',
+                    'Filter rows where Keyword Sales is numeric and ≥ 0',
+                    'Apply meaningful keyword validation (contains alphabetic characters, not only numbers/symbols)',
+                    'Count remaining valid rows',
+                  ],
+                  top_records: undefined,
+                  aggregation_method: 'Row count after validation filters',
+                  thresholds: undefined,
+                  classification_reason: undefined,
+                  confidence_note: 'Keywords are filtered for meaningfulness (must contain alphabetic characters, not be stopword-only, and not be broken fragments).',
+                  data_quality_notes: ['Blank or missing Keyword Phrase excluded', 'Missing or zero/negative Search Volume excluded', 'Non-numeric or missing Keyword Sales excluded', 'Meaningless keyword fragments filtered out'],
+                  llm_used: false,
+                };
+                setSelectedEvidence(ev);
+              }}
             >
               <Database className="w-4 h-4 text-primary" />
               <div className="text-left">
@@ -670,71 +520,72 @@ function IntentEfficiencyInner() {
         }
       />
 
-      <ExecutiveNarrative content={narrative} />
-
-      <PageSection title="1. Conversion Efficiency Metrics" icon={TrendingUp}>
+      <PageSection title="1. Conversion Efficiency Metrics">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div onClick={() => {
-              setActiveFilter('demand');
-              if (Object.keys(highRevEvidence).length) {
-                openModal('High Revenue Potential Keywords', <EvidenceBody ev={{
-                  ...highRevEvidence,
-                  items: summaryCards.high_revenue_potential?.items ?? [],
-                }} />);
+          <KPICardLocal
+            label="High Revenue Potential"
+            value={highRevPotCount}
+            implication="Keywords ranking in top percentiles for both volume and conversion."
+            confidence={96}
+            icon={TrendingUp}
+            onClick={() => {
+              const ev = backendEvidenceToData(highRevEvidence, highRevPotCount, 'High Revenue Potential Keywords');
+              if (ev) setSelectedEvidence(ev);
+            }}
+          />
+          <KPICardLocal
+            label="Friction Keywords"
+            value={frictionCount}
+            implication="High volume but fail to convert. Optimization priority."
+            confidence={89}
+            icon={TrendingDown}
+            onClick={() => {
+              const ev = backendEvidenceToData(frictionEvidence, frictionCount, 'Friction Keywords');
+              if (ev) setSelectedEvidence(ev);
+            }}
+          />
+          <KPICardLocal
+            label="Friction Rev Gap"
+            value={fmt$(frictionRevGap)}
+            implication="Monthly revenue lost to poor conversion on high-traffic keywords."
+            confidence={82}
+            icon={Info}
+            onClick={() => {
+              const ev = backendEvidenceToData(gapEvidence, fmt$(frictionRevGap), 'Estimated Friction Revenue Gap');
+              if (ev) {
+                ev.classification_reason = 'This measures how much friction keywords collectively underperform the 75th-percentile benchmark.';
+                setSelectedEvidence(ev);
               }
-            }}>
-            <KPICard
-              label="High Revenue Potential"
-              value={highRevPotCount}
-              implication="Keywords ranking in top percentiles for both volume and conversion."
-              confidence={96}
-              icon={TrendingUp}
-            />
-          </div>
-          <div onClick={() => {
-              setActiveFilter('friction');
-              if (Object.keys(frictionEvidence).length) {
-                openModal('Friction Keywords', <EvidenceBody ev={{
-                  ...frictionEvidence,
-                  items: summaryCards.friction_keywords?.items ?? [],
-                }} />);
-              }
-            }}>
-            <KPICard
-              label="Friction Keywords"
-              value={frictionCount}
-              implication="High volume but fail to convert. Optimization priority."
-              confidence={89}
-              icon={TrendingDown}
-            />
-          </div>
-          <div onClick={() => {
-              setActiveFilter('friction');
-              if (Object.keys(gapEvidence).length) {
-                openModal('Estimated Friction Revenue Gap', <EvidenceBody ev={{
-                  ...gapEvidence,
-                  interpretation: `This measures how much friction keywords collectively underperform the 75th-percentile benchmark.`,
-                }} />);
-              }
-            }}>
-            <KPICard
-              label="Friction Rev Gap"
-              value={fmt$(frictionRevGap)}
-              implication="Monthly revenue lost to poor conversion on high-traffic keywords."
-              confidence={82}
-              icon={Target}
-            />
-          </div>
+            }}
+          />
         </div>
       </PageSection>
 
-      <PageSection title="2. Opportunity Matrix" icon={Activity}>
+      <PageSection title="2. Opportunity Matrix">
         <ChartContainer 
           title="Conversion Quadrants"
           xAxisLabel="Demand Percentile (Search Volume)"
           yAxisLabel="Revenue Efficiency Index"
           businessExplanation="Top Right: Your best performers. Bottom Right: High volume, low conversion (Friction). Top Left: Low volume, high conversion (Hidden Gems)."
         >
+          {displayScatter.length === 0 && rows.length > 0 && (
+            <div className="flex items-center justify-center h-[400px] bg-muted/5 rounded-lg border border-border/30">
+              <div className="text-center p-6 max-w-md">
+                <AlertCircle className="w-10 h-10 text-amber-500 mx-auto mb-3" />
+                <p className="text-sm font-semibold text-foreground mb-2">
+                  {activeFilter === 'all' 
+                    ? 'No scatter plot data available' 
+                    : `No ${quadrantLabel(activeFilter)} keywords with valid chart data`}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {activeFilter === 'all'
+                    ? 'Keywords are missing demand_percentile or efficiency_score values required for the chart.'
+                    : 'This segment has keywords but they lack valid x/y coordinate data for plotting.'}
+                </p>
+              </div>
+            </div>
+          )}
+          {displayScatter.length > 0 && (
           <ResponsiveContainer width="100%" height={400}>
             <ScatterChart margin={{ top: 8, right: 24, bottom: 40, left: 52 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.4} />
@@ -751,22 +602,23 @@ function IntentEfficiencyInner() {
               <Scatter
                 data={displayScatter}
                 isAnimationActive={false}
-                onClick={(e) => { if (e?.payload) setSelectedKeyword(e.payload); }}
+                onClick={(e) => { if (e?.payload) setSelectedEvidence(keywordRowEvidence(e.payload, benchmarkRps1k)); }}
               >
                 {displayScatter.map((pt, i) => (
-                  <Cell key={i} fill={quadrantDotColor(pt.quadrant)} fillOpacity={0.8} className="cursor-pointer" />
+                  <Cell key={i} fill={quadrantDotColor(pt.segment)} fillOpacity={0.8} className="cursor-pointer" />
                 ))}
               </Scatter>
             </ScatterChart>
           </ResponsiveContainer>
+          )}
 
           {/* Legend / segment filter */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4 pt-4 border-t border-border/50">
             {[
-              { key: 'demand',  label: 'Demand Winners',   count: dw, color: '#a855f7', rule: 'Demand ≥ 60  AND  Efficiency ≥ 60' },
-              { key: 'hidden',  label: 'Hidden Gems',      count: hg, color: '#10b981', rule: 'Demand < 60  AND  Efficiency ≥ 60' },
-              { key: 'friction',label: 'Friction Keywords', count: fk, color: '#ef4444', rule: 'Demand ≥ 60  AND  Efficiency < 40' },
-              { key: 'low',     label: 'Low Priority',     count: lp, color: '#64748b', rule: 'Demand < 60  AND  Efficiency < 40' },
+              { key: 'demand',  label: 'Demand Winner', count: dw, color: SEGMENT_COLORS['Demand Winner'], rule: 'Demand ≥ 60  AND  Efficiency ≥ 60' },
+              { key: 'hidden',  label: 'Hidden Gem', count: hg, color: SEGMENT_COLORS['Hidden Gem'], rule: 'Demand < 60  AND  Efficiency ≥ 60' },
+              { key: 'friction',label: 'Friction Keyword', count: fk, color: SEGMENT_COLORS['Friction Keyword'], rule: 'Demand ≥ 60  AND  Efficiency < 40' },
+              { key: 'low',     label: 'Low Priority', count: lp, color: SEGMENT_COLORS['Low Priority'], rule: 'Demand < 60  AND  Efficiency < 40' },
             ].map(seg => (
               <button
                 key={seg.key}
@@ -774,9 +626,76 @@ function IntentEfficiencyInner() {
                   'text-left p-2.5 rounded-xl border transition-colors',
                   activeFilter === seg.key
                     ? 'border-primary/50 bg-primary/5'
-                    : 'border-border/50 hover:border-primary/30'
+                    : 'border-border/50 hover:border-primary/30 hover:shadow-md'
                 )}
-                onClick={() => setActiveFilter(activeFilter === seg.key ? 'all' : seg.key as any)}
+                onClick={() => {
+                  // Toggle filter only — do not auto-show evidence
+                  const newFilter = activeFilter === seg.key ? 'all' : seg.key as any;
+                  setActiveFilter(newFilter);
+                }}
+                onDoubleClick={() => {
+                  // Double-click to show evidence for this segment
+                  const targetSegment = 
+                    seg.key === 'demand' ? 'Demand Winner' :
+                    seg.key === 'hidden' ? 'Hidden Gem' :
+                    seg.key === 'friction' ? 'Friction Keyword' :
+                    seg.key === 'low' ? 'Low Priority' : '';
+                  
+                  const segmentRows = rows.filter(r => r.segment === targetSegment);
+                  
+                  const totalVolume = segmentRows.reduce((sum, r) => sum + (r.search_volume ?? 0), 0);
+                  const totalRevenue = segmentRows.reduce((sum, r) => sum + (r.keyword_revenue ?? r.revenue ?? 0), 0);
+                  const avgEfficiency = segmentRows.length > 0 
+                    ? segmentRows.reduce((sum, r) => sum + (r.efficiency_score ?? 0), 0) / segmentRows.length 
+                    : 0;
+                  
+                  const scatterPointCount = scatter.filter(pt => pt.segment === targetSegment).length;
+                  const missingXY = segmentRows.length - scatterPointCount;
+                  
+                  const topKeywords = segmentRows
+                    .sort((a, b) => (b.search_volume ?? 0) - (a.search_volume ?? 0))
+                    .slice(0, 20)
+                    .map(k => ({
+                      keyword: k.keyword,
+                      search_volume: k.search_volume ?? 0,
+                      revenue: k.keyword_revenue ?? k.revenue ?? 0,
+                      revenue_per_1000: k.revenue_per_1000_searches ?? 0,
+                      efficiency: k.efficiency_score ?? 0,
+                    }));
+                  
+                  const ev: EvidenceData = {
+                    title: `${seg.label} — Segment Analysis`,
+                    displayed_value: seg.count.toLocaleString(),
+                    source_datasets: ['Magnet Keyword Dataset'],
+                    source_columns: ['Keyword Phrase', 'Search Volume', 'Keyword Sales'],
+                    source_row_count: seg.count,
+                    formula: seg.rule,
+                    calculation_steps: [
+                      `1. Filter keywords where: ${seg.rule}`,
+                      `2. Normalized segment label: "${targetSegment}"`,
+                      `3. Total keywords matching: ${seg.count.toLocaleString()}`,
+                      `4. Scatter plot points: ${scatterPointCount.toLocaleString()}`,
+                      missingXY > 0 ? `5. Rows excluded from scatter (missing x/y values): ${missingXY}` : '',
+                      `6. Combined search volume: ${totalVolume.toLocaleString()}`,
+                      `7. Combined keyword revenue: ${fmt$(totalRevenue)}`,
+                      `8. Average efficiency index: ${avgEfficiency.toFixed(2)}`,
+                      `9. Top 20 keywords by search volume shown below`,
+                    ].filter(Boolean),
+                    top_records: topKeywords,
+                    aggregation_method: `Segment classification based on demand percentile and revenue efficiency index thresholds`,
+                    thresholds: {
+                      high: seg.key === 'demand' ? 'Demand ≥ 60 AND Efficiency ≥ 60' : seg.rule,
+                      medium: 'See segment rule',
+                      low: seg.key === 'low' ? 'Demand < 60 AND Efficiency < 40' : 'Other segments',
+                    },
+                    classification_reason: `${seg.count} keywords classified as "${seg.label}" based on rule: ${seg.rule}`,
+                    confidence_note: `All keywords passed meaningful keyword validation. Thresholds: Demand Percentile 60, Efficiency Index 60 (high) and 40 (low).`,
+                    data_quality_notes: missingXY > 0 ? [`${missingXY} keyword rows excluded from scatter plot due to missing or invalid demand_percentile or efficiency_score values.`] : undefined,
+                    llm_used: false,
+                  };
+                  
+                  setSelectedEvidence(ev);
+                }}
               >
                 <div className="flex items-center gap-1.5 mb-1">
                   <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: seg.color }} />
@@ -793,10 +712,10 @@ function IntentEfficiencyInner() {
       {/* ── Keyword Rows Table ───────────────────────────────────────────────── */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Keyword Rows</CardTitle>
+          <CardTitle className="text-base">All Keyword Conversion Records</CardTitle>
           <CardDescription>
             {activeFilter === 'all'
-              ? `Showing all ${rows.length.toLocaleString()} keywords · click a row for full evidence`
+              ? `All analyzed keywords with demand percentile, revenue efficiency, and segment classification.`
               : `Filtered view: ${quadrantLabel(activeFilter)} · ${filteredKeywordRows.length.toLocaleString()} keywords · click a row for full evidence`}
           </CardDescription>
         </CardHeader>
@@ -805,7 +724,7 @@ function IntentEfficiencyInner() {
             columns={keywordColumns}
             data={filteredKeywordRows}
             pageSize={10}
-            onRowClick={row => setSelectedKeyword(row)}
+            onRowClick={row => setSelectedEvidence(keywordRowEvidence(row, benchmarkRps1k))}
           />
         </CardContent>
       </Card>
@@ -815,11 +734,10 @@ function IntentEfficiencyInner() {
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
             <TrendingDown className="w-4 h-4 text-red-500" />
-            Conversion Leaks / Friction Keywords
+            Friction Keyword Evidence
           </CardTitle>
           <CardDescription>
-            High demand but weak revenue efficiency (Demand Percentile ≥ 60 AND Revenue Efficiency Index &lt; 40).
-            Gap vs 75th-percentile benchmark shown. Click a row for formula breakdown.
+            Only high-demand, low-efficiency keywords contributing to the friction revenue gap.
             {frictionRowsSorted.length > 0
               ? ` Showing ${frictionRowsSorted.length.toLocaleString()} friction keyword${frictionRowsSorted.length === 1 ? '' : 's'} · sorted by largest friction revenue gap`
               : ' No friction keywords found.'}
@@ -830,10 +748,12 @@ function IntentEfficiencyInner() {
             columns={frictionColumns}
             data={frictionRowsSorted}
             pageSize={10}
-            onRowClick={row => setSelectedKeyword(row)}
+            onRowClick={row => setSelectedEvidence(keywordRowEvidence(row, benchmarkRps1k))}
           />
         </CardContent>
       </Card>
+
+      <EvidenceModal isOpen={!!selectedEvidence} onClose={() => setSelectedEvidence(null)} evidence={selectedEvidence} />
     </div>
   );
 }

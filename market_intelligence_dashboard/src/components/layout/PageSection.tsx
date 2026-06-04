@@ -20,7 +20,6 @@ export function PageSection({ title, icon: Icon, children, className = '', id }:
       className={`space-y-6 mb-16 ${className}`}
     >
       <div className="flex items-center gap-2">
-        {Icon && <Icon className="w-5 h-5 text-primary" />}
         <h2 className="text-section-title uppercase tracking-widest text-muted-foreground/80 text-sm">{title}</h2>
       </div>
       

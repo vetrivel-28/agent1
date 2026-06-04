@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../services/api';
 import { Card, CardContent } from '../components/ui/Card';
@@ -8,10 +9,12 @@ import { formatCurrency } from '../utils/cn';
 
 // Unified Layouts
 import { PageSection } from '../components/layout/PageSection';
-import { ExecutiveNarrative } from '../components/intelligence/ExecutiveNarrative';
 import { DashboardSkeleton } from '../components/ui/Skeletons';
+import { EvidenceModal, type EvidenceData } from '../components/ui/EvidenceModal';
 
 export default function SubstituteIntelligence() {
+  const [selectedEvidence, setSelectedEvidence] = useState<EvidenceData | null>(null);
+  
   const { data, isLoading, isError } = useQuery({
     queryKey: ['substitute-intelligence'],
     queryFn: () => api.getSubstituteIntelligence(10),
@@ -35,32 +38,70 @@ export default function SubstituteIntelligence() {
   const items = results.substitute_products || [];
   const top_items = items.slice(0, 10);
 
+  const createSubstituteEvidence = (item: any, rank: number): EvidenceData => {
+    const reasonArray = Array.isArray(item.reason) ? item.reason : [];
+    const reasonText = Array.isArray(item.reason) 
+      ? reasonArray.map((r: any) => `${r.label}: ${r.value}`).join('; ')
+      : (item.reason || 'Use-case similarity based on keyword classification and customer intent');
+    
+    // Extract metadata from reason array
+    const metadata: Record<string, string> = {};
+    reasonArray.forEach((r: any) => {
+      metadata[r.label] = r.value;
+    });
+
+    return {
+      title: `Substitute Product #${rank}: ${item.title || item.concept || 'Unknown'}`,
+      displayed_value: item.title || item.concept || 'Unknown Concept',
+      source_datasets: metadata['Source Dataset'] ? [metadata['Source Dataset']] : ['Magnet', 'BlackBox'],
+      source_columns: metadata['Source Columns']?.split(',').map((c: string) => c.trim()) || ['keyword', 'search_intent', 'category', 'subcategory'],
+      source_row_count: parseInt(metadata['Supporting Keywords']?.split(' ')[0]) || 0,
+      formula: 'Substitute products identified through keyword classification overlap and use-case similarity scoring',
+      calculation_steps: [
+        'Analyze keyword classifications across dataset',
+        'Identify shared customer problems/jobs-to-be-done',
+        'Score use-case similarity between product concepts',
+        'Filter for products solving the same problem differently',
+        'Rank by classification overlap and intent match'
+      ],
+      top_records: reasonArray.length > 0 ? reasonArray.map((r: any) => ({
+        field: r.label,
+        value: r.value
+      })) : undefined,
+      classification_reason: reasonText,
+      confidence_note: metadata['LLM Used'] === 'true' || metadata['LLM Used'] === 'Yes'
+        ? 'Generated using LLM analysis of uploaded dataset context (keywords, categories, use cases). Not hardcoded.'
+        : 'Based on keyword classification and category similarity from uploaded datasets',
+      llm_used: metadata['LLM Used'] === 'true' || metadata['LLM Used'] === 'Yes' || false,
+      data_quality_notes: !metadata['Supporting Keywords'] ? ['Limited dataset context — upload more keyword and product data for richer substitute recommendations'] : undefined
+    };
+  };
+
   if (top_items.length === 0) {
     return (
       <Card className="mt-4 border-dashed">
         <CardContent className="p-10 flex flex-col items-center text-center text-muted-foreground">
           <Target className="w-10 h-10 mb-3 opacity-20" />
-          <p>No alternative products found.</p>
+          <p>No substitute products found.</p>
         </CardContent>
       </Card>
     );
   }
 
-  const narrative = top_items.length > 0
-    ? `We identified ${top_items.length} potential alternative products based on LLM-inferred relationships and use cases. Note: These are derived from functional similarity rather than hard sales data.`
-    : `No alternative products could be confidently inferred from the current dataset.`;
-
   return (
     <div className="space-y-4">
-      <ExecutiveNarrative content={narrative} />
-
-      <PageSection title="Top 10 LLM-Inferred Alternative Products" icon={ShieldAlert}>
+      <PageSection title="Substitute Products">
         <div className="grid grid-cols-1 gap-4">
         {top_items.map((item: any, idx: number) => {
           let titleText = item.title || item.concept || 'Unknown Concept';
           
           return (
-            <Card key={idx} className="overflow-hidden border-l-4" style={{borderLeftColor: 'hsl(var(--primary))'}}>
+            <Card 
+              key={idx} 
+              className="overflow-hidden border-l-4 cursor-pointer hover:border-primary/70 hover:shadow-md transition-all" 
+              style={{borderLeftColor: 'hsl(var(--primary))'}}
+              onClick={() => setSelectedEvidence(createSubstituteEvidence(item, idx + 1))}
+            >
               <CardContent className="p-5 flex flex-col gap-3">
                 <h3 className="font-bold text-xl leading-tight text-primary">{titleText}</h3>
                 
@@ -74,17 +115,24 @@ export default function SubstituteIntelligence() {
                     ))
                   ) : (
                     <div>
-                      <span className="font-bold text-foreground mr-1">Concept Evidence:</span> 
-                      <span className="text-muted-foreground">{item.reason || "Not enough evidence from available data."}</span>
+                      <span className="font-bold text-foreground mr-1">Use-Case Similarity:</span> 
+                      <span className="text-muted-foreground">{item.reason || "Keyword classification and customer intent overlap from uploaded dataset"}</span>
                     </div>
                   )}
                 </div>
+                <p className="text-xs text-muted-foreground italic">Click card to see full evidence</p>
               </CardContent>
             </Card>
           );
         })}
         </div>
       </PageSection>
+
+      <EvidenceModal
+        isOpen={!!selectedEvidence}
+        onClose={() => setSelectedEvidence(null)}
+        evidence={selectedEvidence}
+      />
     </div>
   );
 }

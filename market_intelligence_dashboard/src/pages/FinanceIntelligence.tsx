@@ -6,7 +6,7 @@ import { AttractivenessMatrix } from '../components/charts/AttractivenessMatrix'
 import { isEngineOk, getEngineErrorMessage } from '../utils/analysisStatus';
 import {
   AlertCircle, Loader2, Megaphone, DoorOpen, Landmark,
-  TrendingUp, TrendingDown, Lightbulb, Info, ShieldCheck,
+  TrendingUp, TrendingDown, Info, ShieldCheck,
   DollarSign, Check, X, ChevronDown,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -15,7 +15,6 @@ import { cn } from '../utils/cn';
 // Unified Layouts
 import { PageHeader } from '../components/layout/PageHeader';
 import { PageSection } from '../components/layout/PageSection';
-import { ExecutiveNarrative } from '../components/intelligence/ExecutiveNarrative';
 import { DashboardSkeleton } from '../components/ui/Skeletons';
 
 // ---------------------------------------------------------------------------
@@ -676,9 +675,7 @@ export default function FinanceIntelligence() {
         }
       />
 
-      <ExecutiveNarrative content={finalNarrativeText} />
-
-      <PageSection title="1. Capital Requirements & Barriers" icon={DoorOpen}>
+      <PageSection title="1. Capital Requirements & Barriers">
         <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-4">
           <KpiCard
             title="Market Attractiveness"
@@ -733,13 +730,10 @@ export default function FinanceIntelligence() {
         </div>
       </PageSection>
 
-      <PageSection title="2. Intelligence Briefing" icon={Lightbulb}>
+      <PageSection title="2. Intelligence Briefing">
         <Card className="border-border/50 shadow-sm bg-card">
         <CardHeader className="pb-3 border-b border-border/50 bg-muted/10">
-          <div className="flex items-center gap-2">
-            <Lightbulb className="w-4 h-4 text-primary" />
-            <CardTitle className="text-sm font-bold uppercase tracking-widest text-muted-foreground">Executive Brief</CardTitle>
-          </div>
+          <CardTitle className="text-sm font-bold uppercase tracking-widest text-muted-foreground">Executive Brief</CardTitle>
           <CardDescription>Generated from calculated metric values — no generic text</CardDescription>
         </CardHeader>
         <CardContent className="pt-6 space-y-4">
@@ -789,7 +783,7 @@ export default function FinanceIntelligence() {
         </Card>
       )}
 
-      <PageSection title="3. Financial Modeling" icon={TrendingUp}>
+      <PageSection title="3. Financial Modeling">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Attractiveness Matrix — clickable quadrant */}
           {attractivenessMatrix?.quadrant && (

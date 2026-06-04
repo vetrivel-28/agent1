@@ -30,6 +30,13 @@ class SearchVolumeAggregator:
             cls._instance = SearchVolumeAggregator()
         return cls._instance
         
+    def clear(self):
+        self.keywords = []
+        self.sv_array = []
+        self.is_initialized = False
+        logger.info("SearchVolumeAggregator cache cleared.")
+
+        
     def initialize(self, df: pd.DataFrame):
         if df is None or df.empty:
             self.is_initialized = False
@@ -132,8 +139,9 @@ class SearchVolumeAggregator:
         df_out["aggregated_search_volume"] = agg_sv
         df_out["variant_count"] = var_counts
         
-        # Globally replace the original column to enforce consistency
-        df_out[sv_col] = agg_sv
+        # We no longer overwrite sv_col here. The original column must remain intact 
+        # so engines can compute accurate base sums without double counting.
+        # df_out[sv_col] = agg_sv
         
         logger.info(f"Global aggregation applied to {n} rows")
         return df_out

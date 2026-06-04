@@ -6,8 +6,8 @@ import { DataTable, type Column } from '../components/tables/DataTable';
 import { formatCurrency, formatNumber, cn } from '../utils/cn';
 import { isEngineOk, getEngineErrorMessage } from '../utils/analysisStatus';
 import {
-  AlertCircle, Loader2, Target, Zap, TrendingUp,
-  DollarSign, Lightbulb, Info, Layers, X,
+  AlertCircle, Target, Zap, TrendingUp,
+  DollarSign, Info, Layers, X,
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -18,7 +18,7 @@ import { motion } from 'framer-motion';
 // Unified Layouts
 import { PageHeader } from '../components/layout/PageHeader';
 import { PageSection } from '../components/layout/PageSection';
-import { ExecutiveNarrative } from '../components/intelligence/ExecutiveNarrative';
+import { EvidenceModal, type EvidenceData } from '../components/ui/EvidenceModal';
 import { ChartContainer } from '../components/ui/ChartContainer';
 import { DashboardSkeleton } from '../components/ui/Skeletons';
 
@@ -137,11 +137,12 @@ interface KpiProps {
   color?: string;
   bg?: string;
   tooltip?: string;
+  onClick?: () => void;
 }
 
-function KpiCard({ title, value, sub, highlight, icon, color = 'text-primary', bg = 'bg-primary/10 border-primary/20', tooltip }: KpiProps) {
+function KpiCard({ title, value, sub, highlight, icon, color = 'text-primary', bg = 'bg-primary/10 border-primary/20', tooltip, onClick }: KpiProps) {
   return (
-    <Card className="hover-card-anim">
+    <Card className={cn('hover-card-anim', onClick && 'cursor-pointer hover:border-primary/50 hover:shadow-md')} onClick={onClick}>
       <CardContent className="p-5">
         <div className="flex items-start justify-between mb-3">
           <div className="flex items-center gap-1.5">
@@ -180,6 +181,7 @@ function SegmentRevenueTip({ active, payload }: { active?: boolean; payload?: Ar
 
 export default function WhitespaceOpportunities() {
   const [selectedSegment, setSelectedSegment] = useState<string | null>(null);
+  const [selectedEvidence, setSelectedEvidence] = useState<EvidenceData | null>(null);
   const { data: whitespaceData, isLoading, isError } = useQuery({
     queryKey: ['whitespace-opportunities'],
     queryFn: () => api.getWhitespaceOpportunities(20),
@@ -247,6 +249,286 @@ export default function WhitespaceOpportunities() {
   const revenueKpiHighlight = revenueSignal > 0
     ? `Represents ${revenuePctCategory}% of measurable category keyword sales`
     : undefined;
+
+  // Evidence helper functions
+  const createOverallScoreEvidence = (): EvidenceData => {
+    const score = Number(r.overall_whitespace_score ?? 0);
+    return {
+      title: 'Overall Whitespace Score',
+      displayed_value: `${score.toFixed(1)} / 100`,
+      source_datasets: [titleDensityReliable ? 'Magnet + BlackBox' : 'Magnet'],
+      source_columns: ['keyword', 'search_volume', 'keyword_sales', 'title_density'],
+      source_row_count: totalKeywords,
+      formula: 'Mean opportunity score after percentile ranking all keywords by demand × competition gap',
+      aggregation_method: 'Mean of percentile-ranked opportunity scores across all keywords',
+      calculation_steps: [
+        'Rank each keyword by search volume × keyword sales',
+        'Compute title density competition gap (low density = high opportunity)',
+        'Calculate composite opportunity score per keyword',
+        'Percentile-rank all scores 0-100',
+        'Take mean of percentile scores'
+      ],
+      thresholds: {
+        high: '≥65 (Strong whitespace)',
+        medium: '50-64 (Moderate whitespace)',
+        low: '<50 (Limited whitespace)'
+      },
+      classification_reason: score >= 65 ? 'Mean percentile score ≥65 indicates strong category-wide opportunity' : score >= 50 ? 'Mean score 50-64 indicates moderate whitespace' : 'Mean score <50 indicates limited whitespace',
+      confidence_note: 'Score reflects relative opportunity within this keyword universe only. Not an absolute market measure.',
+      llm_used: false
+    };
+  };
+
+  const createExtremeOpportunitiesEvidence = (): EvidenceData => {
+    const extremeKeywords = wsKeywords.filter(k => k.opportunity_label === 'Extreme Opportunity').slice(0, 10);
+    return {
+      title: 'Extreme Opportunities',
+      displayed_value: extremeCount.toLocaleString(),
+      source_datasets: [titleDensityReliable ? 'Magnet + BlackBox' : 'Magnet'],
+      source_columns: ['keyword', 'search_volume', 'keyword_sales', 'title_density', 'opportunity_label'],
+      source_row_count: extremeCount,
+      formula: `Count of keywords with opportunity score in top 20th percentile (≥80th percentile rank)`,
+      aggregation_method: 'Count of keywords meeting threshold',
+      calculation_steps: [
+        'Calculate composite opportunity score for each keyword',
+        'Percentile-rank all keyword scores',
+        'Filter keywords with percentile rank ≥80',
+        'Count matching keywords'
+      ],
+      top_records: extremeKeywords.map(k => ({
+        keyword: k.keyword ?? '—',
+        search_volume: k.search_volume ?? 0,
+        keyword_sales: k.keyword_sales ?? 0,
+        whitespace_score: k.whitespace_score?.toFixed(1) ?? '—',
+        opportunity_driver: k.opportunity_driver ?? '—'
+      })),
+      thresholds: {
+        high: 'Top 20% (≥80th percentile)',
+        medium: '65-79th percentile',
+        low: '<65th percentile'
+      },
+      classification_reason: `${extremeCount.toLocaleString()} keywords scored in the top 20th percentile for composite opportunity`,
+      confidence_note: `Represents ${formatPct(extremeCount, totalKeywords)}% of the ${totalKeywords.toLocaleString()} analyzed keywords`,
+      llm_used: false
+    };
+  };
+
+  const createHighOpportunitiesEvidence = (): EvidenceData => {
+    const highKeywords = wsKeywords.filter(k => k.opportunity_label === 'High Opportunity').slice(0, 10);
+    return {
+      title: 'High Opportunities',
+      displayed_value: highCount.toLocaleString(),
+      source_datasets: [titleDensityReliable ? 'Magnet + BlackBox' : 'Magnet'],
+      source_columns: ['keyword', 'search_volume', 'keyword_sales', 'title_density', 'opportunity_label'],
+      source_row_count: highCount,
+      formula: `Count of keywords with opportunity score in 65-79th percentile rank`,
+      aggregation_method: 'Count of keywords meeting threshold',
+      calculation_steps: [
+        'Calculate composite opportunity score for each keyword',
+        'Percentile-rank all keyword scores',
+        'Filter keywords with percentile rank 65-79',
+        'Count matching keywords'
+      ],
+      top_records: highKeywords.map(k => ({
+        keyword: k.keyword ?? '—',
+        search_volume: k.search_volume ?? 0,
+        keyword_sales: k.keyword_sales ?? 0,
+        whitespace_score: k.whitespace_score?.toFixed(1) ?? '—',
+        opportunity_driver: k.opportunity_driver ?? '—'
+      })),
+      thresholds: {
+        high: '≥80th percentile',
+        medium: '65-79th percentile',
+        low: '<65th percentile'
+      },
+      classification_reason: `${highCount.toLocaleString()} keywords scored in the 65-79th percentile band`,
+      confidence_note: `Represents ${formatPct(highCount, totalKeywords)}% of the ${totalKeywords.toLocaleString()} analyzed keywords`,
+      llm_used: false
+    };
+  };
+
+  const createRevenueSignalEvidence = (): EvidenceData => {
+    return {
+      title: 'Opportunity Revenue Signal',
+      displayed_value: revenueSignal > 0 ? formatNumber(Math.round(revenueSignal)) : '—',
+      source_datasets: [titleDensityReliable ? 'Magnet + BlackBox' : 'Magnet'],
+      source_columns: ['keyword', 'keyword_sales', 'opportunity_label'],
+      source_row_count: extremeCount + highCount,
+      formula: revenueCapped
+        ? 'Conservative tier-weighted sum of keyword sales from extreme + partial high-tier keywords (capped for realism)'
+        : 'Tier-weighted sales signal = 100% of extreme-tier sales + partial high-tier sales',
+      aggregation_method: 'Weighted sum based on opportunity tier',
+      calculation_steps: [
+        'Identify extreme opportunity keywords (top 20%)',
+        'Identify high opportunity keywords (65-79%)',
+        'Sum 100% of keyword_sales from extreme tier',
+        'Add weighted portion of keyword_sales from high tier',
+        revenueCapped ? 'Apply cap to prevent unrealistic estimates' : 'No cap applied'
+      ],
+      thresholds: {
+        high: 'Large revenue pool relative to category',
+        medium: 'Moderate revenue pool',
+        low: 'Small revenue pool'
+      },
+      classification_reason: `This signal represents ${revenuePctCategory.toFixed(1)}% of measurable category keyword sales`,
+      confidence_note: 'This is an addressable revenue estimate, not total capturable category revenue. Represents opportunity size, not guaranteed capture.',
+      data_quality_notes: revenueCapped ? ['Revenue signal was capped to prevent unrealistic estimates'] : undefined,
+      llm_used: false
+    };
+  };
+
+  const createBestEntryClusterEvidence = (): EvidenceData => {
+    const bestSegment = entrySegments.find(s => s.segment === bestEntryCluster);
+    return {
+      title: 'Best Entry Cluster',
+      displayed_value: bestEntryCluster ?? '—',
+      source_datasets: [titleDensityReliable ? 'Magnet + BlackBox' : 'Magnet'],
+      source_columns: ['keyword', 'keyword_sales', 'segment'],
+      source_row_count: bestSegment?.keyword_count ?? 0,
+      formula: 'Segment with the largest opportunity_revenue value',
+      aggregation_method: 'Max revenue segment selection',
+      calculation_steps: [
+        'Group keywords by product segment/theme',
+        'Calculate opportunity revenue per segment (tier-weighted keyword sales)',
+        'Rank segments by opportunity revenue descending',
+        'Select segment with highest opportunity revenue'
+      ],
+      top_records: bestSegment ? [{
+        segment: bestSegment.segment,
+        opportunity_revenue: Math.round(bestSegment.opportunity_revenue),
+        keyword_count: bestSegment.keyword_count,
+        avg_opportunity_score: bestSegment.avg_opportunity_score.toFixed(1),
+        recommended_priority: bestSegment.recommended_priority ?? '—'
+      }] : undefined,
+      classification_reason: bestEntryCluster
+        ? `"${bestEntryCluster}" has the largest addressable opportunity revenue among all segments`
+        : 'No segment analysis available yet',
+      confidence_note: bestSegment
+        ? `This segment contains ${bestSegment.keyword_count.toLocaleString()} keywords with average opportunity score ${bestSegment.avg_opportunity_score.toFixed(1)}/100`
+        : 'Awaiting segment analysis',
+      llm_used: false
+    };
+  };
+
+  const createSegmentRowEvidence = (segment: EntrySegment): EvidenceData => {
+    return {
+      title: `Segment: ${segment.segment}`,
+      displayed_value: `Revenue: ${formatNumber(Math.round(segment.opportunity_revenue))}`,
+      source_datasets: [titleDensityReliable ? 'Magnet + BlackBox' : 'Magnet'],
+      source_columns: ['keyword', 'keyword_sales', 'opportunity_label', 'segment'],
+      source_row_count: segment.keyword_count,
+      formula: 'Opportunity Revenue = Tier-weighted sum of keyword sales in this segment',
+      aggregation_method: 'Sum of tier-weighted keyword sales',
+      calculation_steps: [
+        `Filter keywords assigned to segment "${segment.segment}"`,
+        'Apply tier weighting (100% extreme, partial high)',
+        'Sum weighted keyword_sales values',
+        'Calculate average opportunity score across segment keywords'
+      ],
+      top_records: [{
+        segment: segment.segment,
+        opportunity_revenue: Math.round(segment.opportunity_revenue),
+        keyword_count: segment.keyword_count,
+        avg_opportunity_score: segment.avg_opportunity_score.toFixed(1),
+        primary_driver: segment.primary_driver ?? '—',
+        competitive_intensity: segment.competitive_intensity ?? '—',
+        recommended_priority: segment.recommended_priority ?? '—'
+      }],
+      thresholds: {
+        high: 'Enter First (Top revenue + favorable conditions)',
+        medium: 'Evaluate (Moderate opportunity)',
+        low: 'Monitor (Lower priority)'
+      },
+      classification_reason: `Recommended priority: ${segment.recommended_priority ?? 'Evaluate'}. ${segment.primary_driver ? `Primary driver: ${segment.primary_driver}.` : ''} ${segment.competitive_intensity ? `Competition: ${segment.competitive_intensity}.` : ''}`,
+      confidence_note: `This segment contains ${segment.keyword_count.toLocaleString()} opportunity keywords with mean percentile score ${segment.avg_opportunity_score.toFixed(1)}/100`,
+      llm_used: false
+    };
+  };
+
+  const createTopEntrySegmentEvidence = (segment: TopEntrySegment): EvidenceData => {
+    return {
+      title: `Top Entry Segment: ${segment.segment}`,
+      displayed_value: `Revenue: ${formatNumber(Math.round(segment.revenue_opportunity))}`,
+      source_datasets: [titleDensityReliable ? 'Magnet + BlackBox' : 'Magnet'],
+      source_columns: ['keyword', 'keyword_sales', 'opportunity_label', 'segment'],
+      source_row_count: segment.keyword_count,
+      formula: 'Opportunity Revenue = Tier-weighted sum of keyword sales + actionable recommendation',
+      aggregation_method: 'Sum of tier-weighted keyword sales with strategic overlay',
+      calculation_steps: [
+        `Filter keywords in segment "${segment.segment}"`,
+        'Calculate tier-weighted revenue opportunity',
+        'Assess competitive intensity',
+        'Determine recommended action based on opportunity + competition'
+      ],
+      top_records: [{
+        segment: segment.segment,
+        revenue_opportunity: Math.round(segment.revenue_opportunity),
+        keyword_count: segment.keyword_count,
+        avg_opportunity_score: segment.avg_opportunity_score.toFixed(1),
+        primary_driver: segment.primary_driver,
+        competitive_intensity: segment.competitive_intensity,
+        recommended_action: segment.recommended_action
+      }],
+      classification_reason: `${segment.recommended_action}. Primary driver: ${segment.primary_driver}. Competitive intensity: ${segment.competitive_intensity}`,
+      confidence_note: `Rank ${segment.rank} entry segment with ${segment.keyword_count.toLocaleString()} keywords, average score ${segment.avg_opportunity_score.toFixed(1)}/100`,
+      llm_used: false
+    };
+  };
+
+  const createKeywordRowEvidence = (keyword: CombinedKeyword): EvidenceData => {
+    const isWhitespace = keyword.whitespace_score != null;
+    const isSegment = keyword.efficiency_score != null;
+    
+    return {
+      title: `Keyword: ${keyword.keyword ?? '—'}`,
+      displayed_value: isWhitespace 
+        ? `Whitespace Score: ${keyword.whitespace_score?.toFixed(1) ?? '—'}`
+        : `Efficiency Score: ${keyword.efficiency_score?.toFixed(1) ?? '—'}`,
+      source_datasets: [keyword.title_density != null ? 'Magnet + BlackBox' : (keyword.source ?? 'Magnet')],
+      source_columns: isWhitespace
+        ? ['keyword', 'search_volume', 'keyword_sales', 'title_density']
+        : ['keyword', 'search_volume', 'click_share', 'conversion_share', 'keyword_sales'],
+      source_row_count: 1,
+      formula: isWhitespace
+        ? 'Whitespace Score = Demand × (1 - Competition) where demand = search_volume × keyword_sales, competition = title_density'
+        : 'Efficiency Score = (conversion_share / click_share) × keyword_sales weight',
+      calculation_steps: isWhitespace
+        ? [
+            'Calculate demand signal: search_volume × keyword_sales',
+            'Calculate competition gap: 1 - title_density (low density = high opportunity)',
+            'Compute composite opportunity score',
+            'Percentile-rank across all keywords',
+            'Classify into opportunity tier'
+          ]
+        : [
+            'Calculate conversion efficiency: conversion_share / click_share',
+            'Weight by keyword sales',
+            'Percentile-rank efficiency',
+            'Assign classification'
+          ],
+      top_records: [{
+        keyword: keyword.keyword ?? '—',
+        search_volume: keyword.search_volume ?? 0,
+        keyword_sales: keyword.keyword_sales ?? 0,
+        ...(isWhitespace ? {
+          title_density: keyword.title_density ?? '—',
+          opportunity_label: keyword.opportunity_label ?? '—',
+          opportunity_driver: keyword.opportunity_driver ?? '—'
+        } : {
+          click_share: keyword.click_share?.toFixed(1) ?? '—',
+          conversion_share: keyword.conversion_share?.toFixed(1) ?? '—',
+          classification: keyword.classification ?? '—'
+        })
+      }],
+      classification_reason: isWhitespace
+        ? `Opportunity tier: ${keyword.opportunity_label ?? '—'}. Driver: ${keyword.opportunity_driver ?? '—'}`
+        : `Classification: ${keyword.classification ?? '—'}`,
+      confidence_note: titleDensityReliable || !isWhitespace
+        ? 'Full metrics available for this keyword'
+        : 'Title density not available — classification may be approximate',
+      llm_used: false
+    };
+  };
 
   const segmentKeywords: SegmentKeyword[] = (segmentKeywordDetails?.keywords || []) as SegmentKeyword[];
   const segmentKeywordCount = segmentKeywordDetails?.keyword_count ?? 0;
@@ -369,18 +651,18 @@ export default function WhitespaceOpportunities() {
     { header: 'Search Volume', accessorKey: 'search_volume', cell: (row) => <span className="font-mono text-sm">{formatNumber(row.search_volume ?? 0)}</span> },
     { header: 'Click Share', accessorKey: 'click_share', cell: (row) => <span className="font-mono text-sm">{row.click_share != null ? `${row.click_share.toFixed(1)}%` : '—'}</span> },
     { header: 'Conversion Share', accessorKey: 'conversion_share', cell: (row) => <span className="font-mono text-sm">{row.conversion_share != null ? `${row.conversion_share.toFixed(1)}%` : '—'}</span> },
-    { header: 'Keyword Sales', accessorKey: 'keyword_sales', cell: (row) => <span className="font-mono text-sm">{formatNumber(row.keyword_sales ?? 0)}</span> },
+    { header: 'Keyword Sales', accessorKey: 'keyword_sales', cell: (row) => <span className="font-mono text-sm">{row.keyword_sales != null && row.keyword_sales > 0 ? formatNumber(row.keyword_sales) : 'Unavailable'}</span> },
     { header: 'Efficiency Score', accessorKey: 'efficiency_score', cell: (row) => <span className="font-mono text-sm">{row.efficiency_score != null ? row.efficiency_score.toFixed(1) : '—'}</span> },
     { header: 'Classification / Opportunity Type', accessorKey: 'classification', cell: (row) => <span className="text-sm text-muted-foreground">{row.classification ?? '—'}</span> },
-    { header: 'Source Dataset', accessorKey: 'source', cell: (row) => <span className="text-sm text-muted-foreground">{row.source ?? 'Magnet'}</span> },
+    { header: 'Source Dataset', accessorKey: 'source', cell: (row) => <span className="text-sm text-muted-foreground">{(row as any).title_density != null ? 'Magnet + BlackBox' : (row.source ?? 'Magnet')}</span> },
     {
       header: 'Title Density',
       accessorKey: 'title_density',
       cell: (row) => (
         <span className="font-mono text-sm text-muted-foreground">
-          {titleDensityReliable && row.title_density != null
+          {row.title_density != null
             ? formatNumber(row.title_density)
-            : 'N/A'}
+            : <span className="italic" title="Title density unavailable — product title field missing from active BlackBox dataset.">Unavailable</span>}
         </span>
       ),
     },
@@ -400,6 +682,26 @@ export default function WhitespaceOpportunities() {
     },
   ];
 
+
+  const getDynamicColumns = (data: any[]) => {
+    const totalRows = data.length || 1;
+    const validThreshold = 0.7; // 70%
+    const hasClickShare = data.filter(k => k.click_share != null).length / totalRows >= validThreshold;
+    const hasConversionShare = data.filter(k => k.conversion_share != null).length / totalRows >= validThreshold;
+    const hasEfficiency = data.filter(k => k.efficiency_score != null).length / totalRows >= validThreshold;
+    const hasClassification = data.filter(k => k.classification != null).length / totalRows >= validThreshold;
+
+    return keywordColumns.filter(col => {
+      if (col.accessorKey === 'click_share' && !hasClickShare) return false;
+      if (col.accessorKey === 'conversion_share' && !hasConversionShare) return false;
+      if (col.accessorKey === 'efficiency_score' && !hasEfficiency) return false;
+      if (col.accessorKey === 'classification' && !hasClassification) return false;
+      return true;
+    });
+  };
+
+  const dynamicKeywordColumns = getDynamicColumns(wsKeywords);
+
   const insightStyles: Record<string, { border: string; badge: string; dot: string }> = {
     'Key Finding': { border: 'border-l-4 border-l-purple-500 border-purple-500/30', badge: 'bg-purple-500/10 text-purple-400', dot: 'bg-purple-500' },
     'Leading Segment': { border: 'border-l-4 border-l-emerald-500 border-emerald-500/30', badge: 'bg-emerald-500/10 text-emerald-400', dot: 'bg-emerald-500' },
@@ -416,7 +718,7 @@ export default function WhitespaceOpportunities() {
         description="Segment-first entry analysis — where to enter, why opportunity exists, and relative size vs the category."
       />
 
-      <PageSection title="1. Category Whitespace Scorecard" icon={Target}>
+      <PageSection title="1. Category Whitespace Scorecard">
         <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
         <KpiCard
           title="Overall Whitespace Score"
@@ -426,6 +728,7 @@ export default function WhitespaceOpportunities() {
           color={(r.overall_whitespace_score ?? 0) >= 65 ? 'text-emerald-500' : (r.overall_whitespace_score ?? 0) >= 50 ? 'text-yellow-500' : 'text-muted-foreground'}
           bg={(r.overall_whitespace_score ?? 0) >= 65 ? 'bg-emerald-500/10 border-emerald-500/30' : (r.overall_whitespace_score ?? 0) >= 50 ? 'bg-yellow-500/10 border-yellow-500/30' : 'bg-muted border-border'}
           tooltip="Mean opportunity score after percentile ranking across all keywords."
+          onClick={() => setSelectedEvidence(createOverallScoreEvidence())}
         />
         <KpiCard
           title="Extreme Opportunities"
@@ -435,6 +738,7 @@ export default function WhitespaceOpportunities() {
           color="text-purple-400"
           bg="bg-purple-500/10 border-purple-500/30"
           tooltip="Top 20% of keywords by composite opportunity score."
+          onClick={() => setSelectedEvidence(createExtremeOpportunitiesEvidence())}
         />
         <KpiCard
           title="High Opportunities"
@@ -444,6 +748,7 @@ export default function WhitespaceOpportunities() {
           color="text-emerald-500"
           bg="bg-emerald-500/10 border-emerald-500/30"
           tooltip="Strong opportunity band (65–79 percentile rank)."
+          onClick={() => setSelectedEvidence(createHighOpportunitiesEvidence())}
         />
         <KpiCard
           title="Opportunity Revenue Signal"
@@ -458,6 +763,7 @@ export default function WhitespaceOpportunities() {
           color="text-amber-500"
           bg="bg-amber-500/10 border-amber-500/30"
           tooltip={String(r.revenue_signal_method ?? 'Tier-weighted sales signal, not total capturable category revenue.')}
+          onClick={() => setSelectedEvidence(createRevenueSignalEvidence())}
         />
         <KpiCard
           title="Best Entry Cluster"
@@ -467,12 +773,13 @@ export default function WhitespaceOpportunities() {
           color={bestEntryCluster ? 'text-cyan-400' : 'text-muted-foreground'}
           bg={bestEntryCluster ? 'bg-cyan-500/10 border-cyan-500/30' : 'bg-muted border-border'}
           tooltip="Segment with the largest addressable opportunity revenue."
+          onClick={() => setSelectedEvidence(createBestEntryClusterEvidence())}
         />
         </div>
       </PageSection>
 
       {insights.length > 0 && (
-        <PageSection title="2. Segment Intelligence" icon={Lightbulb}>
+        <PageSection title="2. Segment Intelligence">
           <Card className="border-border/50 shadow-sm bg-card">
             <CardContent className="pt-6">
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
@@ -498,7 +805,7 @@ export default function WhitespaceOpportunities() {
       )}
 
       {entrySegments.length > 0 && (
-        <PageSection title="3. Segment Revenue Analysis" icon={TrendingUp}>
+        <PageSection title="3. Segment Revenue Analysis">
           <div className="space-y-6">
             <ChartContainer
               title="Revenue Opportunity by Segment"
@@ -537,7 +844,12 @@ export default function WhitespaceOpportunities() {
                   <CardDescription>Full segment comparison with percentile-scaled attractiveness scores (0–100)</CardDescription>
                 </CardHeader>
                 <CardContent>
-              <DataTable columns={segmentTableColumns} data={entrySegments} pageSize={12} />
+              <DataTable 
+                columns={segmentTableColumns} 
+                data={entrySegments} 
+                pageSize={12}
+                onRowClick={(row) => setSelectedEvidence(createSegmentRowEvidence(row))}
+              />
                 </CardContent>
               </Card>
 
@@ -547,7 +859,12 @@ export default function WhitespaceOpportunities() {
                   <CardDescription>Actionable segment view — primary driver, competition, and recommended next step</CardDescription>
                 </CardHeader>
                 <CardContent>
-              <DataTable columns={topEntryColumns} data={topEntrySegments} pageSize={10} />
+              <DataTable 
+                columns={topEntryColumns} 
+                data={topEntrySegments} 
+                pageSize={10}
+                onRowClick={(row) => setSelectedEvidence(createTopEntrySegmentEvidence(row))}
+              />
                 </CardContent>
               </Card>
             </div>
@@ -555,7 +872,7 @@ export default function WhitespaceOpportunities() {
         </PageSection>
       )}
 
-      <PageSection title="4. Supporting Keyword Evidence" icon={Layers}>
+      <PageSection title="4. Supporting Keyword Evidence">
         <Card className="border-border/50 shadow-sm bg-card">
         <CardHeader>
           <CardTitle className="text-base">Representative Opportunity Keywords</CardTitle>
@@ -564,7 +881,12 @@ export default function WhitespaceOpportunities() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <DataTable columns={keywordColumns} data={wsKeywords} pageSize={10} />
+          <DataTable 
+            columns={dynamicKeywordColumns} 
+            data={wsKeywords} 
+            pageSize={10}
+            onRowClick={(row) => setSelectedEvidence(createKeywordRowEvidence(row))}
+          />
         </CardContent>
       </Card>
       </PageSection>
@@ -633,10 +955,10 @@ export default function WhitespaceOpportunities() {
                     { header: 'Search Volume', accessorKey: 'search_volume', cell: (row) => <span className="font-mono text-sm">{formatNumber(row.search_volume ?? 0)}</span> },
                     { header: 'Click Share', accessorKey: 'click_share', cell: (row) => <span className="font-mono text-sm">{row.click_share != null ? `${row.click_share.toFixed(1)}%` : '—'}</span> },
                     { header: 'Conversion Share', accessorKey: 'conversion_share', cell: (row) => <span className="font-mono text-sm">{row.conversion_share != null ? `${row.conversion_share.toFixed(1)}%` : '—'}</span> },
-                    { header: 'Keyword Sales', accessorKey: 'keyword_sales', cell: (row) => <span className="font-mono text-sm">{formatNumber(row.keyword_sales ?? 0)}</span> },
+                    { header: 'Keyword Sales', accessorKey: 'keyword_sales', cell: (row) => <span className="font-mono text-sm">{row.keyword_sales != null && row.keyword_sales > 0 ? formatNumber(row.keyword_sales) : 'Unavailable'}</span> },
                     { header: 'Efficiency Score', accessorKey: 'efficiency_score', cell: (row) => <span className="font-mono text-sm">{row.efficiency_score != null ? row.efficiency_score.toFixed(1) : '—'}</span> },
                     { header: 'Classification / Opportunity Type', accessorKey: 'classification', cell: (row) => <span className="text-sm text-muted-foreground">{row.classification ?? '—'}</span> },
-                    { header: 'Source Dataset', accessorKey: 'source', cell: (row) => <span className="text-sm text-muted-foreground">{row.source ?? 'Magnet'}</span> },
+                    { header: 'Source Dataset', accessorKey: 'source', cell: (row) => <span className="text-sm text-muted-foreground">{(row as any).title_density != null ? 'Magnet + BlackBox' : (row.source ?? 'Magnet')}</span> },
                   ]}
                   data={segmentKeywords}
                   pageSize={15}
@@ -648,10 +970,12 @@ export default function WhitespaceOpportunities() {
         </div>
       )}
 
+      <EvidenceModal
+        isOpen={!!selectedEvidence}
+        onClose={() => setSelectedEvidence(null)}
+        evidence={selectedEvidence}
+      />
+
     </div>
   );
-}
-
-export default function WhitespaceOpportunities() {
-  return null;
 }

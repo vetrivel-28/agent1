@@ -12,10 +12,10 @@ import { cn } from '../utils/cn';
 import { PageHeader } from '../components/layout/PageHeader';
 
 const tabs = [
-  { id: 'competitors', label: 'Direct Competitors', icon: Users, component: DirectCompetitors },
-  { id: 'substitutes', label: 'LLM-Inferred Alternative Products', icon: ShieldAlert, component: SubstituteIntelligence },
-  { id: 'complements', label: 'LLM-Inferred Companion Products', icon: Zap, component: ComplementIntelligence },
-  { id: 'bundles', label: 'Potential Bundle Concepts', icon: Layers, component: BundleOpportunities },
+  { id: 'competitors', label: 'Direct Products', icon: Users, component: DirectCompetitors },
+  { id: 'substitutes', label: 'Substitute Products', icon: ShieldAlert, component: SubstituteIntelligence },
+  { id: 'complements', label: 'Complement Products', icon: Zap, component: ComplementIntelligence },
+  { id: 'bundles', label: 'Product Opportunities', icon: Layers, component: BundleOpportunities },
 ];
 
 export default function ProductIntelligence() {

@@ -18,6 +18,7 @@ interface DataTableProps<T> {
   keyExtractor?: (item: T, index: number) => string;
   emptyState?: ReactNode;
   pageSize?: number;
+  onRowClick?: (item: T, index: number) => void;
 }
 
 export function DataTable<T>({ 
@@ -27,7 +28,8 @@ export function DataTable<T>({
   description, 
   keyExtractor = (item, index) => String(index),
   emptyState = <div className="text-center py-8 text-muted-foreground text-sm">No data available</div>,
-  pageSize
+  pageSize,
+  onRowClick,
 }: DataTableProps<T>) {
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -66,7 +68,8 @@ export function DataTable<T>({
               currentData.map((item, rowIndex) => (
                 <tr 
                   key={keyExtractor(item, startIndex + rowIndex)} 
-                  className="hover:bg-muted/30 transition-colors duration-150 group"
+                  className={`hover:bg-muted/30 transition-colors duration-150 group${onRowClick ? ' cursor-pointer' : ''}`}
+                  onClick={onRowClick ? () => onRowClick(item, startIndex + rowIndex) : undefined}
                 >
                   {columns.map((col, colIndex) => (
                     <td key={colIndex} className={`px-6 py-4 whitespace-nowrap ${col.className || ''}`}>

@@ -22,7 +22,18 @@ logger = get_logger("revenue_momentum_engine")
 
 _BRAND_CANDIDATES = ["Brand", "brand", "Seller", "seller", "Brand Name"]
 _REVENUE_CANDIDATES = ["Parent Level Revenue", "parent level revenue"]
-_SALES_CANDIDATES = ["Parent Level Sales", "parent level sales", "ASIN Sales", "asin sales", "Sales", "sales"]
+_SALES_CANDIDATES = [
+    "Parent Level Units Sold", "parent level units sold",
+    "Parent Level Sales", "parent level sales", 
+    "Units Sold", "units sold",
+    "Monthly Sales", "monthly sales",
+    "ASIN Sales", "asin sales", 
+    "Sales", "sales",
+    "Estimated Sales", "estimated sales",
+    "Parent Level Units", "parent level units",
+    "Units", "units",
+    "Last Month Sales", "last month sales"
+]
 _SALES_TREND_CANDIDATES = ["Sales Trend (90 days) (%)", "sales trend (90 days) (%)", "Sales Trend (%)", "sales trend (%)", "Sales Trend", "sales trend"]
 _REVENUE_TREND_CANDIDATES = ["Revenue Trend (90 days) (%)", "revenue trend (90 days) (%)", "Revenue Trend", "revenue trend", "Parent Level Revenue Trend"]
 _REVIEW_COUNT_CANDIDATES = ["Review Count", "review count", "Reviews", "reviews", "Total Reviews", "total reviews"]
@@ -647,6 +658,7 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
             "parent_revenue": round(float(row["parent_revenue"]), 4),
             "revenue_share": round(float(row["revenue_share"]), 4),
             "parent_sales": round(float(row["parent_sales"]), 4) if "parent_sales" in row and pd.notna(row["parent_sales"]) else None,
+            "units_sold": round(float(row["parent_sales"]), 4) if "parent_sales" in row and pd.notna(row["parent_sales"]) else None,
             "product_count": int(row["product_count"]),
             "revenue_percentile": round(float(row["revenue_percentile"]), 1),
             "sales_percentile": round(float(row["sales_percentile"]), 1),
@@ -851,6 +863,10 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
             "bsr_available": bool(bsr_col),
             "historical_period_records_available": False,
             "product_count_source": product_count_source,
+            "units_column_detected": sales_col,
+            "units_column_candidates": _SALES_CANDIDATES,
+            "units_rows_with_valid_data": int((work["parent_sales"] > 0).sum()) if "parent_sales" in work.columns else 0,
+            "units_rows_with_missing_data": int((work["parent_sales"].isna()).sum()) if "parent_sales" in work.columns else rows_original,
         },
         "validation": {
             "status": "passed",

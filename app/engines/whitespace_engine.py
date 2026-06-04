@@ -219,9 +219,9 @@ def _dedupe_keyword_rows(rows: List[Dict[str, Any]], keyword_col: str) -> List[D
 
 
 def _classify_opportunity(score: float) -> str:
-    if score >= 80:
+    if score >= 85:
         return "Extreme Opportunity"
-    elif score >= 65:
+    elif score >= 70:
         return "High Opportunity"
     elif score >= 50:
         return "Moderate Opportunity"
@@ -307,6 +307,54 @@ def _percentile_rank(series: pd.Series) -> pd.Series:
     return pct.clip(0, 100)
 
 
+
+def _calculate_blackbox_title_density(magnet_df: pd.DataFrame, blackbox_df: pd.DataFrame, keyword_col: str) -> pd.Series:
+    """Calculates title density using BlackBox product titles via exact phrase match."""
+    if blackbox_df is None or blackbox_df.empty:
+        return pd.Series(index=magnet_df.index, dtype=float)
+
+    # Find title column
+    title_col = None
+    for col in blackbox_df.columns:
+        if str(col).lower().strip() in ["title", "product title", "item name"]:
+            title_col = col
+            break
+            
+    if not title_col:
+        return pd.Series(index=magnet_df.index, dtype=float)
+
+    # Clean titles
+    import string
+    def clean_text(t):
+        if pd.isna(t): return ""
+        return str(t).lower().translate(str.maketrans('', '', string.punctuation))
+        
+    titles = blackbox_df[title_col].apply(clean_text).tolist()
+    total_titles = len(titles)
+    if total_titles == 0:
+        return pd.Series(0.0, index=magnet_df.index)
+
+    densities = []
+    for kw in magnet_df[keyword_col]:
+        if pd.isna(kw):
+            densities.append(np.nan)
+            continue
+            
+        clean_kw = clean_text(kw)
+        if not clean_kw:
+            densities.append(0.0)
+            continue
+            
+        # Optional safeguard for generic 1-word keywords
+        if len(clean_kw.split()) == 1 and len(clean_kw) < 4:
+            densities.append(np.nan) # skip very generic short words to avoid false positives
+            continue
+
+        match_count = sum(1 for t in titles if clean_kw in t)
+        densities.append(float(match_count))
+        
+    return pd.Series(densities, index=magnet_df.index)
+
 def run(
     magnet_df: Optional[pd.DataFrame],
     blackbox_df: Optional[pd.DataFrame] = None,
@@ -354,7 +402,14 @@ def run(
     revenue_col = find_column(df, _REVENUE_CANDIDATES)
 
     df["_vol_clean"]     = process_col(search_vol_col)
-    df["_density_clean"] = process_col(title_density_col)
+    
+    bb_density_series = _calculate_blackbox_title_density(df, blackbox_df, keyword_col)
+    if bb_density_series.notna().any():
+        df["_density_clean"] = bb_density_series
+        title_density_col = "Calculated Title Density (BlackBox)"
+    else:
+        df["_density_clean"] = process_col(title_density_col)
+
     df["_sales_clean"]   = process_col(sales_col)
     df["_comp_clean"]    = process_col(comp_col)
     df["_sponsored_clean"] = process_col(sponsored_col)
@@ -388,18 +443,24 @@ def run(
     has_comp = has_comp_col or has_sponsored_col
     has_density = title_density_col is not None and df_valid["_density_clean"].notna().sum() > 0 and not df_valid["_density_clean"].eq(0).all()
 
+    
+    req_fields = sum(1 for x in [has_demand, has_revenue, has_comp, has_density] if x)
+    data_confidence = (req_fields / 4.0) * 100.0 if req_fields > 0 else 0.0
+    df_valid["_data_confidence"] = data_confidence
+
     weights = {
         "demand": 0.35 if has_demand else 0.0,
-        "revenue": 0.30 if has_revenue else 0.0,
-        "competition": 0.25 if has_comp else 0.0,
-        "accessibility": 0.10 if has_density else 0.0
+        "revenue": 0.20 if has_revenue else 0.0,
+        "competition": 0.10 if has_comp else 0.0,
+        "accessibility": 0.25 if has_density else 0.0,
+        "confidence": 0.10
     }
     
     sum_w = sum(weights.values())
     if sum_w > 0:
         scaled_w = {k: v / sum_w for k, v in weights.items()}
     else:
-        scaled_w = {"demand": 1.0, "revenue": 0.0, "competition": 0.0, "accessibility": 0.0}
+        scaled_w = {"demand": 1.0, "revenue": 0.0, "competition": 0.0, "accessibility": 0.0, "confidence": 0.0}
 
     # ── Percentile ranks (0-100) ─────────────────────────────────────────────
     # 1. Demand Score
@@ -430,11 +491,13 @@ def run(
         df_valid["_accessibility_pct"] = 100.0 - _percentile_rank(df_valid["_density_clean"])
 
     # ── Opportunity Score: percentile-rank weighted composite (full 0–100) ───
+    df_valid["_confidence_score"] = data_confidence
     composite_signal = (
         scaled_w["demand"] * df_valid["_vol_pct"].fillna(0.0)
         + scaled_w["revenue"] * df_valid["_sales_pct"].fillna(0.0)
         + scaled_w["competition"] * df_valid["_inv_comp_pct"].fillna(0.0)
         + scaled_w["accessibility"] * df_valid["_accessibility_pct"].fillna(0.0)
+        + scaled_w["confidence"] * df_valid["_confidence_score"]
     )
     df_valid["_opp_score"] = _percentile_rank(composite_signal)
 
@@ -523,6 +586,7 @@ def run(
             record["title_density"] = _format_score(density_val)
         else:
             record["title_density"] = None
+        record["data_confidence"] = _format_score(row.get("_confidence_score", 0))
             
         if "exact_search_volume" in row.index:
             record["exact_search_volume"] = int(row["exact_search_volume"]) if pd.notna(row["exact_search_volume"]) else 0
@@ -620,17 +684,18 @@ def run(
                 f"Search Volume × {scaled_w['demand']:.1%} + "
                 f"Keyword Sales × {scaled_w['revenue']:.1%} + "
                 f"Inverse Competition × {scaled_w['competition']:.1%} + "
-                f"Accessibility × {scaled_w['accessibility']:.1%}"
+                f"Accessibility × {scaled_w['accessibility']:.1%} + "
+                f"Data Confidence × {scaled_w['confidence']:.1%}"
                 f"). Final score = percentile rank of the composite within all valid keywords."
             ),
-            "extreme_opportunity": "Opportunity Score ≥ 80 (top tier — highest demand + revenue + accessibility)",
-            "high_opportunity": "Opportunity Score ≥ 65 and < 80 (strong but not top tier)",
+            "extreme_opportunity": "Opportunity Score ≥ 85 (top tier — highest demand + revenue + accessibility)",
+            "high_opportunity": "Opportunity Score ≥ 70 and < 85 (strong but not top tier)",
             "revenue_signal": (
                 "Revenue Signal = (Extreme-tier keyword sales) + 0.35 × (High-tier keyword sales), "
                 "capped at 60% of total measurable category keyword sales."
             ),
         },
-        "source_dataset": "Magnet Keyword Dataset",
+        "source_dataset": "Magnet + BlackBox" if (blackbox_df is not None and not blackbox_df.empty) else "Magnet Keyword Dataset",
         "columns_used": {
             "search_volume": search_vol_col,
             "keyword_sales": sales_col,
@@ -642,13 +707,14 @@ def run(
         "rows_included": rows_after,
         "rows_excluded": rows_skipped,
         "total_keywords": n,
-        "extreme_threshold": 80,
-        "high_threshold": 65,
+        "extreme_threshold": 85,
+        "high_threshold": 70,
         "score_weights": {
             "search_volume_pct": round(scaled_w["demand"] * 100, 1),
             "keyword_sales_pct": round(scaled_w["revenue"] * 100, 1),
             "inv_competition_pct": round(scaled_w["competition"] * 100, 1),
             "accessibility_pct": round(scaled_w["accessibility"] * 100, 1),
+            "confidence_pct": round(scaled_w["confidence"] * 100, 1),
         },
         "competition_column_used": competition_source,
         "title_density_reliable": has_density,
@@ -658,7 +724,7 @@ def run(
         "top_extreme_keywords": [
             {k: v for k, v in kw.items() if k in ("keyword", "search_volume", "keyword_sales", "opportunity_score", "opportunity_driver")}
             for kw in top_keywords[:5]
-            if kw.get("opportunity_score", 0) >= 80
+            if kw.get("opportunity_score", 0) >= 85
         ] or [{k: v for k, v in kw.items() if k in ("keyword", "search_volume", "keyword_sales", "opportunity_score", "opportunity_driver")} for kw in top_keywords[:3]],
     }
 
@@ -669,7 +735,7 @@ def run(
     heatmap_evidence = []
     for seg in entry_segments:
         heatmap_evidence.append({
-            "source_dataset": "Magnet Keyword Dataset",
+            "source_dataset": "Magnet + BlackBox" if (blackbox_df is not None and not blackbox_df.empty) else "Magnet Keyword Dataset",
             "source_columns": source_cols_list,
             "keyword_phrases_used": [k["keyword"] for k in seg["keywords"]][:10],
             "rows_included": len(seg["keywords"]),
@@ -692,7 +758,7 @@ def run(
     top_clusters_evidence = []
     for seg in entry_segments:
         top_clusters_evidence.append({
-            "source_dataset": "Magnet Keyword Dataset",
+            "source_dataset": "Magnet + BlackBox" if (blackbox_df is not None and not blackbox_df.empty) else "Magnet Keyword Dataset",
             "source_columns": source_cols_list,
             "keyword_phrases_used": [k["keyword"] for k in seg["keywords"]][:10],
             "rows_included": len(seg["keywords"]),
@@ -720,7 +786,7 @@ def run(
         rev_share    = total_revenue > 0 and (seg["opportunity_revenue"] / total_revenue * 100) or 0.0
         gap          = demand_share - rev_share
         gap_evidence.append({
-            "source_dataset": "Magnet Keyword Dataset",
+            "source_dataset": "Magnet + BlackBox" if (blackbox_df is not None and not blackbox_df.empty) else "Magnet Keyword Dataset",
             "source_columns": [search_vol_col, sales_col] if search_vol_col and sales_col else [],
             "keyword_phrases_used": [k["keyword"] for k in seg["keywords"]][:10],
             "rows_included": len(seg["keywords"]),
@@ -740,14 +806,15 @@ def run(
     kw_evidence_list = []
     for kw in top_keywords:
         kw_evidence_list.append({
-            "source_dataset": "Magnet Keyword Dataset",
+            "source_dataset": "Magnet + BlackBox" if (blackbox_df is not None and not blackbox_df.empty) else "Magnet Keyword Dataset",
             "source_columns": source_cols_list,
             "keyword_phrases_used": [kw["keyword"]],
             "rows_included": 1,
             "rows_excluded": 0,
             "plain_english_calculation": (
                 f"Opportunity Score = (SV percentile × {scaled_w['demand']:.1%} + Sales percentile × {scaled_w['revenue']:.1%} + "
-                f"Inverse Comp percentile × {scaled_w['competition']:.1%} + Accessibility percentile × {scaled_w['accessibility']:.1%})"
+                f"Inverse Comp percentile × {scaled_w['competition']:.1%} + Accessibility percentile × {scaled_w['accessibility']:.1%} + "
+                f"Data Confidence × {scaled_w['confidence']:.1%})"
             ),
             "final_value": {
                 "keyword_phrase": kw["keyword"],
@@ -759,14 +826,14 @@ def run(
                 "cluster": best_entry_cluster
             },
             "interpretation": f"Keyword phrase '{kw['keyword']}' scores {kw['opportunity_score']:.1f}/100 and belongs to the {kw['opportunity_label']} tier.",
-            "recommendation": f"Add to active tracking. " + ("Prioritize for catalog launch." if kw["opportunity_score"] >= 80 else "Include in PPC optimization.")
+            "recommendation": f"Add to active tracking. " + ("Prioritize for catalog launch." if kw["opportunity_score"] >= 85 else "Include in PPC optimization.")
         })
 
     whitespace = {
-        "source_dataset": "Magnet Keyword Dataset",
+        "source_dataset": "Magnet + BlackBox" if (blackbox_df is not None and not blackbox_df.empty) else "Magnet Keyword Dataset",
         "cluster_method": "Magnet keyword phrase clustering",
         "overall_whitespace_score": {
-            "source_dataset": "Magnet Keyword Dataset",
+            "source_dataset": "Magnet + BlackBox" if (blackbox_df is not None and not blackbox_df.empty) else "Magnet Keyword Dataset",
             "source_columns": source_cols_list,
             "keyword_phrases_used": [kw["keyword"] for kw in top_keywords[:10]],
             "rows_included": rows_after,
@@ -788,7 +855,7 @@ def run(
             "recommendation": "Target clusters with the highest average opportunity score and largest demand-revenue gap."
         },
         "extreme_opportunities": {
-            "source_dataset": "Magnet Keyword Dataset",
+            "source_dataset": "Magnet + BlackBox" if (blackbox_df is not None and not blackbox_df.empty) else "Magnet Keyword Dataset",
             "source_columns": source_cols_list,
             "keyword_phrases_used": [kw["keyword"] for kw in top_keywords if kw["opportunity_score"] >= 80][:10],
             "rows_included": rows_after,
@@ -799,7 +866,7 @@ def run(
             "recommendation": "Launch catalog items and target listing optimizations immediately."
         },
         "high_opportunities": {
-            "source_dataset": "Magnet Keyword Dataset",
+            "source_dataset": "Magnet + BlackBox" if (blackbox_df is not None and not blackbox_df.empty) else "Magnet Keyword Dataset",
             "source_columns": source_cols_list,
             "keyword_phrases_used": [kw["keyword"] for kw in top_keywords if 65 <= kw["opportunity_score"] < 80][:10],
             "rows_included": rows_after,
@@ -810,7 +877,7 @@ def run(
             "recommendation": "Incorporate these keywords in secondary product pages and search campaigns."
         },
         "opportunity_revenue_signal": {
-            "source_dataset": "Magnet Keyword Dataset",
+            "source_dataset": "Magnet + BlackBox" if (blackbox_df is not None and not blackbox_df.empty) else "Magnet Keyword Dataset",
             "source_columns": [sales_col] if sales_col else [],
             "keyword_phrases_used": [kw["keyword"] for kw in top_keywords if kw["opportunity_score"] >= 65][:10],
             "rows_included": rows_after,
@@ -824,7 +891,7 @@ def run(
             "recommendation": "Build catalog coverage for top segments to capture this sales volume."
         },
         "best_entry_cluster": {
-            "source_dataset": "Magnet Keyword Dataset",
+            "source_dataset": "Magnet + BlackBox" if (blackbox_df is not None and not blackbox_df.empty) else "Magnet Keyword Dataset",
             "source_columns": source_cols_list,
             "keyword_phrases_used": [kw["keyword"] for kw in (bestClusterSeg.get("keywords", []) if bestClusterSeg else [])][:10],
             "rows_included": rows_after,
@@ -836,7 +903,7 @@ def run(
         },
         "segment_intelligence": {
             "key_finding": {
-                "source_dataset": "Magnet Keyword Dataset",
+                "source_dataset": "Magnet + BlackBox" if (blackbox_df is not None and not blackbox_df.empty) else "Magnet Keyword Dataset",
                 "source_columns": [search_vol_col] if search_vol_col else [],
                 "keyword_phrases_used": [kw["keyword"] for kw in top_keywords[:10]],
                 "rows_included": rows_after,
@@ -847,7 +914,7 @@ def run(
                 "recommendation": "Review segment priorities to sequence launch steps."
             },
             "leading_signal": {
-                "source_dataset": "Magnet Keyword Dataset",
+                "source_dataset": "Magnet + BlackBox" if (blackbox_df is not None and not blackbox_df.empty) else "Magnet Keyword Dataset",
                 "source_columns": [sales_col] if sales_col else [],
                 "keyword_phrases_used": [kw["keyword"] for kw in top_keywords[:10]],
                 "rows_included": rows_after,
@@ -858,7 +925,7 @@ def run(
                 "recommendation": "Focus initial launch resource on the leading segment."
             },
             "market_gap": {
-                "source_dataset": "Magnet Keyword Dataset",
+                "source_dataset": "Magnet + BlackBox" if (blackbox_df is not None and not blackbox_df.empty) else "Magnet Keyword Dataset",
                 "source_columns": [comp_col, sponsored_col, title_density_col],
                 "keyword_phrases_used": [kw["keyword"] for kw in top_keywords[:10]],
                 "rows_included": rows_after,
@@ -869,7 +936,7 @@ def run(
                 "recommendation": "Target specific gap themes with customized product listings."
             },
             "recommended_entry": {
-                "source_dataset": "Magnet Keyword Dataset",
+                "source_dataset": "Magnet + BlackBox" if (blackbox_df is not None and not blackbox_df.empty) else "Magnet Keyword Dataset",
                 "source_columns": [sales_col] if sales_col else [],
                 "keyword_phrases_used": [kw["keyword"] for kw in top_keywords[:10]],
                 "rows_included": rows_after,

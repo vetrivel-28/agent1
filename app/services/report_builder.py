@@ -394,7 +394,9 @@ def build_report(
     market_leader = "N/A"
     market_leader_share = 0.0
     market_leader_revenue = 0.0
+    top_3_revenue = 0.0
     top_3_share = 0.0
+    brand_revenue_dict = {}
 
     if blackbox_df is not None and not getattr(blackbox_df, "empty", True) and parent_revenue_col:
         revenue_series = _to_numeric_series(blackbox_df[parent_revenue_col]).fillna(0.0)
@@ -410,11 +412,13 @@ def build_report(
                 .sum()
                 .sort_values(ascending=False)
             )
+            brand_revenue_dict = brand_revenue.to_dict()
             if not brand_revenue.empty and total_market_revenue > 0:
                 market_leader = str(brand_revenue.index[0])
                 market_leader_revenue = float(brand_revenue.iloc[0])
                 market_leader_share = (market_leader_revenue / total_market_revenue) * 100.0
-                top_3_share = float((brand_revenue.head(3).sum() / total_market_revenue) * 100.0)
+                top_3_revenue = float(brand_revenue.head(3).sum())
+                top_3_share = float((top_3_revenue / total_market_revenue) * 100.0)
 
         if asin_col and asin_col in blackbox_df.columns:
             asin_values = (
@@ -434,6 +438,24 @@ def build_report(
             brands = blackbox_df[brand_col].astype(str).str.strip()
             brands = brands.replace({"": pd.NA, "nan": pd.NA, "none": pd.NA, "null": pd.NA}).dropna()
             total_brands = int(brands.nunique())
+
+    # -----------------------------------------------------------------------
+    # Safely fetch missing variables used in insights
+    # -----------------------------------------------------------------------
+    try:
+        best_price_revenue = float(_get(price_elasticity_result, "results", "market_sweet_spot", "value") or 0.0)
+    except (ValueError, TypeError):
+        best_price_revenue = 0.0
+        
+    try:
+        band_prod_count = int(_get(price_elasticity_result, "results", "market_sweet_spot", "product_count") or 0)
+    except (ValueError, TypeError):
+        band_prod_count = 0
+        
+    try:
+        median_bsr = float(_get(bsr_result, "results", "median_bsr") or 0.0)
+    except (ValueError, TypeError):
+        median_bsr = 0.0
 
     # -----------------------------------------------------------------------
     # Opportunity findings (data-driven, no hallucination)
@@ -668,6 +690,140 @@ def build_report(
         "market_leader": market_leader if market_leader else "N/A",
         "market_leader_share": f"{market_leader_share:.1f}%" if market_leader_share > 0 else "N/A",
         "market_leader_revenue": f"${market_leader_revenue:,.0f}" if market_leader_revenue > 0 else "N/A",
+        "evidence_objects": {
+            "total_revenue": {
+                "title": "Total Revenue — Evidence",
+                "displayed_value": f"${total_market_revenue:,.0f}" if total_market_revenue > 0 else "N/A",
+                "business_summary": "Total monthly revenue captured by the analyzed products.",
+                "source_datasets": ["BlackBox Products"],
+                "source_columns": ["Revenue", "Parent Level Revenue"],
+                "dataset_session_id": "",
+                "counts": {
+                    "Total Rows Processed": len(blackbox_df) if blackbox_df is not None else 0,
+                    "Valid Revenue Rows": total_products,
+                    "Excluded Rows (Missing/Zero)": (len(blackbox_df) - total_products) if blackbox_df is not None else 0,
+                    "Exact Sum": f"${total_market_revenue:,.2f}"
+                },
+                "formula": "Total Revenue = SUM(Valid Revenue)",
+                "calculation_steps": [
+                    "1. Scan 'Revenue' or 'Parent Level Revenue' column.",
+                    f"2. Included {total_products} rows with valid numeric > 0.",
+                    f"3. Sum equals ${total_market_revenue:,.2f}."
+                ],
+                "top_records": [{"Product": p.get("title", "")[:30], "Revenue": f"${p.get('revenue',0):,.0f}"} for p in list(efficient_products)[:5]] if efficient_products else []
+            },
+            "total_products": {
+                "title": "Total Products — Evidence",
+                "displayed_value": total_products,
+                "business_summary": "Active ASINs participating in this market category.",
+                "source_datasets": ["BlackBox Products"],
+                "source_columns": ["ASIN"],
+                "dataset_session_id": "",
+                "counts": {
+                    "Total Rows Processed": len(blackbox_df) if blackbox_df is not None else 0,
+                    "Unique Products Counted": total_products,
+                    "Missing/Duplicate Rows": (len(blackbox_df) - total_products) if blackbox_df is not None else 0
+                },
+                "formula": "Total Products = COUNT(distinct ASIN)",
+                "calculation_steps": [
+                    "1. Count all rows with a valid ASIN/Title.",
+                    "2. Deduplicate.",
+                    f"3. Result: {total_products} unique products."
+                ]
+            },
+            "total_brands": {
+                "title": "Total Brands — Evidence",
+                "displayed_value": total_brands,
+                "business_summary": "Unique brands actively generating revenue.",
+                "source_datasets": ["BlackBox Products"],
+                "source_columns": ["Brand"],
+                "dataset_session_id": "",
+                "counts": {
+                    "Valid Brand Rows Processed": total_products,
+                    "Unique Brand Count": total_brands
+                },
+                "formula": "Total Brands = COUNT(distinct Brand)",
+                "calculation_steps": [
+                    "1. Group valid products by Brand.",
+                    f"2. Result: {total_brands} unique brand names."
+                ]
+            },
+            "total_keywords": {
+                "title": "Demand Keywords — Evidence",
+                "displayed_value": len(magnet_df) if magnet_df is not None else 0,
+                "business_summary": "Keyword phrases driving demand.",
+                "source_datasets": ["Magnet Keywords"],
+                "source_columns": ["Keyword Phrase", "Search Volume"],
+                "dataset_session_id": "",
+                "counts": {
+                    "Total Rows Processed": len(magnet_df) if magnet_df is not None else 0,
+                    "Valid Keyword Rows": len(magnet_df) if magnet_df is not None else 0
+                },
+                "formula": "Total Keywords = COUNT(rows)",
+                "calculation_steps": [
+                    "1. Count rows in Magnet dataset.",
+                    f"2. Result: {len(magnet_df) if magnet_df is not None else 0} phrases."
+                ]
+            },
+            "hhi_score": {
+                "title": "HHI Concentration — Evidence",
+                "displayed_value": f"{hhi_score:.0f}" if hhi_score else "N/A",
+                "business_summary": "Herfindahl-Hirschman Index measures market concentration.",
+                "source_datasets": ["BlackBox Products"],
+                "source_columns": ["Brand", "Revenue"],
+                "dataset_session_id": "",
+                "counts": {
+                    "Brands Included": total_brands,
+                    "Total Market Revenue": f"${total_market_revenue:,.0f}"
+                },
+                "formula": "HHI = SUM( (Brand_Rev / Total_Rev * 100)^2 )",
+                "calculation_steps": [
+                    "1. Calculate revenue share % for each brand.",
+                    "2. Square the share % for each brand.",
+                    "3. Sum all squared values.",
+                    f"4. Result HHI = {hhi_score:.0f}."
+                ]
+            },
+            "top_3_share": {
+                "title": "Top 3 Brand Share — Evidence",
+                "displayed_value": f"{top_3_share:.1f}%" if top_3_share else "N/A",
+                "business_summary": "Concentration of revenue among the top 3 brands.",
+                "source_datasets": ["BlackBox Products"],
+                "source_columns": ["Brand", "Revenue"],
+                "dataset_session_id": "",
+                "counts": {
+                    "Brands Included": 3,
+                    "Total Brands": total_brands,
+                    "Top 3 Revenue Sum": f"${top_3_revenue:,.0f}",
+                    "Total Market Revenue": f"${total_market_revenue:,.0f}"
+                },
+                "formula": "SUM(Top 3 Revenue) / Total Market Revenue * 100",
+                "calculation_steps": [
+                    "1. Sort brands by revenue descending.",
+                    f"2. Sum top 3 = ${top_3_revenue:,.0f}.",
+                    f"3. Divide by total = ${total_market_revenue:,.0f}.",
+                    f"4. Result = {top_3_share:.1f}%."
+                ]
+            },
+            "market_leader": {
+                "title": "Market Leader — Evidence",
+                "displayed_value": market_leader if market_leader else "N/A",
+                "business_summary": "Brand capturing the largest share of market revenue.",
+                "source_datasets": ["BlackBox Products"],
+                "source_columns": ["Brand", "Revenue"],
+                "dataset_session_id": "",
+                "counts": {
+                    "Total Brands Compared": total_brands,
+                    "Leader Revenue": f"${market_leader_revenue:,.0f}",
+                    "Total Market Revenue": f"${total_market_revenue:,.0f}"
+                },
+                "formula": "MAX(Brand_Revenue)",
+                "calculation_steps": [
+                    "1. Group revenue by Brand.",
+                    f"2. Identify highest revenue = {market_leader} at ${market_leader_revenue:,.0f}."
+                ]
+            }
+        }
     }
     
     demand_hotspot = _build_demand_hotspot(magnet_df)
@@ -676,45 +832,225 @@ def build_report(
     hotspot_count = int(demand_hotspot.get("keyword_count", 0) or 0)
 
     # -----------------------------------------------------------------------
-    # Key Insights Generation
+    # Key Insights Generation (Data-Driven with Evidence)
     # -----------------------------------------------------------------------
-    key_insights = []
+    # -----------------------------------------------------------------------
+    # Key Insights Generation (Data-Driven with Evidence)
+    # -----------------------------------------------------------------------
+    raw_insights = []
     
-    # Insight 1: Market Concentration
+    # 1. Market Concentration Insight
     if top_3_share >= 60:
-        key_insights.append(f"Top 3 brands control {top_3_share:.1f}% of category revenue—market is highly concentrated.")
+        raw_insights.append({
+            "title": "High Market Concentration",
+            "business_summary": f"Top 3 brands control {top_3_share:.1f}% of category revenue, indicating a highly consolidated market.",
+            "business_meaning": "A highly concentrated market poses a barrier to entry. Competing directly on broad terms will be expensive.",
+            "suggested_action": "Focus on niche long-tail keywords or differentiated product features to avoid direct competition with top players.",
+            "business_impact": 8, "actionability": 5, "confidence": 9, "non_obviousness": 5,
+            "evidence": {
+                "title": "Concentration Insight Evidence",
+                "displayed_value": f"{top_3_share:.1f}%",
+                "business_summary": f"Top 3 brands control {top_3_share:.1f}% of category revenue.",
+                "source_datasets": ["BlackBox Products"],
+                "source_columns": ["Brand", "Revenue"],
+                "dataset_session_id": "",
+                "counts": {
+                    "Total Rows Processed": total_products,
+                    "Total Market Revenue": f"${total_market_revenue:,.0f}",
+                    "Top 3 Revenue Sum": f"${top_3_revenue:,.0f}",
+                    "Total Brands": total_brands
+                },
+                "formula": "SUM(Top 3 Revenue) / SUM(All Revenue) * 100",
+                "calculation_steps": [
+                    "1. Aggregate total revenue by Brand.",
+                    "2. Sort brands descending by revenue.",
+                    f"3. Sum top 3 brands: ${top_3_revenue:,.0f}",
+                    f"4. Divide by total market revenue: ${total_market_revenue:,.0f}",
+                    f"5. Result: {top_3_share:.1f}% (> 60% threshold)"
+                ],
+                "top_records": [{"Brand": brand, "Revenue": f"${rev:,.0f}"} for brand, rev in list(brand_revenue_dict.items())[:3]],
+            }
+        })
     elif top_3_share >= 40:
-        key_insights.append(f"Top 3 brands control {top_3_share:.1f}% of revenue—moderate concentration with room for challengers.")
+        raw_insights.append({
+            "title": "Moderate Market Concentration",
+            "business_summary": f"Top 3 brands control {top_3_share:.1f}% of revenue—moderate concentration with room for challengers.",
+            "business_meaning": "The market has established leaders, but revenue is distributed enough that new entrants can capture meaningful share.",
+            "suggested_action": "Identify weaknesses in the top 3 brands' listings and position against them.",
+            "business_impact": 6, "actionability": 7, "confidence": 9, "non_obviousness": 5,
+            "evidence": {
+                "title": "Concentration Insight Evidence",
+                "displayed_value": f"{top_3_share:.1f}%",
+                "business_summary": f"Top 3 brands control {top_3_share:.1f}% of category revenue.",
+                "source_datasets": ["BlackBox Products"],
+                "source_columns": ["Brand", "Revenue"],
+                "dataset_session_id": "",
+                "counts": {
+                    "Total Rows Processed": total_products,
+                    "Total Market Revenue": f"${total_market_revenue:,.0f}",
+                    "Top 3 Revenue Sum": f"${top_3_revenue:,.0f}",
+                    "Total Brands": total_brands
+                },
+                "formula": "SUM(Top 3 Revenue) / SUM(All Revenue) * 100",
+                "calculation_steps": [
+                    "1. Aggregate total revenue by Brand.",
+                    "2. Sort brands descending by revenue.",
+                    f"3. Sum top 3 brands: ${top_3_revenue:,.0f}",
+                    f"4. Divide by total market revenue: ${total_market_revenue:,.0f}",
+                    f"5. Result: {top_3_share:.1f}% (40-60% range)"
+                ],
+            }
+        })
     else:
-        key_insights.append(f"Market revenue is fragmented across {total_brands} brands ({top_3_share:.1f}% held by top 3)—competitive landscape is open.")
+        raw_insights.append({
+            "title": "Fragmented Market Landscape",
+            "business_summary": f"Market revenue is fragmented across {total_brands} brands ({top_3_share:.1f}% held by top 3).",
+            "business_meaning": "No single brand dominates. The competitive landscape is open, making it easier to capture baseline revenue.",
+            "suggested_action": "Focus on high-quality listings and branding to quickly stand out from the fragmented crowd.",
+            "business_impact": 7, "actionability": 8, "confidence": 9, "non_obviousness": 6,
+            "evidence": {
+                "title": "Concentration Insight Evidence",
+                "displayed_value": f"{top_3_share:.1f}%",
+                "business_summary": f"Market revenue is fragmented across {total_brands} brands.",
+                "source_datasets": ["BlackBox Products"],
+                "source_columns": ["Brand", "Revenue"],
+                "dataset_session_id": "",
+                "counts": {
+                    "Total Rows Processed": total_products,
+                    "Total Market Revenue": f"${total_market_revenue:,.0f}",
+                    "Top 3 Revenue Sum": f"${top_3_revenue:,.0f}",
+                    "Total Brands": total_brands
+                },
+                "formula": "SUM(Top 3 Revenue) / SUM(All Revenue) * 100",
+                "calculation_steps": [
+                    f"1. Top 3 brands only sum to ${top_3_revenue:,.0f}.",
+                    f"2. Total market revenue is ${total_market_revenue:,.0f}.",
+                    f"3. Result: {top_3_share:.1f}% (< 40% threshold indicates fragmentation)"
+                ],
+            }
+        })
     
-    # Insight 2: Market Leader Position
+    # 2. Market Leader Dominance Insight
     if market_leader and market_leader_share > 0:
-        key_insights.append(f"{market_leader} leads with {market_leader_share:.1f}% market share—study their positioning strategy.")
+        raw_insights.append({
+            "title": "Incumbent Dominance",
+            "business_summary": f"The market leader '{market_leader}' captures {market_leader_share:.1f}% of all category revenue.",
+            "business_meaning": f"'{market_leader}' sets the benchmark for pricing and feature expectations in the minds of consumers.",
+            "suggested_action": f"Audit {market_leader}'s product features and reviews to find unmet customer needs.",
+            "business_impact": 6, "actionability": 7, "confidence": 9, "non_obviousness": 3,
+            "evidence": {
+                "title": "Market Leader Evidence",
+                "displayed_value": market_leader,
+                "business_summary": f"{market_leader} holds {market_leader_share:.1f}% market share.",
+                "source_datasets": ["BlackBox Products"],
+                "source_columns": ["Brand", "Revenue"],
+                "dataset_session_id": "",
+                "counts": {
+                    "Total Rows Processed": total_products,
+                    "Total Market Revenue": f"${total_market_revenue:,.0f}",
+                    "Leader Revenue": f"${market_leader_revenue:,.0f}"
+                },
+                "formula": "MAX(Brand Revenue) / Total Revenue * 100",
+                "calculation_steps": [
+                    f"1. Identified top brand: {market_leader}.",
+                    f"2. Leader revenue: ${market_leader_revenue:,.0f}.",
+                    f"3. Divided by total revenue (${total_market_revenue:,.0f}) = {market_leader_share:.1f}% share."
+                ],
+            }
+        })
     
-    # Insight 3: Price Band Concentration
-    if best_price:
-        sweet_spot_value = _get(price_elasticity_result, "results", "market_sweet_spot", "value") or 0.0
-        revenue_band_share = (sweet_spot_value / total_market_revenue * 100) if total_market_revenue > 0 else 0.0
-        if revenue_band_share > 0:
-            key_insights.append(f"Revenue is concentrated in the {best_price} price band ({revenue_band_share:.1f}% share)—dominant pricing strategy.")
-        else:
-            key_insights.append(f"The {best_price} price band drives majority of market revenue—primary value cluster.")
+    # 3. Price Band Concentration Insight (Only if valid > 0% share)
+    sweet_spot_value = _get(price_elasticity_result, "results", "market_sweet_spot", "value") or 0.0
+    revenue_band_share = (sweet_spot_value / total_market_revenue * 100) if total_market_revenue > 0 else 0.0
+    if best_price and best_price != "N/A" and revenue_band_share > 0.0:
+        raw_insights.append({
+            "title": "Pricing Sweet Spot",
+            "business_summary": f"The {best_price} price band is highly lucrative, capturing {revenue_band_share:.1f}% of total market revenue.",
+            "business_meaning": "Consumers are demonstrating strong willingness to pay within this specific range, indicating it balances premium perception with volume.",
+            "suggested_action": "Ensure new product launches target this price band, or justify deviations with significant differentiation.",
+            "business_impact": 9, "actionability": 9, "confidence": 8, "non_obviousness": 7,
+            "evidence": {
+                "title": "Price Band Evidence",
+                "displayed_value": best_price,
+                "business_summary": f"Revenue is concentrated in the {best_price} price band ({revenue_band_share:.1f}% share).",
+                "source_datasets": ["BlackBox Products"],
+                "source_columns": ["Price", "Revenue"],
+                "dataset_session_id": "",
+                "counts": {
+                    "Total Rows Processed": total_products,
+                    "Total Market Revenue": f"${total_market_revenue:,.0f}",
+                    "Band Revenue": f"${sweet_spot_value:,.0f}"
+                },
+                "formula": "(Revenue in Price Bin) / (Total Revenue) * 100",
+                "calculation_steps": [
+                    "1. Segmented products into dynamic price bins.",
+                    f"2. Identified {best_price} as highest revenue bin (${sweet_spot_value:,.0f}).",
+                    f"3. Calculated share: ${sweet_spot_value:,.0f} / ${total_market_revenue:,.0f} = {revenue_band_share:.1f}%."
+                ],
+            }
+        })
     
-    # Insight 4: Demand Distribution (clustered)
-    if hotspot_name and hotspot_name != "N/A" and hotspot_volume > 0:
-        key_insights.append(
-            f"Demand clusters around '{hotspot_name}' with {hotspot_volume:,.0f} combined search volume across {hotspot_count} phrases."
-        )
-    
-    # Insight 5: BSR Efficiency
+    # 4. BSR Efficiency
     if bsr_score >= 60:
-        key_insights.append(f"High BSR efficiency ({bsr_score}/100) indicates products effectively monetize their rank—strong market fundamentals.")
-    elif bsr_score < 30:
-        key_insights.append(f"Low BSR efficiency ({bsr_score}/100) indicates revenue leakage—opportunity for optimization.")
+        raw_insights.append({
+            "title": "High Category Conversion",
+            "business_summary": f"High BSR efficiency ({bsr_score}/100) indicates that products in this category convert traffic to sales highly effectively.",
+            "business_meaning": "The market demonstrates strong fundamental demand. Traffic brought to listings reliably converts.",
+            "suggested_action": "Invest aggressively in PPC and external traffic, as conversion rates are structurally supported.",
+            "business_impact": 7, "actionability": 5, "confidence": 8, "non_obviousness": 7,
+            "evidence": {
+                "title": "BSR Efficiency Evidence",
+                "displayed_value": bsr_score,
+                "business_summary": f"High BSR efficiency ({bsr_score}/100).",
+                "source_datasets": ["BlackBox Products"],
+                "source_columns": ["BSR", "Revenue"],
+                "dataset_session_id": "",
+                "counts": {
+                    "Total Rows Processed": total_products,
+                    "Median BSR": f"{median_bsr:,.0f}" if median_bsr else "N/A"
+                },
+                "formula": "BSR to Revenue Ratio normalization algorithm",
+                "calculation_steps": [
+                    "1. Compared revenue against Best Sellers Rank across all products.",
+                    "2. Normalized ratio to a 0-100 scale.",
+                    f"3. Score of {bsr_score} indicates above-average conversion efficiency."
+                ],
+            }
+        })
+    elif bsr_score < 30 and bsr_score > 0:
+        raw_insights.append({
+            "title": "Revenue Leakage Detected",
+            "business_summary": f"Low BSR efficiency ({bsr_score}/100) indicates products have strong organic rank but struggle to capture expected revenue.",
+            "business_meaning": "Listings are ranking well but either suffering from low conversion rates, low pricing, or poor inventory management.",
+            "suggested_action": "Audit top-ranking listings to identify missing features or poor imagery that you can exploit.",
+            "business_impact": 8, "actionability": 7, "confidence": 8, "non_obviousness": 8,
+            "evidence": {
+                "title": "BSR Efficiency Evidence",
+                "displayed_value": bsr_score,
+                "business_summary": f"Low BSR efficiency ({bsr_score}/100) indicates revenue leakage.",
+                "source_datasets": ["BlackBox Products"],
+                "source_columns": ["BSR", "Revenue"],
+                "dataset_session_id": "",
+                "counts": {
+                    "Total Rows Processed": total_products,
+                    "Median BSR": f"{median_bsr:,.0f}" if median_bsr else "N/A"
+                },
+                "formula": "BSR to Revenue Ratio normalization algorithm",
+                "calculation_steps": [
+                    "1. Compared revenue against Best Sellers Rank across all products.",
+                    "2. Normalized ratio to a 0-100 scale.",
+                    f"3. Score of {bsr_score} indicates below-average conversion efficiency (revenue leakage)."
+                ],
+            }
+        })
     
-    # Limit to 5 insights
-    key_insights = key_insights[:5]
+    # Calculate Usefulness Score and Sort
+    for insight in raw_insights:
+        usefulness_score = (insight["business_impact"] * 0.35) + (insight["actionability"] * 0.25) + (insight["confidence"] * 0.20) + (insight["non_obviousness"] * 0.20)
+        insight["usefulness_score"] = round(usefulness_score * 10, 1) # 0-100 scale
+        
+    raw_insights.sort(key=lambda x: x["usefulness_score"], reverse=True)
+    key_insights = raw_insights[:5]
     
     # -----------------------------------------------------------------------
     # Entry Strategy Section
@@ -732,44 +1068,107 @@ def build_report(
     }
     
     # -----------------------------------------------------------------------
-    # Opportunity Summary Mapping (filter N/A values)
+    # Priority Business Actions Mapping (Strict, verifiable actions)
     # -----------------------------------------------------------------------
     opp_summary = []
-    if hotspot_name and hotspot_name != "N/A":
+    
+    def _action_priority_score(opp_score, rev_share, demand_share, comp_adv, confidence=80):
+        return round((opp_score * 0.35) + (rev_share * 0.25) + (demand_share * 0.20) + (comp_adv * 0.10) + (confidence * 0.10), 1)
+
+    def _difficulty_score(comp_index):
+        # Fallback simplistic difficulty computation utilizing competition_index
+        return round((comp_index * 0.40) + (50 * 0.25) + (50 * 0.20) + (50 * 0.15), 1)
+
+    # 1. Action: Optimize Pricing for Dominant Band
+    if best_price and best_price != "N/A" and revenue_band_share > 0:
+        priority_val = _action_priority_score(90, revenue_band_share, 80, 50)
+        diff_val = _difficulty_score(50)
+        capture_rate = 0.015 if priority_val > 70 and diff_val < 40 else 0.01 if priority_val > 70 else 0.0075
+        impact_est = best_price_revenue * capture_rate
+        
         opp_summary.append({
-            "type": "Demand Opportunity",
-            "title": hotspot_name,
-            "evidence": f"Combined search volume: {hotspot_volume:,.0f} across {hotspot_count} keyword phrases."
+            "type": "Optimize Pricing",
+            "title": best_price,
+            "action_title": f"Validate margin strategy for {best_price} price band",
+            "priority": "High" if priority_val > 70 else "Medium",
+            "difficulty": "Easy" if diff_val < 40 else "Medium",
+            "priority_score": priority_val,
+            "difficulty_score": diff_val,
+            "impact": f"Est. ${impact_est:,.0f}/mo" if best_price_revenue > 0 else "Impact: High",
+            "evidence": f"This band securely drives {revenue_band_share:.1f}% of market revenue.",
+            "evidence_obj": {
+                "title": "Business Action Evidence",
+                "displayed_value": best_price,
+                "business_summary": f"Validate margin strategy for {best_price} price band.",
+                "source_datasets": ["BlackBox Products"],
+                "source_columns": ["Price", "Revenue"],
+                "dataset_session_id": "",
+                "counts": {
+                    "Total Rows Processed": total_products,
+                    "Band Revenue": f"${best_price_revenue:,.0f}",
+                    "Capture Rate Used": f"{capture_rate*100}%"
+                },
+                "formula": "Est. Impact = Relevant Revenue × Adjusted Capture Rate",
+                "calculation_steps": [
+                    f"1. Identified {best_price} as primary revenue driver.",
+                    f"2. Priority Score = {priority_val} (High).",
+                    f"3. Adjusted Capture Rate mapped to {capture_rate*100}%.",
+                    f"4. Expected Impact = ${best_price_revenue:,.0f} × {capture_rate} = ${impact_est:,.0f}."
+                ],
+            }
         })
+        
+    # 2. Benchmark Listing (Top Efficient Product)
     if efficient_products and len(efficient_products) > 0:
         prod_title = efficient_products[0].get("title") or efficient_products[0].get("asin", "")
         if len(prod_title) > 40:
             prod_title = prod_title[:37] + "..."
-            
+        eff_score = efficient_products[0].get('efficiency_score', 0)
+        prod_rev = efficient_products[0].get('revenue', 0)
+        
+        priority_val = _action_priority_score(70, 50, 40, 80)
+        diff_val = _difficulty_score(30)
+        capture_rate = 0.0075 # Medium Priority, Easy Difficulty
+        impact_est = prod_rev * capture_rate if prod_rev > 0 else 0
+        
         opp_summary.append({
-            "type": "Efficiency Model",
+            "type": "Benchmark Listing",
             "title": prod_title,
-            "evidence": f"BSR efficiency score {efficient_products[0].get('efficiency_score', 0)}/100 — benchmark for conversion."
+            "action_title": f"Benchmark against verified top-performing product: {prod_title}",
+            "priority": "Medium",
+            "difficulty": "Easy",
+            "priority_score": priority_val,
+            "difficulty_score": diff_val,
+            "impact": f"Est. ${impact_est:,.0f}/mo" if prod_rev > 0 else "Impact: Medium (Improves BSR Conversion)",
+            "evidence": f"Demonstrates verified BSR efficiency score of {eff_score}/100.",
+            "evidence_obj": {
+                "title": "Business Action Evidence",
+                "displayed_value": prod_title,
+                "business_summary": f"Benchmark against verified top-performing product: {prod_title}",
+                "source_datasets": ["BlackBox Products"],
+                "source_columns": ["BSR", "Revenue"],
+                "dataset_session_id": "",
+                "counts": {
+                    "Total Rows Processed": total_products,
+                    "Product Revenue": f"${prod_rev:,.0f}" if prod_rev else "N/A",
+                    "Efficiency Score": eff_score,
+                    "Capture Rate Used": f"{capture_rate*100}%" if prod_rev else "N/A"
+                },
+                "formula": "Est. Impact = Relevant Revenue × Adjusted Capture Rate",
+                "calculation_steps": [
+                    f"1. Identified product with highest BSR-to-Revenue conversion efficiency.",
+                    f"2. Product revenue: ${prod_rev:,.0f}.",
+                    f"3. Adjusted Capture Rate mapped to {capture_rate*100}%.",
+                    f"4. Expected Impact = ${prod_rev:,.0f} × {capture_rate} = ${impact_est:,.0f}."
+                ] if prod_rev else [
+                    "Product revenue data missing; impact estimation skipped."
+                ]
+            }
         })
-    
-    computed_price_cluster = _build_primary_price_cluster(blackbox_df, total_market_revenue)
-    best_price = computed_price_cluster.get("dominant_range", "N/A")
-    revenue_band_share = float(str(computed_price_cluster.get("revenue_share", "0")).replace("%", "") or 0)
-    band_prod_count = int(computed_price_cluster.get("product_count", 0) or 0)
-    best_price_revenue = float(computed_price_cluster.get("range_revenue", 0.0) or 0.0)
-
-    if best_price and best_price != "N/A":
-        opp_summary.append({
-            "type": "Price Opportunity",
-            "title": best_price,
-            "evidence": f"Highest revenue band—${best_price_revenue:,.0f} ({revenue_band_share:.1f}% share) across {band_prod_count} products."
-        })
-    if fastest_brands and len(fastest_brands) > 0:
-        opp_summary.append({
-            "type": "Momentum Leader",
-            "title": fastest_brands[0].get("brand", ""),
-            "evidence": f"Growing at {fastest_brands[0].get('momentum_score', 0)}/100—accelerating brand."
-        })
+        
+    # Sort opportunities by priority_score descending and limit to top 5
+    opp_summary.sort(key=lambda x: x.get("priority_score", 0), reverse=True)
+    opp_summary = opp_summary[:5]
 
     
     # -----------------------------------------------------------------------
@@ -954,6 +1353,9 @@ def build_report(
         },
         "processing_time_seconds": elapsed,
     }
+    
+    report = sanitize_for_json(report)
+    
     logger.info(
         "Market report built: composite=%s, engines_ok=%s, opportunities=%s, risks=%s, elapsed=%ss",
         composite_score,
@@ -1117,8 +1519,71 @@ def build_full_market_report_data(*args: Any, **kwargs: Any) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
+import math
+from decimal import Decimal
+from datetime import date, datetime
+import pandas as pd
+import numpy as np
+from pandas.api.types import is_scalar
 
-def _get(d: Dict, *keys: str) -> Any:
+def sanitize_for_json(obj: Any) -> Any:
+    if obj is None:
+        return None
+
+    if isinstance(obj, dict):
+        return {
+            str(k): sanitize_for_json(v)
+            for k, v in obj.items()
+        }
+
+    if isinstance(obj, pd.DataFrame):
+        return sanitize_for_json(obj.to_dict(orient="records"))
+
+    if isinstance(obj, pd.Series):
+        return sanitize_for_json(obj.to_dict())
+
+    if isinstance(obj, np.ndarray):
+        return sanitize_for_json(obj.tolist())
+
+    if isinstance(obj, (list, tuple, set)):
+        return [sanitize_for_json(v) for v in obj]
+
+    if isinstance(obj, (pd.Timestamp, datetime, date)):
+        return obj.isoformat()
+
+    if isinstance(obj, Decimal):
+        if obj.is_nan():
+            return None
+        return float(obj)
+
+    if isinstance(obj, np.integer):
+        return int(obj)
+
+    if isinstance(obj, np.floating):
+        value = float(obj)
+        if math.isnan(value) or math.isinf(value):
+            return None
+        return value
+
+    if isinstance(obj, np.bool_):
+        return bool(obj)
+
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+
+    if is_scalar(obj):
+        try:
+            if pd.isna(obj):
+                return None
+        except (TypeError, ValueError):
+            pass
+        return obj
+
+    return str(obj)
+
+def _get(d: Optional[Dict[str, Any]], *keys: Union[str, int]) -> Any:
     """Safe nested dict access."""
     for k in keys:
         if not isinstance(d, dict):

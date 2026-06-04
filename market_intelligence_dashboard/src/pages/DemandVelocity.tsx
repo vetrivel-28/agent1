@@ -10,7 +10,6 @@ import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip as RechartsTo
 
 import { PageHeader } from '../components/layout/PageHeader';
 import { PageSection } from '../components/layout/PageSection';
-import { ExecutiveNarrative } from '../components/intelligence/ExecutiveNarrative';
 import { ChartContainer } from '../components/ui/ChartContainer';
 import { DashboardSkeleton } from '../components/ui/Skeletons';
 import { isEngineOk, getEngineErrorMessage } from '../utils/analysisStatus';
@@ -57,9 +56,7 @@ export default function DemandVelocity() {
         description="Measures how fast market demand is accelerating by combining sales trajectories, search intent trends, and year-over-year momentum."
       />
 
-      <ExecutiveNarrative content={narrative} />
-
-      <PageSection title="1. Macro Trajectory Metrics" icon={Activity}>
+      <PageSection title="1. Macro Trajectory Metrics">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <Card className="flex flex-col items-center justify-center p-8 border-border/40 bg-card">
             <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-4">Overall Velocity Score</span>
@@ -84,7 +81,7 @@ export default function DemandVelocity() {
         </div>
       </PageSection>
 
-      <PageSection title="2. Velocity Spectrum" icon={TrendingUp}>
+      <PageSection title="2. Velocity Spectrum">
         <ChartContainer 
           title="Growth Accelerators vs Decelerators"
           xAxisLabel="Signal Name"
@@ -107,7 +104,7 @@ export default function DemandVelocity() {
         </ChartContainer>
       </PageSection>
 
-      <PageSection title="3. Signal Breakdown" icon={Activity}>
+      <PageSection title="3. Signal Breakdown">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <Card className="border-success/20 bg-card">
             <CardContent className="p-0">

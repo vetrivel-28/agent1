@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../services/api';
 import { Card, CardContent } from '../components/ui/Card';
@@ -7,12 +7,13 @@ import { isEngineOk, getEngineErrorMessage } from '../utils/analysisStatus';
 import { AlertCircle, Target, Users } from 'lucide-react';
 import { formatCurrency } from '../utils/cn';
 
-import { PageHeader } from '../components/layout/PageHeader';
 import { PageSection } from '../components/layout/PageSection';
-import { ExecutiveNarrative } from '../components/intelligence/ExecutiveNarrative';
 import { DashboardSkeleton } from '../components/ui/Skeletons';
+import { EvidenceModal, type EvidenceData } from '../components/ui/EvidenceModal';
 
 export default function DirectCompetitors() {
+  const [selectedEvidence, setSelectedEvidence] = useState<EvidenceData | null>(null);
+  
   const { data, isLoading, isError } = useQuery({
     queryKey: ['direct-competitors'],
     queryFn: () => api.getDirectCompetitors(15, 17.5),
@@ -36,15 +37,40 @@ export default function DirectCompetitors() {
   const items = (results.direct_competitors || []).flatMap((r: any) => r.top_competitors || []);
   const top_items = items.slice(0, 10);
 
-  const narrative = top_items.length > 0 
-    ? `The top direct competitor is ${top_items[0].title || top_items[0].brand || 'N/A'}, scoring ${Number(top_items[0].similarity_score || 0).toFixed(1)}/100 for market similarity. Tracking these peers is critical for pricing strategy and listing optimization.`
-    : `No highly similar competitive products could be identified based on current market data.`;
+  const createProductEvidence = (item: any, rank: number): EvidenceData => {
+    const score = Number(item.similarity_score) || 0;
+    return {
+      title: `Direct Product #${rank}: ${item.title || item.brand || 'Unknown'}`,
+      displayed_value: `Similarity: ${score.toFixed(1)}/100`,
+      source_datasets: ['BlackBox'],
+      source_columns: ['Title', 'Brand', 'ASIN', 'Category', 'Subcategory', 'Price', 'Revenue', 'Sales', 'Review Count'],
+      source_row_count: 1,
+      formula: 'Similarity score based on category overlap, functional use case, price band proximity, and keyword classification match',
+      calculation_steps: [
+        'Match product title against category and subcategory patterns',
+        'Compare functional use case and customer intent',
+        'Evaluate price band proximity',
+        'Score keyword classification overlap',
+        'Compute weighted composite similarity (0-100)'
+      ],
+      top_records: [{
+        title: item.title || item.reference_title || 'Unknown Product',
+        brand: item.brand || 'N/A',
+        asin: item.asin || 'N/A',
+        category: item.category || 'N/A',
+        subcategory: item.subcategory || 'N/A',
+        price: item.price ? formatCurrency(item.price) : 'N/A',
+        similarity_score: score.toFixed(1),
+      }],
+      classification_reason: item.reason || 'High similarity based on functional category and pricing overlap',
+      confidence_note: 'Direct products identified from BlackBox dataset using category, brand, price, and functional similarity matching',
+      llm_used: false
+    };
+  };
 
   return (
     <div className="space-y-4">
-      <ExecutiveNarrative content={narrative} />
-
-      <PageSection title="Top 10 Similar Products" icon={Users}>
+      <PageSection title="Direct Products">
         {top_items.length === 0 ? (
           <Card className="mt-4 border-dashed border-border/50 bg-card">
             <CardContent className="p-10 flex flex-col items-center text-center text-muted-foreground">
@@ -59,7 +85,12 @@ export default function DirectCompetitors() {
               let titleText = item.title || item.reference_title || 'Unknown Product';
               
               return (
-                <Card key={idx} className="overflow-hidden border-l-4 bg-card" style={{borderLeftColor: 'hsl(var(--primary))'}}>
+                <Card 
+                  key={idx} 
+                  className="overflow-hidden border-l-4 bg-card cursor-pointer hover:border-primary/70 hover:shadow-md transition-all" 
+                  style={{borderLeftColor: 'hsl(var(--primary))'}}
+                  onClick={() => setSelectedEvidence(createProductEvidence(item, idx + 1))}
+                >
                   <CardContent className="p-5 flex flex-col md:flex-row items-start gap-4">
                     <div className="flex items-center justify-center bg-primary/10 text-primary font-bold text-xl rounded-full w-12 h-12 shrink-0">
                       #{idx + 1}
@@ -74,11 +105,12 @@ export default function DirectCompetitors() {
                       </div>
                       
                       <div className="mt-3 p-3 bg-muted/20 rounded-md text-sm border border-border/40">
-                        <span className="font-bold uppercase text-[10px] tracking-widest text-primary mr-2">Why?</span> 
+                        <span className="font-bold uppercase text-[10px] tracking-widest text-primary mr-2">Why Direct Product:</span> 
                         <span className="text-foreground/80 font-medium">
-                          {item.reason || "High similarity based on functional category and pricing overlap."}
+                          {item.reason || "High similarity based on functional category and pricing overlap"}
                         </span>
                       </div>
+                      <p className="text-xs text-muted-foreground italic">Click card to see full evidence</p>
                     </div>
                     
                     <div className="flex flex-col items-end justify-center shrink-0 min-w-[100px] p-2 bg-muted/10 rounded-lg border border-border/30">
@@ -92,6 +124,12 @@ export default function DirectCompetitors() {
           </div>
         )}
       </PageSection>
+
+      <EvidenceModal
+        isOpen={!!selectedEvidence}
+        onClose={() => setSelectedEvidence(null)}
+        evidence={selectedEvidence}
+      />
     </div>
   );
 }
