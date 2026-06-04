@@ -46,8 +46,31 @@ type MetricBlock = {
   missing_columns?: string[];
   component_scores?: Record<string, number>;
   evidence?: Record<string, { column: string; avg_value: number; normalized_score: number; weight: number; interpretation: string }>;
-  entry_difficulty?: { score: number; classification: string; components: Array<{component: string; score: number; weight: number}>; components_missing?: string[]; };
-  entry_cost_index?: { score: number; classification: string; components: Array<{component: string; score: number; weight: number}>; components_missing?: string[]; };
+  // Entry metric sub-blocks (from API)
+  entry_difficulty?: {
+    score: number;
+    classification: string;
+    components: Array<{component: string; score: number; weight: number}>;
+    components_missing?: string[];
+    data_confidence?: number;
+    confidence_label?: string;
+    low_score_note?: string;
+    formula?: string;
+  };
+  entry_cost_index?: {
+    score: number;
+    classification: string;
+    components: Array<{component: string; score: number; weight: number}>;
+    components_missing?: string[];
+    data_confidence?: number;
+    confidence_label?: string;
+    low_score_note?: string;
+    formula?: string;
+  };
+  // Confidence fields (directly on MetricBlock when flattened)
+  data_confidence?: number;
+  confidence_label?: string;
+  low_score_note?: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -116,6 +139,18 @@ function EvidenceDrawer({ title, metric, onClose }: { title: string; metric: Met
   const entryDifficulty = metric.entry_difficulty;
   const entryCostIndex = metric.entry_cost_index;
 
+  // Confidence — prefer sub-block value, fall back to top-level
+  const confidence = metric.data_confidence ?? entryDifficulty?.data_confidence ?? entryCostIndex?.data_confidence;
+  const confidenceLabel = metric.confidence_label ?? entryDifficulty?.confidence_label ?? entryCostIndex?.confidence_label;
+  const lowScoreNote = metric.low_score_note ?? entryDifficulty?.low_score_note ?? entryCostIndex?.low_score_note;
+  // Formula from sub-block if top-level not set
+  const subFormula = entryDifficulty?.formula ?? entryCostIndex?.formula;
+  const displayFormula = formula || subFormula || '';
+
+  const confColor = confidenceLabel === 'High' ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/30'
+    : confidenceLabel === 'Medium' ? 'bg-yellow-500/10 text-yellow-600 border-yellow-500/30'
+    : 'bg-red-500/10 text-red-600 border-red-500/30';
+
   return (
     <div className="fixed inset-0 z-50 bg-black/50 flex items-end md:items-center justify-center p-4">
       <motion.div
@@ -132,19 +167,39 @@ function EvidenceDrawer({ title, metric, onClose }: { title: string; metric: Met
         </div>
         <div className="p-5 space-y-5">
           {score != null && (
-            <div className="flex items-center gap-3 p-4 bg-muted/30 rounded-xl">
-              <span className="text-3xl font-black font-mono">{score.toFixed(0)}</span>
-              <div>
-                <p className="text-xs text-muted-foreground uppercase tracking-wide">Final Score / 100</p>
-                <p className={cn('text-sm font-semibold', classColor(metric.classification ?? ''))}>{metric.classification}</p>
+            <div className="flex flex-col gap-2 p-4 bg-muted/30 rounded-xl">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <span className="text-3xl font-black font-mono">{score.toFixed(0)}</span>
+                  <div>
+                    <p className="text-xs text-muted-foreground uppercase tracking-wide">Final Score / 100</p>
+                    <p className={cn('text-sm font-semibold', classColor(metric.classification ?? ''))}>{metric.classification}</p>
+                  </div>
+                </div>
+                {confidenceLabel && (
+                  <span className={cn('text-xs font-bold px-2.5 py-1 rounded-full border', confColor)}>
+                    {confidenceLabel} confidence{confidence != null ? ` (${confidence.toFixed(0)}%)` : ''}
+                  </span>
+                )}
               </div>
+              <p className="text-xs text-muted-foreground italic border-t border-border/50 pt-2">
+                Note: {title.match(/Difficulty|Pressure|Risk|Cost|Barrier/i) ? 'For this metric, a lower score is better (represents less resistance or cost).' : 'For this metric, a higher score is better (represents stronger opportunity or health).'}
+              </p>
             </div>
           )}
 
-          {formula && (
+          {/* Guardrail: low score explanation */}
+          {lowScoreNote && (
+            <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+              <p className="text-xs font-bold text-amber-600 dark:text-amber-400 mb-1">Score Explanation</p>
+              <p className="text-xs text-amber-700 dark:text-amber-300 leading-relaxed">{lowScoreNote}</p>
+            </div>
+          )}
+
+          {displayFormula && (
             <div>
               <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">Formula</p>
-              <p className="text-sm text-foreground/80 leading-relaxed bg-muted/20 rounded-lg p-3 font-mono">{formula}</p>
+              <p className="text-sm text-foreground/80 leading-relaxed bg-muted/20 rounded-lg p-3 font-mono whitespace-pre-line">{displayFormula}</p>
             </div>
           )}
 
@@ -178,7 +233,14 @@ function EvidenceDrawer({ title, metric, onClose }: { title: string; metric: Met
           {/* Entry metrics sub-breakdown */}
           {entryDifficulty && (
             <div>
-              <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">Entry Difficulty Components</p>
+              <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">
+                Entry Difficulty Components
+                {entryDifficulty.data_confidence != null && (
+                  <span className="ml-2 font-normal text-muted-foreground">
+                    ({entryDifficulty.components.length} of 5 signals available — {entryDifficulty.data_confidence.toFixed(0)}% data coverage)
+                  </span>
+                )}
+              </p>
               <div className="space-y-2">
                 {entryDifficulty.components.map((c, i) => (
                   <div key={i} className="flex justify-between items-center p-2 border border-border rounded-lg">
@@ -187,7 +249,9 @@ function EvidenceDrawer({ title, metric, onClose }: { title: string; metric: Met
                   </div>
                 ))}
                 {(entryDifficulty.components_missing ?? []).length > 0 && (
-                  <p className="text-xs text-muted-foreground">Missing: {(entryDifficulty.components_missing ?? []).join(', ')}</p>
+                  <div className="p-2 bg-muted/30 rounded text-xs text-muted-foreground">
+                    Missing signals: {(entryDifficulty.components_missing ?? []).join(', ')} — weights re-normalised across available signals.
+                  </div>
                 )}
               </div>
             </div>
@@ -195,7 +259,14 @@ function EvidenceDrawer({ title, metric, onClose }: { title: string; metric: Met
 
           {entryCostIndex && (
             <div>
-              <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">Entry Cost Index Components</p>
+              <p className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-2">
+                Entry Cost Index Components
+                {entryCostIndex.data_confidence != null && (
+                  <span className="ml-2 font-normal text-muted-foreground">
+                    ({entryCostIndex.components.length} of 5 signals available — {entryCostIndex.data_confidence.toFixed(0)}% data coverage)
+                  </span>
+                )}
+              </p>
               <div className="space-y-2">
                 {entryCostIndex.components.map((c, i) => (
                   <div key={i} className="flex justify-between items-center p-2 border border-border rounded-lg">
@@ -203,6 +274,11 @@ function EvidenceDrawer({ title, metric, onClose }: { title: string; metric: Met
                     <span className="text-sm font-mono font-bold">{c.score.toFixed(1)}/100</span>
                   </div>
                 ))}
+                {(entryCostIndex.components_missing ?? []).length > 0 && (
+                  <div className="p-2 bg-muted/30 rounded text-xs text-muted-foreground">
+                    Missing signals: {(entryCostIndex.components_missing ?? []).join(', ')} — weights re-normalised across available signals.
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -379,10 +455,13 @@ export default function FinanceIntelligence() {
         status: eci_raw.status,
         score: eci_raw.entry_difficulty.score,
         classification: eci_raw.entry_difficulty.classification,
-        formula_used: "Entry Difficulty = CPR×25% + Sponsored×15% + Competition×15% + Review×15% + Title Density×10% + Revenue Concentration×10% + PPC Bid×10%. Re-normalized for available signals. Percentile-based (5th–95th clip).",
-        columns_used: (eci_raw.entry_difficulty.components || []).map(c => c.component),
+        // formula_used intentionally left blank — entry_difficulty.formula carries it
+        columns_used: (eci_raw.entry_difficulty.components || []).map((c: any) => c.component),
         missing_columns: eci_raw.entry_difficulty.components_missing,
         entry_difficulty: eci_raw.entry_difficulty,
+        data_confidence: eci_raw.entry_difficulty.data_confidence,
+        confidence_label: eci_raw.entry_difficulty.confidence_label,
+        low_score_note: eci_raw.entry_difficulty.low_score_note,
         mini_insight: eci_raw.mini_insight,
       }
     : { status: 'insufficient_data' };
@@ -392,13 +471,19 @@ export default function FinanceIntelligence() {
         status: eci_raw.status,
         score: eci_raw.entry_cost_index.score,
         classification: eci_raw.entry_cost_index.classification,
-        formula_used: "Entry Cost Index = CPR×30% + PPC Bid×25% + Sponsored×20% + Review×15% + Competition×10%. Re-normalized for available signals.",
-        columns_used: (eci_raw.entry_cost_index.components || []).map(c => c.component),
+        columns_used: (eci_raw.entry_cost_index.components || []).map((c: any) => c.component),
         missing_columns: eci_raw.entry_cost_index.components_missing,
         entry_cost_index: eci_raw.entry_cost_index,
+        data_confidence: eci_raw.entry_cost_index.data_confidence,
+        confidence_label: eci_raw.entry_cost_index.confidence_label,
+        low_score_note: eci_raw.entry_cost_index.low_score_note,
         mini_insight: eci_raw.mini_insight,
       }
     : { status: 'insufficient_data' };
+
+  if (pvs_data && pvs_data.status === 'success') {
+    pvs_data.formula_used = "Top Quartile Revenue Share = revenue from top 25% priced products / total product revenue × 100.\nBottom Quartile Revenue Share = revenue from bottom 25% priced products / total product revenue × 100.\nPremium Advantage = Top Quartile Revenue Share - Bottom Quartile Revenue Share.\nClassification: below -10% = Low-price market, -10% to +10% = Balanced, above +10% = Premium-friendly.";
+  }
 
   const apiOk = metricOk(api_data);
   const pvsOk = metricOk(pvs_data);
@@ -416,9 +501,9 @@ export default function FinanceIntelligence() {
   const marketAttractivenessScore: number | null = healthOk ? Number(financeHealthBlock.finance_health ?? 0) : null;
   const marketAttractivenessLabel = marketAttractivenessScore == null ? '—'
     : marketAttractivenessScore >= 75 ? 'Highly Attractive'
-    : marketAttractivenessScore >= 55 ? 'Attractive'
-    : marketAttractivenessScore >= 35 ? 'Moderate'
-    : 'Challenging';
+    : marketAttractivenessScore >= 60 ? 'Attractive'
+    : marketAttractivenessScore >= 40 ? 'Mixed / Selective'
+    : 'Weak / Unattractive';
 
   // Market attractiveness evidence block for drawer
   const maEvidenceBlock: MetricBlock = {
@@ -457,9 +542,10 @@ export default function FinanceIntelligence() {
   };
 
   // Accessibility and competition cost from entry difficulty
+  const marketAccessibilityScore = edOk ? 100 - edScore! : null;
   const accessibilityLabel = !edOk ? 'Unavailable'
-    : edScore! <= 33 ? 'Accessible'
-    : edScore! <= 66 ? 'Moderately Accessible'
+    : marketAccessibilityScore! >= 66 ? 'Accessible'
+    : marketAccessibilityScore! >= 33 ? 'Moderately Accessible'
     : 'Difficult';
 
   const competitionCostLabel = !eciOk ? 'Unavailable'
@@ -467,14 +553,25 @@ export default function FinanceIntelligence() {
     : eciScore! <= 66 ? 'Moderate'
     : 'High';
 
-  // Opportunities and risks (evidence-backed only)
+  // Opportunities and risks — confidence-aware guardrails
+  const edConfidenceLabel = entry_difficulty_data.confidence_label ?? 'Low';
+  const eciConfidenceLabel = entry_cost_data.confidence_label ?? 'Low';
+  const edHighConf = edConfidenceLabel === 'High' || edConfidenceLabel === 'Medium';
+  const eciHighConf = eciConfidenceLabel === 'High' || eciConfidenceLabel === 'Medium';
+
   const opportunities: string[] = [];
   if (apiOk && api_data.classification === 'Low')
     opportunities.push(`Low advertising pressure (${apiScore!.toFixed(0)}/100) — ${api_data.mini_insight?.replace(/\.$/, '') ?? 'low cost to acquire visibility'}`);
   if (edOk && edScore! <= 33)
-    opportunities.push(`Entry difficulty is low (${edScore!.toFixed(0)}/100) — market is accessible to new entrants`);
+    opportunities.push(edHighConf
+      ? `Entry difficulty is low (${edScore!.toFixed(0)}/100) — market is accessible to new entrants`
+      : `Entry difficulty appears low (${edScore!.toFixed(0)}/100) — ${edConfidenceLabel.toLowerCase()} confidence based on available signals`
+    );
   if (eciOk && eciScore! <= 33)
-    opportunities.push(`Entry cost index is low (${eciScore!.toFixed(0)}/100) — competitive entry investment is manageable`);
+    opportunities.push(eciHighConf
+      ? `Entry cost index is low (${eciScore!.toFixed(0)}/100) — competitive entry investment is manageable`
+      : `Entry cost pressure appears low (${eciScore!.toFixed(0)}/100) — confidence limited due to missing cost data`
+    );
   if (pvsOk && pvsScore! >= 60)
     opportunities.push(`Price positioning potential is ${pvs_data.classification} (${pvsScore!.toFixed(0)}/100) — supports premium pricing`);
   if (marketAttractivenessScore != null && marketAttractivenessScore >= 60)
@@ -491,7 +588,8 @@ export default function FinanceIntelligence() {
     risks.push(`Entry cost index is high (${eciScore!.toFixed(0)}/100) — significant investment needed to compete`);
   if (marketRiskScore > 60)
     risks.push(`Market risk gauge elevated (${marketRiskScore.toFixed(0)}/100)${riskIsInverse ? ' — inverse of market attractiveness' : ''}`);
-  if (!apiOk && !edOk)
+  if ((edOk || eciOk) && (!edHighConf || !eciHighConf))
+    risks.push(`Entry analysis has ${edHighConf ? '' : 'low entry difficulty '}${!edHighConf && !eciHighConf ? 'and ' : ''}${eciHighConf ? '' : 'low entry cost '}data coverage — upload datasets with Review Count, Sponsored ASINs, CPR, and H10 PPC Sugg. Bid for higher confidence`);  if (!apiOk && !edOk)
     risks.push('Risk cannot be fully assessed — key columns (H10 PPC Sugg. Bid, Sponsored ASINs, CPR) are missing from uploaded data.');
 
   // Executive brief panels — match actual metric values
@@ -503,13 +601,25 @@ export default function FinanceIntelligence() {
         ? `Entry difficulty is ${entry_difficulty_data.classification} (${edScore!.toFixed(0)}/100). Advertising signals incomplete — upload Magnet with H10 PPC Sugg. Bid or Sponsored ASINs columns.`
         : 'Upload Magnet with H10 PPC Sugg. Bid, Sponsored ASINs, and CPR columns to generate market entry intelligence.';
 
-  const biggestBarrier = edOk && edScore! > 50
-    ? `Entry difficulty is ${entry_difficulty_data.classification} (${edScore!.toFixed(0)}/100) — competition and visibility signals are the primary obstacle.`
-    : apiOk && apiScore! > 50
-      ? `Advertising pressure is the primary challenge (${apiScore!.toFixed(0)}/100 — ${api_data.classification}).`
-      : risks.length > 0
-        ? risks[0]
-        : 'No dominant barrier identified from available signals.';
+  let highestBarrier = { name: '', score: 0 };
+  if (edOk && entry_difficulty_data.entry_difficulty?.components) {
+    entry_difficulty_data.entry_difficulty.components.forEach(c => {
+      if (c.score > highestBarrier.score) highestBarrier = { name: c.component, score: c.score };
+    });
+  }
+  if (eciOk && entry_cost_data.entry_cost_index?.components) {
+    entry_cost_data.entry_cost_index.components.forEach(c => {
+      if (c.score > highestBarrier.score) highestBarrier = { name: c.component, score: c.score };
+    });
+  }
+  if (apiOk && apiScore! > highestBarrier.score) {
+    highestBarrier = { name: 'Advertising Pressure', score: apiScore! };
+  }
+  const biggestBarrier = highestBarrier.score > 0
+    ? `${highestBarrier.name} is the primary challenge (${highestBarrier.score.toFixed(0)}/100).`
+    : risks.length > 0
+      ? risks[0]
+      : 'No dominant barrier identified from available signals.';
 
   const entryInvestment = apiOk
     ? `Entry investment requirement appears ${(api_data.capital_requirement ?? 'moderate').toLowerCase()} based on advertising pressure (${apiScore!.toFixed(0)}/100).`
@@ -592,29 +702,33 @@ export default function FinanceIntelligence() {
         <KpiCard
           title="Entry Difficulty"
           value={edOk ? (entry_difficulty_data.classification ?? '—') : 'Unavailable'}
-          sub={edOk ? `${edScore!.toFixed(0)}/100 · Click for evidence` : 'Missing: CPR, Sponsored ASINs, or similar'}
+          sub={edOk
+            ? `${edScore!.toFixed(0)}/100 · ${edConfidenceLabel} confidence · Click for evidence`
+            : 'Missing: Review Count, Sponsored ASINs, CPR, or PPC Bid'}
           icon={<DoorOpen className="w-4 h-4" />}
           color={edOk ? classColor(entry_difficulty_data.classification ?? '') : 'text-muted-foreground'}
           bg={edOk ? classBg(entry_difficulty_data.classification ?? '') : 'bg-muted border-border'}
           clickable onClick={() => setEvidenceFor({ title: 'Entry Difficulty', metric: entry_difficulty_data })}
         />
         <KpiCard
-          title="Competition Cost"
+          title="Entry Cost Index"
           value={competitionCostLabel}
-          sub={eciOk ? `Entry cost index ${eciScore!.toFixed(0)}/100 · Click for evidence` : 'Missing: PPC Bid, CPR, Sponsored ASINs'}
+          sub={eciOk
+            ? `${eciScore!.toFixed(0)}/100 · ${eciConfidenceLabel} confidence · Click for evidence`
+            : 'Missing: CPR, PPC Bid, Sponsored ASINs'}
           icon={<TrendingDown className="w-4 h-4" />}
           color={eciOk ? classColor(competitionCostLabel) : 'text-muted-foreground'}
           bg={eciOk ? classBg(competitionCostLabel) : 'bg-muted border-border'}
-          clickable onClick={() => setEvidenceFor({ title: 'Competition Cost / Entry Cost Index', metric: entry_cost_data })}
+          clickable onClick={() => setEvidenceFor({ title: 'Entry Cost Index', metric: entry_cost_data })}
         />
         <KpiCard
           title="Market Accessibility"
           value={accessibilityLabel}
-          sub={edOk ? `Based on entry difficulty ${edScore!.toFixed(0)}/100` : 'Awaiting entry difficulty signals'}
+          sub={edOk ? `Score: ${marketAccessibilityScore!.toFixed(0)}/100 · Click for evidence` : 'Awaiting entry difficulty signals'}
           icon={<Landmark className="w-4 h-4" />}
           color={edOk ? classColor(accessibilityLabel) : 'text-muted-foreground'}
           bg={edOk ? classBg(accessibilityLabel) : 'bg-muted border-border'}
-          clickable onClick={() => setEvidenceFor({ title: 'Market Accessibility', metric: entry_difficulty_data })}
+          clickable onClick={() => setEvidenceFor({ title: 'Market Accessibility', metric: {...entry_difficulty_data, score: marketAccessibilityScore, classification: accessibilityLabel, formula_used: 'Market Accessibility = 100 - Entry Difficulty Index'} })}
         />
         </div>
       </PageSection>

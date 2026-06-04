@@ -229,23 +229,21 @@ def compute_entry_metrics(
     components = component_data["components"]
     missing = component_data["missing_components"]
 
-    # Entry Difficulty weights: CPR 25%, Sponsored 15%, Competition 15%, Review 15%, Title 10%, Revenue 10%, PPC 10%
+    # Entry Difficulty weights (spec): Review×30%, Sponsored×25%, Competition×20%, PPC×15%, CPR×10%
     entry_difficulty_weights = {
-        "cpr_burden": 0.25,
-        "sponsored_pressure": 0.15,
-        "competition_density": 0.15,
-        "review_barrier": 0.15,
-        "title_density": 0.10,
-        "revenue_concentration": 0.10,
-        "ppc_bid_pressure": 0.10,
+        "review_barrier":      0.30,
+        "sponsored_pressure":  0.25,
+        "competition_density": 0.20,
+        "ppc_bid_pressure":    0.15,
+        "cpr_burden":          0.10,
     }
 
-    # Entry Cost Index weights: CPR 30%, PPC 25%, Sponsored 20%, Review 15%, Competition 10%
+    # Entry Cost Index weights (spec): CPR×30%, PPC×30%, Sponsored×20%, Review×10%, Competition×10%
     entry_cost_weights = {
-        "cpr_burden": 0.30,
-        "ppc_bid_pressure": 0.25,
-        "sponsored_pressure": 0.20,
-        "review_barrier": 0.15,
+        "cpr_burden":          0.30,
+        "ppc_bid_pressure":    0.30,
+        "sponsored_pressure":  0.20,
+        "review_barrier":      0.10,
         "competition_density": 0.10,
     }
 
@@ -293,6 +291,46 @@ def compute_entry_metrics(
         entry_cost_index = 0.0
         cost_status = "insufficient_data"
 
+    # ── Confidence scores ────────────────────────────────────────────────────
+    # Entry Difficulty requires 5 signals; Entry Cost requires 5 signals
+    ed_total_required  = len(entry_difficulty_weights)
+    eci_total_required = len(entry_cost_weights)
+    ed_available   = len(difficulty_used_components)
+    eci_available  = len(cost_used_components)
+
+    ed_confidence_pct  = round(ed_available  / ed_total_required  * 100, 1) if ed_total_required  > 0 else 0.0
+    eci_confidence_pct = round(eci_available / eci_total_required * 100, 1) if eci_total_required > 0 else 0.0
+
+    def _conf_label(pct: float) -> str:
+        if pct >= 80:  return "High"
+        if pct >= 50:  return "Medium"
+        return "Low"
+
+    # ── Realism guardrail: distinguish truly-low vs missing-data-low ─────────
+    def _low_score_explanation(score: float, confidence: float, used_components: list) -> str:
+        if score > 25:
+            return ""
+        if confidence < 50:
+            return (
+                "Score is low, but confidence is limited due to missing data. "
+                "Upload datasets with CPR, Sponsored ASINs, Review Count, and "
+                "H10 PPC Sugg. Bid columns for a reliable score."
+            )
+        # High confidence but genuinely low — explain why
+        low_parts = [c["component"] for c in used_components if c["score"] < 30]
+        if low_parts:
+            return (
+                f"Score is low because the dataset shows low pressure across: "
+                f"{', '.join(low_parts)}. This reflects genuinely low competition "
+                f"signals in the uploaded data, not missing columns."
+            )
+        return (
+            "Score is low based on available signals. All components score below 30/100."
+        )
+
+    ed_low_note  = _low_score_explanation(entry_difficulty, ed_confidence_pct,  difficulty_used_components)
+    eci_low_note = _low_score_explanation(entry_cost_index, eci_confidence_pct, cost_used_components)
+
     # Build result
     result = {
         "status": "success" if difficulty_status == "success" or cost_status == "success" else "insufficient_data",
@@ -301,23 +339,46 @@ def compute_entry_metrics(
             "classification": classify_pressure_level(entry_difficulty),
             "components": difficulty_used_components,
             "weight_denominator": difficulty_weight_total,
-            "components_available": len(difficulty_used_components),
-            "components_missing": [c for c in missing if c in ["CPR", "Sponsored ASINs", "Competing Products", "Review Barrier", "Organic Title Density", "Revenue Concentration", "PPC Bid"]],
+            "components_available": ed_available,
+            "components_missing": [c for c in missing if c in [
+                "Review Barrier", "Sponsored ASINs", "Competing Products", "PPC Bid Pressure", "CPR"
+            ]],
+            "data_confidence": ed_confidence_pct,
+            "confidence_label": _conf_label(ed_confidence_pct),
+            "low_score_note": ed_low_note,
+            "formula": (
+                "Entry Difficulty = Review Barrier×30% + Sponsored Pressure×25% + "
+                "Competition Density×20% + PPC Bid Pressure×15% + CPR Burden×10%. "
+                f"Re-normalised for {ed_available}/{ed_total_required} available signals."
+            ),
         },
         "entry_cost_index": {
             "score": entry_cost_index,
             "classification": classify_pressure_level(entry_cost_index),
             "components": cost_used_components,
             "weight_denominator": cost_weight_total,
-            "components_available": len(cost_used_components),
-            "components_missing": [c for c in missing if c in ["CPR", "PPC Bid", "Sponsored ASINs", "Review Barrier", "Competing Products"]],
+            "components_available": eci_available,
+            "components_missing": [c for c in missing if c in [
+                "CPR", "PPC Bid Pressure", "Sponsored ASINs", "Review Barrier", "Competing Products"
+            ]],
+            "data_confidence": eci_confidence_pct,
+            "confidence_label": _conf_label(eci_confidence_pct),
+            "low_score_note": eci_low_note,
+            "formula": (
+                "Entry Cost Index = CPR Burden×30% + PPC Bid Pressure×30% + "
+                "Sponsored Pressure×20% + Review Barrier×10% + Competition Density×10%. "
+                f"Re-normalised for {eci_available}/{eci_total_required} available signals."
+            ),
         },
         "all_component_scores": {k: v["score"] for k, v in components.items()},
         "components_metadata": components,
         "mini_insight": (
-            f"Entry difficulty is {classify_pressure_level(entry_difficulty).lower()} ({entry_difficulty:.0f}/100); "
-            f"entry cost index is {classify_pressure_level(entry_cost_index).lower()} ({entry_cost_index:.0f}/100). "
-            f"Based on {len(difficulty_used_components)} available signals."
+            f"Entry difficulty is {classify_pressure_level(entry_difficulty).lower()} ({entry_difficulty:.0f}/100) "
+            f"[{_conf_label(ed_confidence_pct)} confidence]; "
+            f"entry cost index is {classify_pressure_level(entry_cost_index).lower()} ({entry_cost_index:.0f}/100) "
+            f"[{_conf_label(eci_confidence_pct)} confidence]. "
+            f"Based on {ed_available}/{ed_total_required} entry difficulty signals and "
+            f"{eci_available}/{eci_total_required} cost signals."
         ),
         "normalization_method": "Percentile-based (5th–95th clip) with robust winsorization",
     }

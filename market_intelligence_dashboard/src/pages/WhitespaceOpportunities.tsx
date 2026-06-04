@@ -651,3 +651,7 @@ export default function WhitespaceOpportunities() {
     </div>
   );
 }
+
+export default function WhitespaceOpportunities() {
+  return null;
+}
