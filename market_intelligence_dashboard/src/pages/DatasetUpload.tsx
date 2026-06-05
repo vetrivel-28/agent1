@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueryClient, useQuery } from '@tanstack/react-query';
 import { api } from '../services/api';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -41,21 +41,38 @@ export default function DatasetUpload() {
     details?: any;
   }>({ type: 'idle', message: '' });
 
-  const [categoryModal, setCategoryModal] = useState<{
-    isOpen: boolean;
-    categories: any[];
-    columnName: string;
-    isSetting: boolean;
-  }>({ isOpen: false, categories: [], columnName: '', isSetting: false });
-  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [analysisStarted, setAnalysisStarted] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  
+  const { data: statusData } = useQuery({
+    queryKey: ['status'],
+    queryFn: api.getStatus,
+  });
+
+  const handleRemoveActiveDataset = async (datasetType: string) => {
+    try {
+      await api.removeDataset(datasetType);
+      queryClient.invalidateQueries({ queryKey: ['status'] });
+    } catch (err: any) {
+      console.error('Failed to remove dataset', err);
+      alert('Failed to remove dataset: ' + (err.message || 'Unknown error'));
+    }
+  };
+
+  const handleReplaceClick = (type: string) => {
+    // We can just trigger the main dropzone since our logic handles replacing automatically
+    // by only picking the latest uploaded file of a type.
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
+    }
+  };
 
   const mutation = useMutation({
     mutationFn: (formData: FormData) => api.uploadDatasets(formData),
     onSuccess: async (data) => {
       try {
-        // Health check before category detection
+        // Health check before proceeding
         try {
           await api.getHealth();
         } catch (healthErr: any) {
@@ -68,61 +85,16 @@ export default function DatasetUpload() {
           return;
         }
 
-        // Detect categories
-        const catRes = await api.detectCategories();
-        
-        // Check if backend returned error
-        if (!catRes.success || catRes.status === 'error') {
-          const errorType = catRes.data?.error_type || catRes.error_type;
-          const missingColumn = catRes.data?.missing_column || catRes.missing_column;
-          
-          if (errorType === 'schema_error') {
-            setUploadStatus({
-              type: 'error',
-              message: `CSV schema validation failed: ${catRes.message || 'Missing required columns'}`,
-              details: {
-                error_type: errorType,
-                missing_column: missingColumn,
-                backend_message: catRes.message
-              }
-            });
-            return;
-          }
-          
-          if (errorType === 'dataset_not_loaded') {
-            setUploadStatus({
-              type: 'error',
-              message: 'BlackBox dataset not loaded on backend. This may be a backend state issue.',
-              details: catRes
-            });
-            return;
-          }
-        }
-        
-        // Success - check for categories
-        const categories = catRes.data?.categories || catRes.categories;
-        const hasCategories = catRes.data?.has_categories ?? catRes.has_categories ?? false;
-        
-        if (hasCategories && categories && categories.length > 0) {
-          setCategoryModal({
-            isOpen: true,
-            categories: categories,
-            columnName: catRes.data?.column || catRes.column || 'Category',
-            isSetting: false
-          });
-          
-          if (categories.length === 1) {
-            setSelectedCategories([categories[0].category]);
-          }
-          
-        } else {
-          // No categories found, proceed as normal
-          setUploadStatus({
-            type: 'success',
-            message: 'Datasets uploaded successfully. No category filtering needed.',
-            details: data
-          });
-        }
+        // We no longer require category selection on upload.
+        // The backend automatically defaults to the full dataset.
+        await api.startAnalysis();
+        setAnalysisStarted(true);
+        setUploadStatus({
+          type: 'success',
+          message: 'Datasets uploaded successfully. Analysis started.',
+          details: data,
+        });
+        queryClient.prefetchQuery({ queryKey: ['detect-categories'], queryFn: api.detectCategories });
         
         const blackboxRows = detectedDatasets.find(d => d.type === 'blackbox')?.rows || 0;
         const magnetRows = detectedDatasets.find(d => d.type === 'magnet')?.rows || 0;
@@ -134,6 +106,7 @@ export default function DatasetUpload() {
           products: blackboxRows,
           brands: 0,
         });
+
       } catch (err: any) {
         console.error('[Upload] Category detection error:', err);
         
@@ -222,25 +195,6 @@ export default function DatasetUpload() {
     }
   });
 
-  const handleConfirmCategory = async () => {
-    if (selectedCategories.length === 0) return;
-    setCategoryModal(prev => ({ ...prev, isSetting: true }));
-    try {
-      await api.setCategory(selectedCategories);
-      setCategoryModal(prev => ({ ...prev, isOpen: false, isSetting: false }));
-      setUploadStatus({
-        type: 'success',
-        message: 'Categories applied successfully.',
-      });
-    } catch (err) {
-      setCategoryModal(prev => ({ ...prev, isSetting: false }));
-      setUploadStatus({
-        type: 'error',
-        message: 'Failed to set categories.',
-        details: err
-      });
-    }
-  };
 
   const handleModalClose = () => {
     if (uploadStatus.type === 'success') {
@@ -252,20 +206,21 @@ export default function DatasetUpload() {
   };
 
   useEffect(() => {
-    if (uploadStatus.type === 'success') {
+    if (uploadStatus.type === 'success' && analysisStarted) {
       const timer = setTimeout(() => {
         handleModalClose();
-      }, 1000);
+      }, 1500);
       return () => clearTimeout(timer);
     }
-  }, [uploadStatus.type]);
+  }, [uploadStatus.type, analysisStarted]);
 
   const getModalStatus = (): AnalysisStatus => {
     if (mutation.isPending) return 'analyzing';
-    if (uploadStatus.type === 'success') return 'success';
+    if (uploadStatus.type === 'success' && analysisStarted) return 'success';
     if (uploadStatus.type === 'error') return 'error';
     return 'idle';
   };
+
 
   const parseCSV = (file: File): Promise<DetectedFile> => {
     return new Promise((resolve) => {
@@ -573,6 +528,55 @@ export default function DatasetUpload() {
             </CardContent>
           </Card>
 
+          {/* Active Datasets Panel */}
+          {statusData?.data?.datasets_loaded && Object.values(statusData.data.datasets_loaded).some(v => v) && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Active Datasets</CardTitle>
+                <CardDescription>Datasets currently loaded in the analysis engine.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {['blackbox', 'magnet', 'keyword_classification'].map((type) => {
+                  const isActive = statusData.data.datasets_loaded[type];
+                  if (!isActive) return null;
+                  
+                  const meta = statusData.data.metadata?.[type] || {};
+                  
+                  return (
+                    <div key={type} className="flex flex-col border rounded-lg bg-card overflow-hidden">
+                      <div className="flex items-center justify-between p-3 bg-muted/20">
+                        <div className="flex items-center gap-3">
+                          <div className="p-2 rounded-md bg-success/10 text-success">
+                            <Database className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <p className="font-medium flex items-center gap-2">
+                              {type === 'blackbox' && 'BlackBox Products Dataset'}
+                              {type === 'magnet' && 'Magnet Keyword Dataset'}
+                              {type === 'keyword_classification' && 'Keyword Classification Dataset'}
+                              <CheckCircle className="w-4 h-4 text-success" />
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              {meta.filename || 'Original filename unavailable'} • {meta.rows?.toLocaleString() || 0} rows
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex gap-2">
+                          <Button variant="outline" size="sm" onClick={() => handleReplaceClick(type)}>
+                            Replace
+                          </Button>
+                          <Button variant="outline" size="sm" className="text-danger hover:bg-danger/10 hover:text-danger border-danger/20" onClick={() => handleRemoveActiveDataset(type)}>
+                            Remove
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </CardContent>
+            </Card>
+          )}
+
           <Card>
             <CardHeader>
               <CardTitle>Dataset Validation</CardTitle>
@@ -581,10 +585,10 @@ export default function DatasetUpload() {
               <div className="space-y-3">
                 <div className="flex items-center justify-between p-3 border rounded-lg bg-card">
                   <div className="flex items-center gap-3">
-                    {hasBlackbox ? <CheckCircle className="w-5 h-5 text-success" /> : <AlertTriangle className="w-5 h-5 text-danger" />}
+                    {hasBlackbox || statusData?.data?.datasets_loaded?.blackbox ? <CheckCircle className="w-5 h-5 text-success" /> : <AlertTriangle className="w-5 h-5 text-danger" />}
                     <span className="font-medium">BlackBox Schema Detected</span>
                   </div>
-                  {hasBlackbox ? (
+                  {hasBlackbox || statusData?.data?.datasets_loaded?.blackbox ? (
                     <span className="text-xs bg-success/10 text-success px-2 py-1 rounded-full font-medium">Valid</span>
                   ) : (
                     <span className="text-xs text-danger font-medium">Missing BlackBox Dataset</span>
@@ -593,10 +597,10 @@ export default function DatasetUpload() {
                 
                 <div className="flex items-center justify-between p-3 border rounded-lg bg-card">
                   <div className="flex items-center gap-3">
-                    {hasMagnet ? <CheckCircle className="w-5 h-5 text-success" /> : <AlertTriangle className="w-5 h-5 text-danger" />}
+                    {hasMagnet || statusData?.data?.datasets_loaded?.magnet ? <CheckCircle className="w-5 h-5 text-success" /> : <AlertTriangle className="w-5 h-5 text-danger" />}
                     <span className="font-medium">Magnet Schema Detected</span>
                   </div>
-                  {hasMagnet ? (
+                  {hasMagnet || statusData?.data?.datasets_loaded?.magnet ? (
                      <span className="text-xs bg-success/10 text-success px-2 py-1 rounded-full font-medium">Valid</span>
                   ) : (
                      <span className="text-xs text-danger font-medium">Missing Magnet Dataset</span>
@@ -605,7 +609,7 @@ export default function DatasetUpload() {
 
                 <div className="flex items-center justify-between p-3 border rounded-lg bg-card">
                   <div className="flex items-center gap-3">
-                    {hasClassification ? <CheckCircle className="w-5 h-5 text-success" /> : <CheckCircle className="w-5 h-5 text-muted-foreground" />}
+                    {hasClassification || statusData?.data?.datasets_loaded?.keyword_classification ? <CheckCircle className="w-5 h-5 text-success" /> : <CheckCircle className="w-5 h-5 text-muted-foreground" />}
                     <span className="font-medium text-muted-foreground">Classification Schema Detected</span>
                   </div>
                   <span className="text-xs bg-muted text-muted-foreground px-2 py-1 rounded-full font-medium">Optional</span>
@@ -620,11 +624,16 @@ export default function DatasetUpload() {
                   className="w-full text-base"
                 >
                   <BarChart3 className="w-5 h-5 mr-2" />
-                  Start Analysis
+                  Upload & Validate
                 </Button>
                 {!isValid && detectedDatasets.length > 0 && (
                   <p className="text-xs text-center text-danger font-medium">
-                    ⚠ Cannot start analysis. Required datasets are missing.
+                    ⚠ Cannot upload. Required datasets are missing.
+                  </p>
+                )}
+                {isValid && (
+                  <p className="text-xs text-center text-muted-foreground">
+                    After upload, you will select the BlackBox market category before calculations begin.
                   </p>
                 )}
               </div>
@@ -698,71 +707,7 @@ export default function DatasetUpload() {
       </div>
 
 
-      {categoryModal.isOpen && (
-        <Modal
-          isOpen={categoryModal.isOpen}
-          onClose={() => {}}
-          title="Select Market Category"
-          maxWidth="max-w-2xl"
-        >
-          <p className="text-sm text-muted-foreground mb-4 px-1">
-            Your BlackBox dataset contains multiple product categories. Select the category you want to analyze before calculations begin. Detected from: {categoryModal.columnName}
-          </p>
-          <div className="space-y-4 max-h-[60vh] overflow-y-auto p-1">
-            {categoryModal.categories.map((c, i) => {
-              const isSelected = selectedCategories.includes(c.category);
-              return (
-                <div 
-                  key={i} 
-                  className={`p-4 border rounded-xl cursor-pointer transition-all ${isSelected ? 'border-primary bg-primary/5' : 'border-border bg-card hover:border-primary/50'}`}
-                  onClick={() => {
-                    if (isSelected) {
-                      setSelectedCategories(prev => prev.filter(x => x !== c.category));
-                    } else {
-                      setSelectedCategories(prev => [...prev, c.category]);
-                    }
-                  }}
-                >
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <h4 className="font-bold text-foreground text-lg">{c.category}</h4>
-                      <p className="text-sm text-muted-foreground mt-1">
-                        {c.product_count} products | {c.revenue > 0 ? `$${c.revenue.toLocaleString()}` : `${c.units_sold} units`}
-                      </p>
-                    </div>
-                    <div className={`w-5 h-5 rounded-sm border flex items-center justify-center ${isSelected ? 'bg-primary border-primary' : 'border-muted-foreground'}`}>
-                      {isSelected && <CheckCircle className="w-3.5 h-3.5 text-primary-foreground" />}
-                    </div>
-                  </div>
-                  {c.sample_products && c.sample_products.length > 0 && (
-                    <div className="mt-3 pt-3 border-t border-border/50">
-                      <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Sample Products</p>
-                      <ul className="text-xs text-muted-foreground list-disc list-inside truncate">
-                        {c.sample_products.map((p: string, idx: number) => (
-                          <li key={idx} className="truncate">{p}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-          <div className="mt-6 flex justify-end gap-3 pt-4 border-t border-border">
-            <Button variant="outline" onClick={() => {
-              setCategoryModal(prev => ({ ...prev, isOpen: false }));
-              setUploadStatus({ type: 'idle', message: '' });
-              setDetectedDatasets([]);
-            }}>Cancel Upload</Button>
-            <Button 
-              disabled={selectedCategories.length === 0 || categoryModal.isSetting}
-              onClick={handleConfirmCategory}
-            >
-              {categoryModal.isSetting ? 'Applying...' : 'Start Analysis'}
-            </Button>
-          </div>
-        </Modal>
-      )}
+
 
       <AnalysisProgressModal
         status={getModalStatus()}

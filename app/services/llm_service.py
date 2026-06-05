@@ -1,7 +1,58 @@
 """
 LLM Service for generating Market Intelligence insights.
 """
+import json
+import os
+import urllib.error
+import urllib.request
 from typing import Dict, Any
+
+
+def check_llm_provider() -> tuple[bool, str]:
+    """Detect configured LLM providers without hallucinating or crashing."""
+    ollama_model = os.getenv("OLLAMA_MODEL", "").strip()
+    ollama_host = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
+
+    def _ollama_models() -> list[str]:
+        req = urllib.request.Request(f"{ollama_host}/api/tags", method="GET")
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        return [m.get("name", "") for m in payload.get("models", []) if m.get("name")]
+
+    if ollama_model:
+        try:
+            models = _ollama_models()
+            if any(ollama_model in m or m.startswith(ollama_model) for m in models):
+                return True, f"ollama:{ollama_model}"
+            if models:
+                return True, f"ollama:{models[0]}"
+            return False, (
+                f"LLM-assisted labeling unavailable — OLLAMA_MODEL={ollama_model} "
+                "configured but no local models found in Ollama."
+            )
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
+            return False, (
+                f"LLM-assisted labeling unavailable — OLLAMA_MODEL={ollama_model} "
+                f"configured but Ollama is not reachable at {ollama_host}."
+            )
+
+    try:
+        models = _ollama_models()
+        llama_models = [m for m in models if "llama" in m.lower()]
+        if llama_models:
+            return True, f"ollama:{llama_models[0]}"
+        if models:
+            return True, f"ollama:{models[0]}"
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
+        pass
+
+    if os.getenv("OPENAI_API_KEY", "").strip():
+        return True, "openai"
+    if os.getenv("ANTHROPIC_API_KEY", "").strip():
+        return True, "anthropic"
+
+    return False, "LLM-assisted labeling unavailable — no configured local model found."
+
 
 def format_percentage(val: float) -> str:
     """Format percentage based on whether it rounds to 0.0 or not."""

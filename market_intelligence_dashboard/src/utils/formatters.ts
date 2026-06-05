@@ -30,8 +30,9 @@ export const safeArray = <T>(value: any): T[] => {
 export const formatGenericLabel = (label: string | null | undefined): string => {
   if (!label) return label || '';
   const lower = label.toLowerCase().trim();
-  if (['generic', 'other', 'unknown', 'misc', 'unclassified'].includes(lower)) {
-    return 'Broad Demand Bucket — Needs Refinement';
+  const broadOnly = ['generic', 'other', 'unknown', 'misc', 'unclassified'];
+  if (broadOnly.includes(lower)) {
+    return 'Broad / Needs Refinement';
   }
   return label;
 };

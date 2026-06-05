@@ -21,6 +21,7 @@ const ComplementIntelligence = lazy(() => import('./pages/ComplementIntelligence
 const BundleOpportunities = lazy(() => import('./pages/BundleOpportunities'));
 const FinanceIntelligence = lazy(() => import('./pages/FinanceIntelligence'));
 const ProductIntelligence = lazy(() => import('./pages/ProductIntelligence'));
+const ConsumerAdoptionSimulator = lazy(() => import('./pages/ConsumerAdoptionSimulator'));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -66,6 +67,7 @@ function App() {
               <Route path="price-elasticity" element={<PriceElasticity />} />
               <Route path="finance-intelligence" element={<FinanceIntelligence />} />
               <Route path="market-report" element={<MarketReport />} />
+              <Route path="consumer-adoption" element={<ConsumerAdoptionSimulator />} />
             </Route>
           </Routes>
         </Suspense>

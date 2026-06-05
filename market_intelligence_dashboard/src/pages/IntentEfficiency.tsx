@@ -24,21 +24,21 @@ import { DashboardSkeleton } from '../components/ui/Skeletons';
 import { formatGenericLabel } from '../utils/formatters';
 import { useDatasetFilters, type FilterConfig } from '../hooks/useDatasetFilters';
 import { FilterBar } from '../components/filters/FilterBar';
+import { scopeQueryKeys } from '../hooks/useCategoryScope';
 
 
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-/** Central segment normalization — ensures consistent segment labels across backend variants */
 function normalizeSegment(value: string | null | undefined): string {
   if (!value) return 'Low Priority';
   
   const cleaned = value.trim().toLowerCase().replace(/[_\s]+/g, ' ');
   
-  if (cleaned === 'demand winner' || cleaned === 'demand winners') return 'Demand Winner';
-  if (cleaned === 'hidden gem' || cleaned === 'hidden gems') return 'Hidden Gem';
-  if (cleaned === 'friction keyword' || cleaned === 'friction keywords') return 'Friction Keyword';
-  if (cleaned === 'low priority') return 'Low Priority';
+  if (cleaned === 'demand winner' || cleaned === 'demand winners' || cleaned === 'demand') return 'Demand Winner';
+  if (cleaned === 'hidden gem' || cleaned === 'hidden gems' || cleaned === 'hidden') return 'Hidden Gem';
+  if (cleaned === 'friction keyword' || cleaned === 'friction keywords' || cleaned === 'friction') return 'Friction Keyword';
+  if (cleaned === 'low priority' || cleaned === 'low') return 'Low Priority';
   
   // Return original value if no match (fallback)
   return value.trim();
@@ -188,10 +188,10 @@ function keywordRowEvidence(k: any, benchmark: number, filterContext?: any): Evi
   const rpsActual = Number(k.revenue_per_1000_searches ?? rps);
 
   const segmentRules: Record<string, string> = {
-    'Demand Winner':    'Demand Percentile ≥ 60 AND Revenue Efficiency Index ≥ 60',
-    'Friction Keyword': 'Demand Percentile ≥ 60 AND Revenue Efficiency Index < 40',
-    'Hidden Gem':       'Demand Percentile < 60 AND Revenue Efficiency Index ≥ 60',
-    'Low Priority':     'Demand Percentile < 60 AND Revenue Efficiency Index < 40',
+    'Demand Winner':    `Demand Percentile ≥ 60 AND Revenue Efficiency Index ≥ 60 (dataset-relative)`,
+    'Friction Keyword': `Demand Percentile ≥ 60 AND Revenue Efficiency Index < 40 (dataset-relative)`,
+    'Hidden Gem':       `Demand Percentile < 60 AND Revenue Efficiency Index ≥ 60 (dataset-relative)`,
+    'Low Priority':     `Demand Percentile < 40 AND Revenue Efficiency Index < 40 (dataset-relative)`,
   };
 
   const calcSteps = [
@@ -302,11 +302,19 @@ function IntentEfficiencyInner() {
   
   const [selectedEvidence, setSelectedEvidence] = useState<EvidenceData | null>(null);
 
+  const { data: statusData } = useQuery({
+    queryKey: ['status'],
+    queryFn: api.getStatus,
+  });
+  
+  const { categoryScope, categoryKey, keywordScopeKey, datasetSessionId } = scopeQueryKeys(statusData);
+
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['intent-efficiency'],
-    queryFn: () => api.getSearchIntentEfficiency(300),
+    queryKey: ['intent-efficiency', datasetSessionId, categoryKey, keywordScopeKey],
+    queryFn: () => api.getSearchIntentEfficiency(300, categoryScope),
     retry: false,
     refetchOnWindowFocus: false,
+    enabled: !!statusData,
   });
 
 
@@ -335,13 +343,35 @@ function IntentEfficiencyInner() {
   const friction = useMemo<any[]>(() => {
     const kc = r.keyword_conversion ?? {};
     const rawFriction = r.friction_rows ?? kc.friction_rows ?? r.friction_keywords ?? summaryCards.friction_keywords?.items ?? [];
-    // Filter out meaningless keywords
-    return rawFriction.filter((row: any) => isMeaningfulKeyword(row.keyword));
+    // Filter out meaningless keywords and normalize properties
+    return rawFriction
+      .filter((row: any) => isMeaningfulKeyword(row.keyword))
+      .map((row: any) => ({
+        ...row,
+        segment: normalizeSegment(row.segment ?? row.quadrant ?? row.classification ?? 'friction'),
+        demand_percentile: Number(row.demand_percentile ?? row.demandPercentile ?? row.demand_pct ?? 0),
+        efficiency_score: Number(row.efficiency_score ?? row.revenue_efficiency_index ?? row.revenueEfficiencyIndex ?? row.efficiencyScore ?? 0),
+      }));
   }, [r, summaryCards]);
 
   const matrix = useMemo(() => {
     const kc = r.keyword_conversion ?? {};
     return r.matrix ?? kc.matrix ?? {} as Record<string, any>;
+  }, [r]);
+
+  // Dataset-relative thresholds from backend (use these for reference lines and evidence)
+  const segmentThresholds = useMemo(() => {
+    const st = r.segment_thresholds ?? {};
+    return {
+      highDemand: Number(st.high_demand_cutoff ?? 60),
+      lowDemand:  Number(st.low_demand_cutoff  ?? 40),
+      highEff:    Number(st.high_eff_cutoff     ?? 60),
+      lowEff:     Number(st.low_eff_cutoff      ?? 40),
+      method:     st.method ?? 'dataset-relative quantile thresholds',
+      totalValid: Number(st.total_valid_keywords ?? 0),
+      scatterSampled: Boolean(st.scatter_sampled),
+      scatterSampleSize: Number(st.scatter_sample_size ?? 300),
+    };
   }, [r]);
 
   const scatterRaw = useMemo<any[]>(() => {
@@ -379,12 +409,7 @@ function IntentEfficiencyInner() {
   
   const filterConfigs: FilterConfig<any>[] = [
     { id: 'keyword', label: 'Keyword', type: 'search', getValue: r => r.keyword },
-    { id: 'segment', label: 'Segment', type: 'select', getValue: r => r.segment },
-    { id: 'search_volume', label: 'Search Volume', type: 'range', getValue: r => r.search_volume },
-    { id: 'demand_percentile', label: 'Demand Percentile', type: 'range', getValue: r => r.demand_percentile },
-    { id: 'efficiency_score', label: 'Efficiency Index', type: 'range', getValue: r => r.efficiency_score },
-    { id: 'keyword_sales', label: 'Keyword Sales', type: 'range', getValue: r => r.keyword_sales ?? r.keyword_revenue ?? r.revenue },
-    { id: 'rev_per_1k', label: 'Rev / 1K Searches', type: 'range', getValue: r => r.revenue_per_1000_searches },
+    { id: 'segment', label: 'Segment', type: 'select', getValue: r => r.segment }
   ];
 
   const {
@@ -451,7 +476,33 @@ function IntentEfficiencyInner() {
 
   // ── ALL hooks declared. Conditional returns safe from here. ───────────────
 
-  if (isLoading) return <DashboardSkeleton />;
+  // Counts for matrix legend — use backend's quadrant_summary (full dataset), not sampled rows
+  const segmentCounts = useMemo(() => {
+    // Backend sends full-dataset counts in multiple locations — prefer quadrant_summary
+    const qs_counts = r.quadrant_summary ?? matrix.segment_counts ?? {};
+    
+    const dw = qs_counts.demand_winners ?? qs_counts['Demand Winners'] ?? 0;
+    const hg = qs_counts.hidden_gems ?? qs_counts['Hidden Gems'] ?? 0;
+    const fk = qs_counts.friction_keywords ?? qs_counts['Friction Keywords'] ?? 0;
+    const lp = qs_counts.low_priority ?? qs_counts['Low Priority'] ?? 0;
+    const mon = qs_counts.monitor ?? qs_counts['Monitor'] ?? 0;
+
+    // Fallback to counting rows only if backend counts all zero (no quadrant_summary)
+    if (dw + hg + fk + lp === 0 && rows.length > 0) {
+      let rdw = 0, rhg = 0, rfk = 0, rlp = 0;
+      rows.forEach(r => {
+        if (r.segment === 'Demand Winner') rdw++;
+        else if (r.segment === 'Hidden Gem') rhg++;
+        else if (r.segment === 'Friction Keyword') rfk++;
+        else if (r.segment === 'Low Priority') rlp++;
+      });
+      return { dw: rdw, hg: rhg, fk: rfk, lp: rlp, monitor: 0 };
+    }
+
+    return { dw, hg, fk, lp, monitor: mon };
+  }, [r, matrix, rows]);
+
+  if (isLoading || !statusData) return <DashboardSkeleton />;
 
   if (isError || !isEngineOk(data)) {
     return (
@@ -474,17 +525,6 @@ function IntentEfficiencyInner() {
   const frictionEvidence = summaryCards.friction_keywords?.evidence ?? {};
   const gapEvidence      = summaryCards.recoverable_revenue?.evidence ?? {};
 
-  // Counts for matrix legend — ALWAYS calculate from backend's full dataset counts, never from filtered data
-  const segmentCounts = useMemo(() => {
-    const counts = matrix.segment_counts ?? qs;
-    return {
-      dw: counts?.demand_winners ?? counts?.['Demand Winners'] ?? 0,
-      hg: counts?.hidden_gems ?? counts?.['Hidden Gems'] ?? 0,
-      fk: counts?.friction_keywords ?? counts?.['Friction Keywords'] ?? 0,
-      lp: counts?.low_priority ?? counts?.['Low Priority'] ?? 0,
-      monitor: counts?.monitor ?? counts?.['Monitor'] ?? 0,
-    };
-  }, [matrix, qs]);
 
   const dw = segmentCounts.dw;
   const hg = segmentCounts.hg;
@@ -624,9 +664,9 @@ function IntentEfficiencyInner() {
               <YAxis type="number" dataKey="efficiency_score" domain={[0, 100]} name="Revenue Efficiency Index"
                 label={{ value: 'Revenue Efficiency Index', angle: -90, position: 'insideLeft', offset: -24, style: { textAnchor: 'middle' }, fontSize: 11, fill: 'hsl(var(--muted-foreground))' }}
                 tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false} />
-              <ReferenceLine x={60} stroke="hsl(var(--border))" strokeDasharray="4 4" strokeWidth={1.5} label={{ value: 'Demand ≥60', position: 'top', fontSize: 9, fill: 'hsl(var(--muted-foreground))' }} />
-              <ReferenceLine y={60} stroke="#10b981" strokeDasharray="4 4" strokeWidth={1} label={{ value: 'Eff ≥60', position: 'right', fontSize: 9, fill: '#10b981' }} />
-              <ReferenceLine y={40} stroke="#ef4444" strokeDasharray="4 4" strokeWidth={1} label={{ value: 'Eff <40', position: 'right', fontSize: 9, fill: '#ef4444' }} />
+              <ReferenceLine x={segmentThresholds.highDemand} stroke="hsl(var(--border))" strokeDasharray="4 4" strokeWidth={1.5} label={{ value: `Demand ≥${segmentThresholds.highDemand.toFixed(0)}`, position: 'top', fontSize: 9, fill: 'hsl(var(--muted-foreground))' }} />
+              <ReferenceLine y={segmentThresholds.highEff} stroke="#10b981" strokeDasharray="4 4" strokeWidth={1} label={{ value: `Eff ≥${segmentThresholds.highEff.toFixed(0)}`, position: 'right', fontSize: 9, fill: '#10b981' }} />
+              <ReferenceLine y={segmentThresholds.lowEff} stroke="#ef4444" strokeDasharray="4 4" strokeWidth={1} label={{ value: `Eff <${segmentThresholds.lowEff.toFixed(0)}`, position: 'right', fontSize: 9, fill: '#ef4444' }} />
               <ReTooltip content={<ScatterTip />} />
               <Scatter
                 data={displayScatter}
@@ -644,10 +684,10 @@ function IntentEfficiencyInner() {
           {/* Legend / segment filter */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4 pt-4 border-t border-border/50">
             {[
-              { key: 'demand',  label: 'Demand Winner', count: dw, color: SEGMENT_COLORS['Demand Winner'], rule: 'Demand ≥ 60  AND  Efficiency ≥ 60' },
-              { key: 'hidden',  label: 'Hidden Gem', count: hg, color: SEGMENT_COLORS['Hidden Gem'], rule: 'Demand < 60  AND  Efficiency ≥ 60' },
-              { key: 'friction',label: 'Friction Keyword', count: fk, color: SEGMENT_COLORS['Friction Keyword'], rule: 'Demand ≥ 60  AND  Efficiency < 40' },
-              { key: 'low',     label: 'Low Priority', count: lp, color: SEGMENT_COLORS['Low Priority'], rule: 'Demand < 60  AND  Efficiency < 40' },
+              { key: 'demand',  label: 'Demand Winner', count: dw, color: SEGMENT_COLORS['Demand Winner'], rule: `Demand ≥ ${segmentThresholds.highDemand.toFixed(0)}  AND  Efficiency ≥ ${segmentThresholds.highEff.toFixed(0)}` },
+              { key: 'hidden',  label: 'Hidden Gem', count: hg, color: SEGMENT_COLORS['Hidden Gem'], rule: `Demand < ${segmentThresholds.highDemand.toFixed(0)}  AND  Efficiency ≥ ${segmentThresholds.highEff.toFixed(0)}` },
+              { key: 'friction',label: 'Friction Keyword', count: fk, color: SEGMENT_COLORS['Friction Keyword'], rule: `Demand ≥ ${segmentThresholds.highDemand.toFixed(0)}  AND  Efficiency < ${segmentThresholds.lowEff.toFixed(0)}` },
+              { key: 'low',     label: 'Low Priority', count: lp, color: SEGMENT_COLORS['Low Priority'], rule: `Demand < ${segmentThresholds.lowDemand.toFixed(0)}  AND  Efficiency < ${segmentThresholds.lowEff.toFixed(0)}` },
             ].map(seg => (
               <button
                 key={seg.key}

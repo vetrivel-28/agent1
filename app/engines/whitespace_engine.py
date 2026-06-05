@@ -41,6 +41,10 @@ _KEYWORD_CANDIDATES = [
 ]
 _SEARCH_VOL_CANDIDATES = [
     "Search Volume", "search volume", "SearchVolume", "Monthly Search Volume",
+    "Search Vol.", "Search Vol", "search vol", "search_volume",
+    "Search Volume (Exact)", "Magnet Search Volume", "Monthly Searches",
+    "Exact Monthly Search Volume", "Volume", "volume",
+    "Search volume"
 ]
 _TITLE_DENSITY_CANDIDATES = [
     "Title Density", "title density", "TitleDensity",

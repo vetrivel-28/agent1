@@ -25,7 +25,6 @@ export function FilterBar<T>({
   totalRecords,
   filteredRecords,
 }: FilterBarProps<T>) {
-  const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
   const [searchVal, setSearchVal] = useState('');
 
   // Find the primary search config
@@ -74,9 +73,9 @@ export function FilterBar<T>({
           </div>
         )}
 
-        {/* Primary Selects (up to 3) */}
+        {/* All Selects Inline */}
         <div className="flex flex-wrap gap-2 flex-1 justify-start">
-          {configs.filter(c => (c.type === 'select' || c.type === 'multi-select') && !c.hidden).slice(0, 3).map(config => (
+          {configs.filter(c => (c.type === 'select' || c.type === 'multi-select') && !c.hidden).map(config => (
             <select
               key={config.id}
               value={activeFilters[config.id] || ''}
@@ -90,75 +89,7 @@ export function FilterBar<T>({
             </select>
           ))}
         </div>
-
-        {/* Advanced Filters Toggle */}
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setIsAdvancedOpen(!isAdvancedOpen)}
-            className={cn(
-              "flex items-center gap-2 px-4 py-2 border rounded-lg text-sm font-medium transition-colors",
-              isAdvancedOpen ? "bg-primary text-primary-foreground border-primary" : "bg-card border-border hover:bg-muted"
-            )}
-          >
-            <SlidersHorizontal className="w-4 h-4" />
-            Filters {activeCount > 0 && `(${activeCount})`}
-          </button>
-        </div>
       </div>
-
-      {/* Advanced Filters Drawer */}
-      {isAdvancedOpen && (
-        <div className="bg-card border border-border rounded-xl p-6 shadow-sm grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {configs.filter(c => !c.hidden && c.type !== 'search').map(config => {
-            
-            if (config.type === 'select' || config.type === 'multi-select') {
-              return (
-                <div key={config.id} className="space-y-1.5">
-                  <label className="text-xs font-bold uppercase text-muted-foreground">{config.label}</label>
-                  <select
-                    value={activeFilters[config.id] || ''}
-                    onChange={e => setFilter(config.id, e.target.value)}
-                    className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 cursor-pointer"
-                  >
-                    <option value="">All {config.label}s</option>
-                    {(filterOptions[config.id] || []).map(opt => (
-                      <option key={opt} value={opt}>{opt}</option>
-                    ))}
-                  </select>
-                </div>
-              );
-            }
-
-            if (config.type === 'range') {
-              const val = activeFilters[config.id] as { min?: number, max?: number } || {};
-              return (
-                <div key={config.id} className="space-y-1.5">
-                  <label className="text-xs font-bold uppercase text-muted-foreground">{config.label} Range</label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number"
-                      placeholder="Min"
-                      value={val.min ?? ''}
-                      onChange={e => setFilter(config.id, { ...val, min: e.target.value ? Number(e.target.value) : undefined })}
-                      className="w-full bg-background border border-border rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-                    />
-                    <span className="text-muted-foreground">-</span>
-                    <input
-                      type="number"
-                      placeholder="Max"
-                      value={val.max ?? ''}
-                      onChange={e => setFilter(config.id, { ...val, max: e.target.value ? Number(e.target.value) : undefined })}
-                      className="w-full bg-background border border-border rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-                    />
-                  </div>
-                </div>
-              );
-            }
-            
-            return null;
-          })}
-        </div>
-      )}
 
       {/* Active Filter Chips & Summary */}
       <div className="flex flex-wrap items-center justify-between gap-4 pt-2">

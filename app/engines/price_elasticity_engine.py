@@ -18,9 +18,9 @@ from app.utils.numeric_cleaner import clean_numeric_series
 
 logger = get_logger("price_elasticity_engine")
 
-_PRICE_CANDIDATES = ["Price", "price", "List Price", "list price"]
-_REVENUE_CANDIDATES = ["Parent Level Revenue"]
-_ASIN_SALES_CANDIDATES = ["Parent Level Sales", "ASIN Sales"]
+_PRICE_CANDIDATES = ["Price", "price", "List Price", "list price", "Buy Box Price", "Current Price", "Parent Level Price", "ASP"]
+_REVENUE_CANDIDATES = ["Parent Level Revenue", "Revenue", "Monthly Revenue", "Estimated Revenue"]
+_ASIN_SALES_CANDIDATES = ["Parent Level Sales", "ASIN Sales", "Units Sold", "Sales", "Monthly Sales"]
 _TITLE_CANDIDATES = ["Title", "Product Title", "Product Name"]
 _ASIN_CANDIDATES = ["ASIN", "asin", "Product ID"]
 _BRAND_CANDIDATES = ["Brand", "brand", "Brand Name"]
@@ -93,7 +93,33 @@ def run(
     df_valid = df_valid[(df_valid["_price"] > 0) & (df_valid["_revenue"] > 0)].copy()
 
     if len(df_valid) < 5:
-        return _unavailable_response("Insufficient products with valid Price and Parent Level Revenue.")
+        products = []
+        for _, row in df.head(50).iterrows():
+            p_val = row["_price"] if "_price" in row else np.nan
+            r_val = row["_revenue"] if "_revenue" in row else np.nan
+            products.append({
+                "title": _safe_str(row["_title"]),
+                "brand": _safe_str(row["_brand"]),
+                "price": _round2(p_val) if pd.notna(p_val) else 0,
+                "parent_revenue": _round2(r_val) if pd.notna(r_val) else 0
+            })
+        
+        valid_price_cnt = int(df["_price"].gt(0).sum()) if "_price" in df else 0
+        valid_rev_cnt = int(df["_revenue"].gt(0).sum()) if "_revenue" in df else 0
+        missing_cnt = len(df) - len(df_valid)
+            
+        return {
+            "status": "insufficient_data",
+            "metric_name": "Pricing Intelligence",
+            "summary": f"Pricing Economics Limited — only {len(df_valid)} products have valid Price and Revenue in selected category.",
+            "results": {
+                "product_count": len(df),
+                "valid_price_count": valid_price_cnt,
+                "valid_revenue_count": valid_rev_cnt,
+                "missing_count": missing_cnt,
+                "products": products
+            }
+        }
 
     total_revenue = float(df_valid["_revenue"].sum())
     total_products = len(df_valid)

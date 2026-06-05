@@ -410,11 +410,18 @@ type ModalState =
   | null;
 
 export default function PriceElasticity() {
+  const { data: statusData } = useQuery({
+    queryKey: ['status'],
+    queryFn: api.getStatus,
+  });
+  const categoryKey = statusData?.data?.category_scope?.selected_categories?.join('|') || 'all';
+  const categoryScope = statusData?.data?.category_scope || {};
+
   const [modalState, setModalState] = useState<ModalState>(null);
 
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['price-intelligence'],
-    queryFn: () => api.getPriceElasticity(6), // We mock project_id 6
+    queryKey: ['price-intelligence', categoryKey],
+    queryFn: () => api.getPriceElasticity(6, categoryScope), // We mock project_id 6
   });
 
   const engineResponse = useMemo(() => {
@@ -447,6 +454,64 @@ export default function PriceElasticity() {
   } = useDatasetFilters<BrandPosition>(memoized?.brand_position_by_price_range || [], filterConfigs);
 
   if (isLoading) return <DashboardSkeleton />;
+
+  if (engineResponse?.data?.status === 'insufficient_data') {
+    const results = engineResponse.data.results;
+    return (
+      <div className="pb-16 max-w-[1400px] mx-auto px-6">
+        <PageHeader 
+          badge="Pricing Intelligence"
+          title="Price Economics & Strategy"
+          description="Structural analysis utilizing Parent Level Revenue to calculate distribution, sweet spots, and entry recommendations across refined market tiers."
+        />
+        <Card className="border-border/50 bg-card mt-6">
+          <CardContent className="p-8 flex flex-col items-center text-center">
+            <AlertCircle className="w-12 h-12 text-yellow-500 mb-4" />
+            <h2 className="text-xl font-bold mb-2 font-serif text-foreground">Pricing Economics Limited</h2>
+            <p className="text-muted-foreground max-w-lg mb-8">{engineResponse.data.summary}</p>
+            
+            <div className="flex gap-8 mb-8">
+              <div className="text-center">
+                <p className="text-xs uppercase tracking-widest text-muted-foreground font-bold">Total Products</p>
+                <p className="text-2xl font-mono font-black">{formatNumber(results.product_count)}</p>
+              </div>
+              <div className="text-center">
+                <p className="text-xs uppercase tracking-widest text-muted-foreground font-bold">Valid Price</p>
+                <p className="text-2xl font-mono font-black text-emerald-500">{formatNumber(results.valid_price_count)}</p>
+              </div>
+              <div className="text-center">
+                <p className="text-xs uppercase tracking-widest text-muted-foreground font-bold">Valid Revenue</p>
+                <p className="text-2xl font-mono font-black text-blue-500">{formatNumber(results.valid_revenue_count)}</p>
+              </div>
+            </div>
+
+            <div className="w-full text-left overflow-x-auto border border-border rounded-lg">
+              <table className="w-full text-sm">
+                <thead className="bg-muted text-[10px] uppercase tracking-widest text-muted-foreground">
+                  <tr>
+                    <th className="px-4 py-3">Product Title</th>
+                    <th className="px-4 py-3">Brand</th>
+                    <th className="px-4 py-3 text-right">Price</th>
+                    <th className="px-4 py-3 text-right">Revenue</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {results.products?.map((p: any, i: number) => (
+                    <tr key={i} className="border-b last:border-b-0 hover:bg-muted/50 transition-colors">
+                      <td className="px-4 py-3 font-medium truncate max-w-[300px]" title={p.title}>{p.title}</td>
+                      <td className="px-4 py-3 text-muted-foreground">{p.brand}</td>
+                      <td className="px-4 py-3 font-mono text-right">{formatCurrency(p.price)}</td>
+                      <td className="px-4 py-3 font-mono text-emerald-500 text-right">{formatCurrency(p.parent_revenue)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   if (isError || engineResponse?.data?.status === 'unavailable' || !memoized) {
     const fallbackMsg = 'Could not calculate price economics. Ensure Parent Level Revenue and Price are mapped.';

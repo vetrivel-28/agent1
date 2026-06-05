@@ -20,6 +20,25 @@ class StandardResponse(BaseModel):
     message: str
     data: Any
 
+class CategoryScopePayload(BaseModel):
+    mode: str = "all"
+    selected_categories: list[str] = []
+    category_column: str = ""
+    scope_key: str = "all"
+    keyword_scope_key: str = "all"
+
+
+def _scope_payload_dict(scope: CategoryScopePayload) -> dict:
+    if hasattr(scope, "model_dump"):
+        return scope.model_dump()
+    return scope.dict()
+
+
+def _resolve_context(scope: CategoryScopePayload):
+    from app.utils.scope_resolver import resolve_analysis_datasets, enrich_scope_dict
+    scope_dict = enrich_scope_dict(_scope_payload_dict(scope))
+    return resolve_analysis_datasets(registry, scope_dict)
+
 from fastapi import APIRouter, File, UploadFile
 from fastapi.responses import FileResponse
 
@@ -110,6 +129,14 @@ logger = get_logger("routes")
 router = APIRouter(prefix="/api/v1", tags=["Market Intelligence"])
 
 
+def _guard_scoped_analysis():
+    """Block product-based engines until BlackBox category scope is confirmed."""
+    ready, msg = registry.analysis_readiness()
+    if not ready:
+        return format_response({"status": "error", "message": msg})
+    return None
+
+
 # =========================================================================
 # Health / Status
 # =========================================================================
@@ -136,11 +163,23 @@ def health_check():
 )
 def get_status():
     logger.info("Status check requested")
+    from app.services.llm_service import check_llm_provider
+    scope = registry.get_category_scope()
+    meta = registry.get_meta()
+    bb_meta = meta.get("blackbox", {})
+    llm_ok, llm_model = check_llm_provider()
     return format_response({
         "status": "ok",
         "datasets": registry.get_status(),
-        "metadata": registry.get_meta(),
+        "metadata": meta,
         "rows_loaded": registry.rows_loaded(),
+        "category_scope": scope,
+        "session_id": bb_meta.get("timestamp"),
+        "llm_provider": {
+            "available": llm_ok,
+            "model": llm_model if llm_ok else None,
+            "message": None if llm_ok else llm_model,
+        },
     })
 
 
@@ -159,7 +198,7 @@ def detect_categories():
         logger.info("Detecting categories from uploaded BlackBox dataset")
         
         # Check if BlackBox is loaded
-        if not registry.is_blackbox_loaded():
+        if not registry.is_blackbox_uploaded():
             logger.warning("Detect-categories called but BlackBox dataset not loaded")
             return format_response({
                 "status": "error",
@@ -196,18 +235,50 @@ from pydantic import BaseModel
 class SetCategoryRequest(BaseModel):
     categories: list[str]
 
+
+class StartAnalysisRequest(BaseModel):
+    use_full_blackbox: bool = False
+
+
+def _start_analysis_background(background_tasks: BackgroundTasks) -> None:
+    ready, msg = registry.analysis_readiness()
+    if not ready:
+        logger.warning("Analysis not started: %s", msg)
+        return
+    analysis_cache.clear()
+    background_tasks.add_task(run_all_engines)
+
+
 @router.post(
     "/set-category",
     summary="Set active categories",
-    description="Filters the BlackBox dataset to the selected categories and clears cache.",
+    description="Filters BlackBox to selected categories, then starts analysis.",
 )
-def set_category(req: SetCategoryRequest):
-    logger.info(f"Setting category to: {req.categories}")
+def set_category(req: SetCategoryRequest, background_tasks: BackgroundTasks):
+    logger.info("Setting category to: %s", req.categories)
     res = registry.set_category(req.categories)
-    # clear cache so engines recalculate with new dataset
-    from app.services.analysis_cache import analysis_cache
-    analysis_cache.clear()
+    if res.get("status") != "success":
+        return format_response(res)
+    _start_analysis_background(background_tasks)
+    res["analysis_started"] = True
     return format_response(res)
+
+
+@router.post(
+    "/start-analysis",
+    summary="Start analysis",
+    description=(
+        "Runs all engines on the scoped datasets."
+    ),
+)
+def start_analysis(req: StartAnalysisRequest, background_tasks: BackgroundTasks):
+    logger.info("Manual start analysis requested")
+    _start_analysis_background(background_tasks)
+    return format_response({
+        "status": "success",
+        "message": "Analysis started on scoped datasets.",
+        "category_scope": registry.get_category_scope(),
+    })
 
 
 @router.post(
@@ -247,7 +318,7 @@ async def upload_datasets(
             content = await blackbox.read()
             ok, df, err = validate_csv_bytes(content, "blackbox", expected_type="blackbox")
             if ok:
-                registry.set_blackbox(df)
+                registry.set_blackbox(df, filename=blackbox.filename)
                 analysis_cache.clear()
                 rows_loaded["blackbox"] = len(df)
                 datasets_loaded["blackbox"] = True
@@ -265,7 +336,7 @@ async def upload_datasets(
             content = await magnet.read()
             ok, df, err = validate_csv_bytes(content, "magnet", expected_type="magnet")
             if ok:
-                registry.set_magnet(df)
+                registry.set_magnet(df, filename=magnet.filename)
                 analysis_cache.clear()
                 rows_loaded["magnet"] = len(df)
                 datasets_loaded["magnet"] = True
@@ -283,7 +354,7 @@ async def upload_datasets(
             content = await keyword_classification.read()
             ok, df, err = validate_csv_bytes(content, "keyword_classification", expected_type="keyword_classification")
             if ok:
-                registry.set_keyword_classification(df)
+                registry.set_keyword_classification(df, filename=keyword_classification.filename)
                 analysis_cache.clear()
                 rows_loaded["keyword_classification"] = len(df)
                 datasets_loaded["keyword_classification"] = True
@@ -322,8 +393,7 @@ async def upload_datasets(
         overall = "success"
         message = "All provided datasets uploaded and validated successfully."
 
-    if any_loaded:
-        background_tasks.add_task(run_all_engines)
+    # Analysis starts only after category selection (/set-category) or /start-analysis
     return format_response({
         "status": overall,
         "message": message,
@@ -331,6 +401,20 @@ async def upload_datasets(
         "rows_loaded": rows_loaded,
         "errors": errors if errors else None,
     })
+
+
+@router.post(
+    "/remove-dataset/{dataset_type}",
+    response_model=StandardResponse,
+    summary="Remove a dataset",
+    description="Removes a specific dataset from the registry and clears the analysis cache.",
+)
+def remove_dataset(dataset_type: str):
+    logger.info(f"Removing dataset: {dataset_type}")
+    res = registry.remove_dataset(dataset_type)
+    if res.get("status") == "success":
+        analysis_cache.clear()
+    return format_response(res)
 
 
 # =========================================================================
@@ -349,20 +433,25 @@ async def upload_datasets(
         "**Returns**: 0-100 score, top keywords by search volume, top products by sales."
     ),
 )
-def demand_strength(top_n: int = 10):
+def demand_strength(scope: CategoryScopePayload, top_n: int = 10):
     logger.info(f"Demand Strength requested (top_n={top_n})")
+    if registry.is_blackbox_uploaded():
+        guard = _guard_scoped_analysis()
+        if guard:
+            return guard
 
-    magnet_df = registry.get_magnet()
-    blackbox_df = registry.get_blackbox()
-    kc_df = registry.get_keyword_classification()
+    from app.utils.scope_resolver import attach_scope_to_result
+    blackbox_df, magnet_df, kc_df, scope_meta, kw_meta, cache_key = _resolve_context(scope)
 
     if is_empty_dataframe(magnet_df) and is_empty_dataframe(blackbox_df):
         return _datasets_not_loaded("Demand Strength", "magnet and/or blackbox")
 
-    cached = analysis_cache.get_engine("demand")
+    cached = analysis_cache.get_engine("demand", cache_key)
     if cached:
         return format_response(cached)
     result = demand_engine.run(magnet_df, blackbox_df, top_n=top_n, keyword_classification_df=kc_df)
+    attach_scope_to_result(result, scope_meta, kw_meta)
+    analysis_cache.set_engine("demand", result, cache_key)
     logger.info(
         f"Demand Strength complete — status={result['status']}, "
         f"score={result.get('results', {}).get('overall_demand_score', 'n/a')}"
@@ -382,17 +471,23 @@ def demand_strength(top_n: int = 10):
         "**Returns**: fastest-growing brands, declining brands, market direction."
     ),
 )
-def sales_momentum(top_n: int = 10):
+def sales_momentum(scope: CategoryScopePayload, top_n: int = 10):
     logger.info(f"Sales Momentum requested (top_n={top_n})")
+    guard = _guard_scoped_analysis()
+    if guard:
+        return guard
 
-    blackbox_df = registry.get_blackbox()
+    blackbox_df, _magnet, _kc, scope_meta, _kw, cache_key = _resolve_context(scope)
     if is_empty_dataframe(blackbox_df):
         return _datasets_not_loaded("Sales Momentum", "blackbox")
 
-    cached = analysis_cache.get_engine("sales_momentum")
+    cached = analysis_cache.get_engine("sales_momentum", cache_key)
     if cached:
         return format_response(cached)
     result = sales_momentum_engine.run(blackbox_df, top_n=top_n)
+    if 'scope' not in result:
+        result['scope'] = scope_meta
+    analysis_cache.set_engine("sales_momentum", result, cache_key)
     logger.info(
         f"Sales Momentum complete — status={result['status']}, "
         f"brands={result.get('results', {}).get('total_brands_analysed', 'n/a')}"
@@ -412,17 +507,23 @@ def sales_momentum(top_n: int = 10):
         "**Returns**: momentum leaders, momentum laggards, component scores, market momentum direction."
     ),
 )
-def revenue_momentum(top_n: int = 10):
+def revenue_momentum(scope: CategoryScopePayload, top_n: int = 10):
     logger.info(f"Revenue Momentum requested (top_n={top_n})")
+    guard = _guard_scoped_analysis()
+    if guard:
+        return guard
 
-    blackbox_df = registry.get_blackbox()
+    blackbox_df, _magnet, _kc, scope_meta, _kw, cache_key = _resolve_context(scope)
     if is_empty_dataframe(blackbox_df):
         return _datasets_not_loaded("Revenue Momentum", "blackbox")
 
-    cached = analysis_cache.get_engine("revenue_momentum")
+    cached = analysis_cache.get_engine("revenue_momentum", cache_key)
     if cached:
         return format_response(cached)
     result = revenue_momentum_engine.run(blackbox_df, top_n=top_n)
+    if 'scope' not in result:
+        result['scope'] = scope_meta
+    analysis_cache.set_engine("revenue_momentum", result, cache_key)
     logger.info(
         f"Revenue Momentum complete — status={result['status']}, "
         f"brands={result.get('results', {}).get('total_brands_analysed', 'n/a')}"
@@ -445,17 +546,23 @@ def revenue_momentum(top_n: int = 10):
         "market efficiency score."
     ),
 )
-def bsr_efficiency(top_n: int = 10):
+def bsr_efficiency(scope: CategoryScopePayload, top_n: int = 10):
     logger.info(f"BSR Efficiency requested (top_n={top_n})")
+    guard = _guard_scoped_analysis()
+    if guard:
+        return guard
 
-    blackbox_df = registry.get_blackbox()
+    blackbox_df, _magnet, _kc, scope_meta, _kw, cache_key = _resolve_context(scope)
     if is_empty_dataframe(blackbox_df):
         return _datasets_not_loaded("BSR Efficiency", "blackbox")
 
-    cached = analysis_cache.get_engine("bsr_efficiency")
+    cached = analysis_cache.get_engine("bsr_efficiency", cache_key)
     if cached:
         return format_response(cached)
     result = bsr_efficiency_engine.run(blackbox_df, top_n=top_n)
+    if 'scope' not in result:
+        result['scope'] = scope_meta
+    analysis_cache.set_engine("bsr_efficiency", result, cache_key)
     logger.info(
         f"BSR Efficiency complete — status={result['status']}, "
         f"products={result.get('results', {}).get('total_products_analysed', 'n/a')}"
@@ -475,16 +582,23 @@ def bsr_efficiency(top_n: int = 10):
         "**Returns**: velocity score, market phase, strongest/weakest growth signals, validation stats."
     ),
 )
-def demand_velocity(top_n: int = 10):
+def demand_velocity(scope: CategoryScopePayload, top_n: int = 10):
     logger.info(f"Demand Velocity requested (top_n={top_n})")
-    magnet_df = registry.get_magnet()
-    blackbox_df = registry.get_blackbox()
+    if registry.is_blackbox_uploaded():
+        guard = _guard_scoped_analysis()
+        if guard:
+            return guard
+    from app.utils.scope_resolver import attach_scope_to_result
+    blackbox_df, magnet_df, _kc_df, scope_meta, kw_meta, cache_key = _resolve_context(scope)
     if is_empty_dataframe(magnet_df) and is_empty_dataframe(blackbox_df):
         return _datasets_not_loaded("Demand Velocity", "magnet and/or blackbox")
-    cached = analysis_cache.get_engine("demand_velocity")
+    cached = analysis_cache.get_engine("demand_velocity", cache_key)
     if cached:
         return format_response(cached)
-    return format_response(demand_velocity_engine.run(magnet_df, blackbox_df, top_n=top_n))
+    result = demand_velocity_engine.run(magnet_df, blackbox_df, top_n=top_n)
+    attach_scope_to_result(result, scope_meta, kw_meta)
+    analysis_cache.set_engine("demand_velocity", result, cache_key)
+    return format_response(result)
 
 
 @router.post(
@@ -499,16 +613,19 @@ def demand_velocity(top_n: int = 10):
         "**Returns**: highest/lowest efficiency keywords, market friction keywords, click-heavy low-conversion keywords."
     ),
 )
-def search_intent_efficiency(top_n: int = 10):
+def search_intent_efficiency(scope: CategoryScopePayload, top_n: int = 10):
     logger.info(f"SIEI requested (top_n={top_n})")
-    magnet_df = registry.get_magnet()
-    kc_df = registry.get_keyword_classification()
+    from app.utils.scope_resolver import attach_scope_to_result
+    blackbox_df, magnet_df, kc_df, scope_meta, kw_meta, cache_key = _resolve_context(scope)
     if is_empty_dataframe(magnet_df):
         return _datasets_not_loaded("Search Intent Efficiency Index (SIEI)", "magnet")
-    cached = analysis_cache.get_engine("siei")
+    cached = analysis_cache.get_engine("siei", cache_key)
     if cached:
         return format_response(cached)
-    return format_response(siei_engine.run(magnet_df, keyword_classification_df=kc_df, top_n=top_n))
+    result = siei_engine.run(magnet_df, keyword_classification_df=kc_df, top_n=top_n)
+    attach_scope_to_result(result, scope_meta, kw_meta)
+    analysis_cache.set_engine("siei", result, cache_key)
+    return format_response(result)
 
 
 @router.post(
@@ -525,15 +642,22 @@ def search_intent_efficiency(top_n: int = 10):
         "**Returns**: HHI score, structure type, top brands by share, concentration distribution."
     ),
 )
-def market_concentration(top_n: int = 10):
+def market_concentration(scope: CategoryScopePayload, top_n: int = 10):
     logger.info(f"Market Concentration requested (top_n={top_n})")
-    blackbox_df = registry.get_blackbox()
+    guard = _guard_scoped_analysis()
+    if guard:
+        return guard
+    blackbox_df, _magnet, _kc, scope_meta, _kw, cache_key = _resolve_context(scope)
     if is_empty_dataframe(blackbox_df):
         return _datasets_not_loaded("Market Concentration Index (HHI)", "blackbox")
-    cached = analysis_cache.get_engine("hhi")
+    cached = analysis_cache.get_engine("hhi", cache_key)
     if cached:
         return format_response(cached)
-    return format_response(hhi_engine.run(blackbox_df, top_n=top_n))
+    result = hhi_engine.run(blackbox_df, top_n=top_n)
+    if 'scope' not in result:
+        result['scope'] = scope_meta
+    analysis_cache.set_engine("hhi", result, cache_key)
+    return format_response(result)
 
 
 # =========================================================================
@@ -553,15 +677,22 @@ def market_concentration(top_n: int = 10):
         "opportunity distribution, market insights."
     ),
 )
-def whitespace_opportunities(top_n: int = 15):
+def whitespace_opportunities(scope: CategoryScopePayload, top_n: int = 15):
     logger.info(f"Whitespace Opportunity requested (top_n={top_n})")
-    magnet_df = registry.get_magnet()
+    from app.utils.scope_resolver import attach_scope_to_result
+    blackbox_df, magnet_df, _kc_df, scope_meta, kw_meta, cache_key = _resolve_context(scope)
     if is_empty_dataframe(magnet_df):
         return _datasets_not_loaded("Whitespace Opportunity", "magnet")
-    cached = analysis_cache.get_engine("whitespace")
+    cached = analysis_cache.get_engine("whitespace", cache_key)
     if cached:
         return format_response(cached)
-    result = whitespace_engine.run(magnet_df, None, top_n=top_n)
+    result = whitespace_engine.run(
+        magnet_df,
+        blackbox_df if not is_empty_dataframe(blackbox_df) else None,
+        top_n=top_n,
+    )
+    attach_scope_to_result(result, scope_meta, kw_meta)
+    analysis_cache.set_engine("whitespace", result, cache_key)
     logger.info(
         f"Whitespace Opportunity complete — status={result['status']}, "
         f"score={result.get('results', {}).get('overall_whitespace_score', 'n/a')}"
@@ -635,7 +766,8 @@ def revenue_opportunity_segment_keywords(segment_name: str):
         }
 
     # ── Fallback: re-run with kc_df so segment names are consistent ──────────
-    magnet_df = registry.get_magnet()
+    blackbox_df, scope_meta = registry.get_scoped_blackbox_df(scope.dict() if hasattr(scope, 'dict') else scope)
+    magnet_df, kw_meta = registry.get_scoped_magnet_df(scope.dict() if hasattr(scope, 'dict') else scope, blackbox_df)
     if is_empty_dataframe(magnet_df):
         return {
             "success": False,
@@ -663,12 +795,15 @@ def revenue_opportunity_segment_keywords(segment_name: str):
         "**Returns**: competitor clusters, price positioning, competition density, similarity rankings."
     ),
 )
-def direct_competitors(top_n: int = 15, price_tolerance_pct: float = 17.5):
+def direct_competitors(scope: CategoryScopePayload, top_n: int = 15, price_tolerance_pct: float = 17.5):
     logger.info(f"Direct Competitors requested (top_n={top_n})")
-    blackbox_df = registry.get_blackbox()
+    guard = _guard_scoped_analysis()
+    if guard:
+        return guard
+    blackbox_df, _magnet, _kc, scope_meta, _kw, cache_key = _resolve_context(scope)
     if is_empty_dataframe(blackbox_df):
         return _datasets_not_loaded("Direct Competitors", "blackbox")
-    cached = analysis_cache.get_engine("direct_competitors")
+    cached = analysis_cache.get_engine("direct_competitors", cache_key)
     if cached:
         return format_response(cached)
     result = direct_competitor_engine.run(
@@ -692,15 +827,21 @@ def direct_competitors(top_n: int = 15, price_tolerance_pct: float = 17.5):
         "**Returns**: KPIs, price bands, insights, opportunity table, positioning."
     ),
 )
-def price_elasticity(n_buckets: int = 5):
+def price_elasticity(scope: CategoryScopePayload, n_buckets: int = 5):
     logger.info(f"Price Elasticity requested (n_buckets={n_buckets})")
-    blackbox_df = registry.get_blackbox()
+    guard = _guard_scoped_analysis()
+    if guard:
+        return guard
+    blackbox_df, _magnet, _kc, scope_meta, _kw, cache_key = _resolve_context(scope)
     if is_empty_dataframe(blackbox_df):
         return _datasets_not_loaded("Price Elasticity", "blackbox")
-    cached = analysis_cache.get_engine("price_elasticity")
+    cached = analysis_cache.get_engine("price_elasticity", cache_key)
     if cached:
         return format_response(cached)
     result = price_elasticity_engine.run(None, blackbox_df, n_buckets=n_buckets)
+    if 'scope' not in result:
+        result['scope'] = scope_meta
+    analysis_cache.set_engine("price_elasticity", result, cache_key)
     logger.info(
         f"Price Elasticity complete — status={result['status']}, "
         f"buckets={result.get('results', {}).get('bucket_count', 'n/a')}"
@@ -728,18 +869,23 @@ def price_elasticity(n_buckets: int = 5):
         "market overlap score 0-100."
     ),
 )
-def substitute_intelligence(top_n: int = 10):
+def substitute_intelligence(scope: CategoryScopePayload, top_n: int = 10):
     logger.info(f"Substitute Intelligence requested (top_n={top_n})")
-    kc_df       = registry.get_keyword_classification()
-    blackbox_df = registry.get_blackbox()
+    guard = _guard_scoped_analysis()
+    if guard:
+        return guard
+    blackbox_df, _magnet, kc_df, scope_meta, _kw, cache_key = _resolve_context(scope)
     if is_empty_dataframe(kc_df):
         return _datasets_not_loaded("Substitute Intelligence", "keyword_classification")
     if is_empty_dataframe(blackbox_df):
         return _datasets_not_loaded("Substitute Intelligence", "blackbox")
-    cached = analysis_cache.get_engine("substitute")
+    cached = analysis_cache.get_engine("substitute", cache_key)
     if cached:
         return format_response(cached)
     result = substitute_engine.run(kc_df, blackbox_df, top_n=top_n)
+    if 'scope' not in result:
+        result['scope'] = scope_meta
+    analysis_cache.set_engine("substitute", result, cache_key)
     logger.info(
         f"Substitute Intelligence complete — status={result['status']}, "
         f"substitutes={result.get('results', {}).get('total_substitute_products', 'n/a')}"
@@ -765,18 +911,23 @@ def substitute_intelligence(top_n: int = 10):
         "cross-sell opportunities, ecosystem strength 0-100."
     ),
 )
-def complement_intelligence(top_n: int = 10):
+def complement_intelligence(scope: CategoryScopePayload, top_n: int = 10):
     logger.info(f"Complement Intelligence requested (top_n={top_n})")
-    kc_df       = registry.get_keyword_classification()
-    blackbox_df = registry.get_blackbox()
+    guard = _guard_scoped_analysis()
+    if guard:
+        return guard
+    blackbox_df, _magnet, kc_df, scope_meta, _kw, cache_key = _resolve_context(scope)
     if is_empty_dataframe(kc_df):
         return _datasets_not_loaded("Complement Intelligence", "keyword_classification")
     if is_empty_dataframe(blackbox_df):
         return _datasets_not_loaded("Complement Intelligence", "blackbox")
-    cached = analysis_cache.get_engine("complement")
+    cached = analysis_cache.get_engine("complement", cache_key)
     if cached:
         return format_response(cached)
     result = complement_engine.run(kc_df, blackbox_df, top_n=top_n)
+    if 'scope' not in result:
+        result['scope'] = scope_meta
+    analysis_cache.set_engine("complement", result, cache_key)
     logger.info(
         f"Complement Intelligence complete — status={result['status']}, "
         f"complements={result.get('results', {}).get('total_complement_products', 'n/a')}"
@@ -803,18 +954,23 @@ def complement_intelligence(top_n: int = 10):
         "bundle clusters by subcategory, ecosystem strength 0-100."
     ),
 )
-def bundle_opportunities(top_n: int = 10):
+def bundle_opportunities(scope: CategoryScopePayload, top_n: int = 10):
     logger.info(f"Bundle Opportunities requested (top_n={top_n})")
-    kc_df       = registry.get_keyword_classification()
-    blackbox_df = registry.get_blackbox()
+    guard = _guard_scoped_analysis()
+    if guard:
+        return guard
+    blackbox_df, _magnet, kc_df, scope_meta, _kw, cache_key = _resolve_context(scope)
     if is_empty_dataframe(kc_df):
         return _datasets_not_loaded("Bundle Opportunity", "keyword_classification")
     if is_empty_dataframe(blackbox_df):
         return _datasets_not_loaded("Bundle Opportunity", "blackbox")
-    cached = analysis_cache.get_engine("bundle")
+    cached = analysis_cache.get_engine("bundle", cache_key)
     if cached:
         return format_response(cached)
     result = bundle_opportunity_engine.run(kc_df, blackbox_df, top_n=top_n)
+    if 'scope' not in result:
+        result['scope'] = scope_meta
+    analysis_cache.set_engine("bundle", result, cache_key)
     logger.info(
         f"Bundle Opportunities complete — status={result['status']}, "
         f"bundles={result.get('results', {}).get('total_bundle_opportunities', 'n/a')}"
@@ -854,10 +1010,10 @@ def processing_status():
         "Substitutes, Complements, and Bundle Opportunities for the UI."
     ),
 )
-def product_intelligence(top_n: int = 5, price_tolerance_pct: float = 17.5):
+def product_intelligence(scope: CategoryScopePayload, top_n: int = 5, price_tolerance_pct: float = 17.5):
     logger.info(f"Product Intelligence requested (top_n={top_n})")
 
-    blackbox_df = registry.get_blackbox()
+    blackbox_df, scope_meta = registry.get_scoped_blackbox_df(scope.dict() if hasattr(scope, 'dict') else scope)
     kc_df = registry.get_keyword_classification()
 
     if is_empty_dataframe(blackbox_df):
@@ -939,18 +1095,21 @@ def product_intelligence(top_n: int = 5, price_tolerance_pct: float = 17.5):
         "Returns insufficient_data for individual metrics when required columns are missing."
     ),
 )
-def finance_intelligence(top_n: int = 10):
+def finance_intelligence(scope: CategoryScopePayload, top_n: int = 10):
     logger.info("Finance Intelligence requested")
-    magnet_df = registry.get_magnet()
-    blackbox_df = registry.get_blackbox()
+    if registry.is_blackbox_uploaded():
+        guard = _guard_scoped_analysis()
+        if guard:
+            return guard
+    from app.utils.scope_resolver import attach_scope_to_result
+    blackbox_df, magnet_df, _kc, scope_meta, kw_meta, cache_key = _resolve_context(scope)
     if is_empty_dataframe(magnet_df) and is_empty_dataframe(blackbox_df):
         return _datasets_not_loaded("Finance Intelligence", "magnet and/or blackbox")
-    cached = analysis_cache.get_engine("finance")
+    cached = analysis_cache.get_engine("finance", cache_key)
     if cached:
         return format_response(cached)
     demand_score = None
-    # Try to get demand score from cache first to avoid re-running demand engine
-    demand_cached = analysis_cache.get_engine("demand")
+    demand_cached = analysis_cache.get_engine("demand", cache_key)
     if demand_cached and demand_cached.get("status") == "success":
         demand_score = (
             demand_cached.get("results", {}).get("market_demand_index")
@@ -961,6 +1120,8 @@ def finance_intelligence(top_n: int = 10):
         if demand_res.get("status") == "success":
             demand_score = demand_res.get("results", {}).get("overall_demand_score")
     result = run_finance_intelligence(magnet_df, blackbox_df, demand_score=demand_score)
+    attach_scope_to_result(result, scope_meta, kw_meta)
+    analysis_cache.set_engine("finance", result, cache_key)
     logger.info(
         f"Finance Intelligence complete — status={result['status']}, "
         f"health={result.get('results', {}).get('finance_health', {}).get('finance_health')}"
@@ -972,31 +1133,111 @@ def finance_intelligence(top_n: int = 10):
 # Market Report
 # =========================================================================
 
-def _build_report_from_snapshot(top_n: int = 10):
-    """Single analysis run — report and UI share cached engine outputs."""
-    logger.info(f"Building market report snapshot (top_n={top_n})")
-    
-    blackbox_df = registry.get_blackbox()
-    magnet_df = registry.get_magnet()
-    
-    logger.info(f"Datasets loaded: blackbox={len(blackbox_df) if blackbox_df is not None else 0}, magnet={len(magnet_df) if magnet_df is not None else 0}")
-    
+def _scoped_engine(name: str, cache_key: str, runner, *args, **kwargs) -> dict:
+    cached = analysis_cache.get_engine(name, cache_key)
+    if cached:
+        return cached
+    result = runner(*args, **kwargs)
+    analysis_cache.set_engine(name, result, cache_key)
+    return result
+
+
+def _build_market_report(scope: CategoryScopePayload, top_n: int = 10):
+    """Build report from category-scoped datasets and scoped engine cache."""
+    from app.utils.scope_resolver import attach_scope_to_result
+
+    logger.info(f"Building scoped market report (top_n={top_n})")
+    blackbox_df, magnet_df, kc_df, scope_meta, kw_meta, cache_key = _resolve_context(scope)
+
     if is_empty_dataframe(blackbox_df):
         return _datasets_not_loaded("Market Report", "blackbox")
 
-    snapshot = analysis_cache.get_snapshot()
-    if not snapshot or snapshot.get("top_n") != top_n:
-        logger.info(f"Cache miss or top_n mismatch, running all engines")
-        snapshot = run_all_engines(top_n=top_n)
+    logger.info(
+        "Scoped datasets: blackbox=%s, magnet=%s, cache_key=%s",
+        len(blackbox_df) if blackbox_df is not None else 0,
+        len(magnet_df) if magnet_df is not None else 0,
+        cache_key,
+    )
 
-    engines = snapshot.get("engines", {})
-    logger.info(f"Engines snapshot ready: {list(engines.keys())}")
+    engines: dict = {}
+    if not is_empty_dataframe(magnet_df) or not is_empty_dataframe(blackbox_df):
+        demand_res = _scoped_engine(
+            "demand", cache_key,
+            demand_engine.run,
+            magnet_df, blackbox_df,
+            top_n=top_n, keyword_classification_df=kc_df,
+        )
+        attach_scope_to_result(demand_res, scope_meta, kw_meta)
+        engines["demand"] = demand_res
+
+    if not is_empty_dataframe(blackbox_df):
+        engines["sales_momentum"] = _scoped_engine(
+            "sales_momentum", cache_key, sales_momentum_engine.run, blackbox_df, top_n,
+        )
+        engines["revenue_momentum"] = _scoped_engine(
+            "revenue_momentum", cache_key, revenue_momentum_engine.run, blackbox_df, top_n,
+        )
+        engines["bsr_efficiency"] = _scoped_engine(
+            "bsr_efficiency", cache_key, bsr_efficiency_engine.run, blackbox_df, top_n,
+        )
+        engines["hhi"] = _scoped_engine(
+            "hhi", cache_key, hhi_engine.run, blackbox_df, top_n,
+        )
+        engines["price_elasticity"] = _scoped_engine(
+            "price_elasticity", cache_key, price_elasticity_engine.run, None, blackbox_df,
+        )
+        engines["direct_competitors"] = _scoped_engine(
+            "direct_competitors", cache_key,
+            direct_competitor_engine.run, None, blackbox_df, top_n,
+        )
+
+    if not is_empty_dataframe(magnet_df):
+        siei_res = _scoped_engine(
+            "siei", cache_key, siei_engine.run,
+            magnet_df, keyword_classification_df=kc_df, top_n=top_n,
+        )
+        attach_scope_to_result(siei_res, scope_meta, kw_meta)
+        engines["siei"] = siei_res
+        ws_res = _scoped_engine(
+            "whitespace", cache_key,
+            whitespace_engine.run,
+            magnet_df,
+            blackbox_df if not is_empty_dataframe(blackbox_df) else None,
+            top_n,
+        )
+        attach_scope_to_result(ws_res, scope_meta, kw_meta)
+        engines["whitespace"] = ws_res
+        engines["demand_velocity"] = _scoped_engine(
+            "demand_velocity", cache_key, demand_velocity_engine.run,
+            magnet_df, blackbox_df, top_n=top_n,
+        )
+
+    if not is_empty_dataframe(kc_df) and not is_empty_dataframe(blackbox_df):
+        engines["substitute"] = _scoped_engine(
+            "substitute", cache_key, substitute_engine.run, kc_df, blackbox_df, top_n,
+        )
+        engines["complement"] = _scoped_engine(
+            "complement", cache_key, complement_engine.run, kc_df, blackbox_df, top_n,
+        )
+        engines["bundle"] = _scoped_engine(
+            "bundle", cache_key, bundle_opportunity_engine.run, kc_df, blackbox_df, top_n,
+        )
+
+    demand_score = (
+        engines.get("demand", {}).get("results", {}).get("market_demand_index")
+        or engines.get("demand", {}).get("results", {}).get("overall_demand_score")
+    )
+    finance_res = _scoped_engine(
+        "finance", cache_key,
+        run_finance_intelligence, magnet_df, blackbox_df, demand_score=demand_score,
+    )
+    attach_scope_to_result(finance_res, scope_meta, kw_meta)
+    engines["finance"] = finance_res
 
     def _eng(key: str):
         return engines.get(key) or {}
 
     try:
-        logger.info("Starting market report generation from engines")
         report = build_report(
             demand_result=_eng("demand"),
             sales_result=_eng("sales_momentum"),
@@ -1016,22 +1257,33 @@ def _build_report_from_snapshot(top_n: int = 10):
             magnet_df=magnet_df,
             top_n=top_n,
         )
-        logger.info(f"Market report generation succeeded")
-
         if report.get("results") is not None:
             report["results"]["engine_outputs"] = engines
-
+            report["results"]["scope"] = scope_meta
+            report["results"]["keyword_scope"] = kw_meta
         return format_response(report)
     except Exception as e:
         logger.exception(f"Market report generation failed: {str(e)}")
         from fastapi import HTTPException
         raise HTTPException(
             status_code=500,
-            detail=f"Market report generation failed: {str(e)}"
+            detail=f"Market report generation failed: {str(e)}",
         )
 
 
 @router.get(
+    "/market-report",
+    response_model=StandardResponse,
+    summary="Full Market Intelligence Report (GET)",
+    description="GET alias for market report using the active registry category scope.",
+)
+def market_report_get(top_n: int = 10):
+    from app.utils.scope_resolver import scope_from_registry
+    scope_dict = scope_from_registry(registry.get_category_scope())
+    return _build_market_report(CategoryScopePayload(**scope_dict), top_n=top_n)
+
+
+@router.post(
     "/market-report",
     response_model=StandardResponse,
     summary="Full Market Intelligence Report",
@@ -1042,11 +1294,9 @@ def _build_report_from_snapshot(top_n: int = 10):
         "and Markdown narrative. Future-ready for PDF/HTML export."
     ),
 )
-def market_report(top_n: int = 10):
+def market_report(scope: CategoryScopePayload, top_n: int = 10):
     logger.info(f"Market Report requested (top_n={top_n})")
-    report = _build_report_from_snapshot(top_n=top_n)
-    logger.info("Market Report complete")
-    return report
+    return _build_market_report(scope, top_n=top_n)
 
 
 @router.get(
@@ -1109,7 +1359,9 @@ def overview_verification(top_n: int = 10):
     demand_hotspot = _build_demand_hotspot(magnet_df)
     primary_cluster = _build_primary_price_cluster(blackbox_df, total_revenue)
 
-    report_resp = _build_report_from_snapshot(top_n=top_n)
+    from app.utils.scope_resolver import scope_from_registry
+    scope_dict = scope_from_registry(registry.get_category_scope())
+    report_resp = _build_market_report(CategoryScopePayload(**scope_dict), top_n=top_n)
     report_data = report_resp.get("data", {})
     report_results = report_data.get("results", {})
     snapshot = report_results.get("market_snapshot", {})
@@ -1163,7 +1415,9 @@ def overview_verification(top_n: int = 10):
 )
 def market_report_pdf(top_n: int = 10, report_mode: str = "executive", include_charts: bool = True):
     logger.info(f"Market Report PDF requested (top_n={top_n}, report_mode={report_mode}, include_charts={include_charts})")
-    report = _build_report_from_snapshot(top_n=top_n)
+    from app.utils.scope_resolver import scope_from_registry
+    scope_dict = scope_from_registry(registry.get_category_scope())
+    report = _build_market_report(CategoryScopePayload(**scope_dict), top_n=top_n)
     if not report.get("success"):
         return report
     if not report.get("data") or not report["data"].get("results"):
@@ -1203,3 +1457,191 @@ def _datasets_not_loaded(metric_name: str, required: str) -> dict:
         },
         "processing_time_seconds": 0.0,
     })
+
+
+# =========================================================================
+# Consumer Adoption Simulator
+# =========================================================================
+
+@router.post(
+    "/consumer-adoption-simulator",
+    response_model=StandardResponse,
+    summary="Consumer Adoption Simulator",
+    description=(
+        "Simulates how 1,000 realistic consumers would react to the product "
+        "opportunity identified from the active dataset.  Aggregates all engine "
+        "outputs into a MarketDNA, generates a consumer population, clusters into "
+        "up to 20 psychographic segments, then computes adoption metrics and "
+        "resistance barriers per segment."
+    ),
+)
+def consumer_adoption_simulator(scope: CategoryScopePayload, population_size: int = 1000):
+    logger.info("Consumer Adoption Simulator requested (population=%d)", population_size)
+
+    # ── Collect cached engine results ─────────────────────────────────────────
+    def _cached(key: str):
+        return analysis_cache.get_engine(key, scope.scope_key) or analysis_cache.get_engine(key)
+
+    demand_result          = _cached("demand")
+    demand_velocity_result = _cached("demand_velocity")
+    siei_result            = _cached("siei")
+    hhi_result             = _cached("hhi")
+    price_result           = _cached("price_elasticity")
+    revenue_momentum_result = _cached("revenue_momentum")
+    bsr_result             = _cached("bsr_efficiency")
+
+    # ── Validate — need at least one result to simulate ───────────────────────
+    available = [r for r in [demand_result, siei_result, hhi_result] if r]
+    if not available:
+        return format_response({
+            "status": "error",
+            "message": (
+                "No analysis results available. Run at least one engine "
+                "(Demand Strength, Inbound Efficiency, or Market Concentration) "
+                "before running the Consumer Adoption Simulator."
+            ),
+        })
+
+    try:
+        from app.services.consumer_adoption_simulator import (
+            MarketDNAEngine,
+            ConsumerPopulationEngine,
+            PsychographicClusterEngine,
+            AdoptionSimulationEngine,
+            ResistanceAnalysisEngine,
+        )
+
+        # 1. Build MarketDNA
+        dna_engine = MarketDNAEngine()
+        dna = dna_engine.build(
+            demand_result=demand_result,
+            demand_velocity_result=demand_velocity_result,
+            siei_result=siei_result,
+            hhi_result=hhi_result,
+            price_result=price_result,
+            revenue_momentum_result=revenue_momentum_result,
+            bsr_result=bsr_result,
+        )
+
+        # 2. Generate consumer population
+        pop_engine = ConsumerPopulationEngine()
+        consumers = pop_engine.generate(dna, population_size=min(population_size, 1000))
+
+        # 3. Psychographic clustering
+        cluster_engine = PsychographicClusterEngine()
+        clusters = cluster_engine.cluster(consumers, dna)
+
+        # 4. Adoption simulation
+        adoption_engine = AdoptionSimulationEngine()
+        adoption_results = adoption_engine.simulate(clusters, dna)
+
+        # 5. Resistance analysis
+        resistance_engine = ResistanceAnalysisEngine()
+        resistance_results = resistance_engine.analyse(clusters, dna)
+
+        # 6. Build insight context and generate insights
+        from app.services.consumer_adoption_simulator.insight_engine import (
+            InsightContextBuilder,
+            SimulationInsightEngine,
+        )
+        population_summary_dict = {
+            "total_consumers":            len(consumers),
+            "num_psychographic_segments": len(clusters),
+            "avg_purchase_intent":        round(sum(a.purchase_intent for a in adoption_results) / max(len(adoption_results), 1), 2),
+            "avg_conversion_probability": round(sum(a.conversion_probability for a in adoption_results) / max(len(adoption_results), 1), 4),
+            "avg_trust_score":            round(sum(a.trust_score for a in adoption_results) / max(len(adoption_results), 1), 2),
+            "avg_emotional_resonance":    round(sum(a.emotional_resonance for a in adoption_results) / max(len(adoption_results), 1), 2),
+            "avg_resistance_index":       round(sum(r.resistance_index for r in resistance_results) / max(len(resistance_results), 1), 2),
+            "dominant_channel":           "Amazon",
+        }
+        # Merge enriched segments for context builder
+        resistance_by_id_tmp = {r.cluster_id: r.to_dict() for r in resistance_results}
+        segments_for_insight = []
+        for cl in clusters:
+            ar_match = next((a for a in adoption_results if a.cluster_id == cl.cluster_id), None)
+            if ar_match:
+                seg = ar_match.to_dict()
+                seg["resistance"] = resistance_by_id_tmp.get(cl.cluster_id, {})
+                seg["motivations"] = cl.motivations
+                seg["objections"]  = cl.objections
+                seg["dominant_traits"] = cl.dominant_traits
+                seg["primary_theme"]   = cl.primary_theme
+                segments_for_insight.append(seg)
+
+        ctx_builder  = InsightContextBuilder()
+        insight_ctx  = ctx_builder.build(
+            market_dna=dna.to_dict(),
+            population_summary=population_summary_dict,
+            psychographic_segments=segments_for_insight,
+        )
+        insight_engine = SimulationInsightEngine()
+        insight_output = insight_engine.generate(insight_ctx)
+
+        # ── Build response ─────────────────────────────────────────────────────
+        # Merge adoption + resistance by cluster_id for convenience
+        resistance_by_id = {r.cluster_id: r.to_dict() for r in resistance_results}
+
+        enriched_segments = []
+        for ar in adoption_results:
+            enriched = ar.to_dict()
+            enriched["resistance"] = resistance_by_id.get(ar.cluster_id, {})
+            enriched_segments.append(enriched)
+
+        # Population-level summary statistics
+        total_pop = len(consumers)
+        avg_intent        = round(sum(a.purchase_intent        for a in adoption_results) / max(len(adoption_results), 1), 2)
+        avg_conversion    = round(sum(a.conversion_probability for a in adoption_results) / max(len(adoption_results), 1), 4)
+        avg_trust         = round(sum(a.trust_score            for a in adoption_results) / max(len(adoption_results), 1), 2)
+        avg_resistance    = round(sum(r.resistance_index       for r in resistance_results) / max(len(resistance_results), 1), 2)
+        avg_resonance     = round(sum(a.emotional_resonance    for a in adoption_results) / max(len(adoption_results), 1), 2)
+
+        channel_votes: dict = {}
+        for a in adoption_results:
+            ch = a.channel_preference
+            channel_votes[ch] = channel_votes.get(ch, 0) + a.population
+        dominant_channel = max(channel_votes, key=lambda c: channel_votes[c]) if channel_votes else "Amazon"
+
+        critical_barriers = [
+            r.to_dict() for r in resistance_results if r.resistance_level in ("Critical", "High")
+        ][:5]
+
+        high_intent_segments = [
+            a.to_dict() for a in adoption_results if a.purchase_intent >= 65
+        ][:5]
+
+        return format_response({
+            "status": "success",
+            "metric_name": "Consumer Adoption Simulator",
+            "summary": (
+                f"Simulated {total_pop:,} consumers across {len(clusters)} psychographic segments. "
+                f"Average purchase intent: {avg_intent:.1f}/100. "
+                f"Average conversion probability: {avg_conversion:.1%}. "
+                f"Dominant channel: {dominant_channel}."
+            ),
+            "results": {
+                "population_summary": {
+                    "total_consumers":          total_pop,
+                    "num_psychographic_segments": len(clusters),
+                    "avg_purchase_intent":       avg_intent,
+                    "avg_conversion_probability": avg_conversion,
+                    "avg_trust_score":           avg_trust,
+                    "avg_emotional_resonance":   avg_resonance,
+                    "avg_resistance_index":      avg_resistance,
+                    "dominant_channel":          dominant_channel,
+                    "channel_distribution":      channel_votes,
+                },
+                "market_dna": dna.to_dict(),
+                "psychographic_segments":   enriched_segments,
+                "high_intent_segments":     high_intent_segments,
+                "critical_resistance_segments": critical_barriers,
+                "data_completeness":        dna.data_completeness,
+                "completeness_score":       dna.completeness_score,
+            },
+        })
+
+    except Exception as exc:
+        logger.error("Consumer Adoption Simulator error: %s", str(exc), exc_info=True)
+        return format_response({
+            "status": "error",
+            "message": f"Simulation failed: {str(exc)}",
+        })

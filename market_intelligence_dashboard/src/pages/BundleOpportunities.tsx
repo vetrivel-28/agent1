@@ -17,11 +17,18 @@ import { FilterBar } from '../components/filters/FilterBar';
 
 
 export default function BundleOpportunities() {
+  const { data: statusData } = useQuery({
+    queryKey: ['status'],
+    queryFn: api.getStatus,
+  });
+  const categoryKey = statusData?.data?.category_scope?.selected_categories?.join('|') || 'all';
+  const categoryScope = statusData?.data?.category_scope || {};
+
   const [selectedEvidence, setSelectedEvidence] = useState<EvidenceData | null>(null);
   
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['bundle-opportunities'],
-    queryFn: () => api.getBundleOpportunities(10),
+    queryKey: ['bundle-opportunities', categoryKey],
+    queryFn: () => api.getBundleOpportunities(10, categoryScope),
   });
 
   const results = data?.data?.results || {};

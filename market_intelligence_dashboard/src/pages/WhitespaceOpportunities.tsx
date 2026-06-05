@@ -184,11 +184,20 @@ function SegmentRevenueTip({ active, payload }: { active?: boolean; payload?: Ar
 }
 
 export default function WhitespaceOpportunities() {
+  const { data: statusData } = useQuery({
+    queryKey: ['status'],
+    queryFn: api.getStatus,
+  });
+  const categoryKey = statusData?.data?.category_scope?.selected_categories?.join('|') || 'all';
+  const datasetSessionId = statusData?.data?.session_id || 'new';
+  const keywordScopeKey = categoryKey ? categoryKey + '_kw' : 'all';
+  const categoryScope = statusData?.data?.category_scope || {};
+
   const [selectedSegment, setSelectedSegment] = useState<string | null>(null);
   const [selectedEvidence, setSelectedEvidence] = useState<EvidenceData | null>(null);
   const { data: whitespaceData, isLoading, isError } = useQuery({
-    queryKey: ['whitespace-opportunities'],
-    queryFn: () => api.getWhitespaceOpportunities(20),
+    queryKey: ['whitespace-opportunities', datasetSessionId, categoryKey, keywordScopeKey],
+    queryFn: () => api.getWhitespaceOpportunities(20, categoryScope),
   });
 
   const {

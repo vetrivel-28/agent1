@@ -30,6 +30,7 @@ from app.services.dataset_registry import registry
 from app.services.finance_intelligence import run as run_finance_intelligence
 from app.utils.dataframe_checks import is_empty_dataframe
 from app.utils.logger import get_logger
+from app.utils.scope_resolver import resolve_analysis_datasets, scope_from_registry
 
 logger = get_logger("analysis_runner")
 
@@ -38,9 +39,27 @@ DEFAULT_TOP_N = 10
 
 def run_all_engines(top_n: int = DEFAULT_TOP_N) -> Dict[str, Any]:
     """Execute all engines; cache results incrementally as they complete."""
-    magnet_df = registry.get_magnet()
-    blackbox_df = registry.get_blackbox()
-    kc_df = registry.get_keyword_classification()
+    ready, msg = registry.analysis_readiness()
+    if not ready:
+        logger.error("Analysis blocked: %s", msg)
+        return {
+            "top_n": top_n,
+            "engines": {},
+            "status": "error",
+            "message": msg,
+        }
+
+    scope_dict = scope_from_registry(registry.get_category_scope())
+    blackbox_df, magnet_df, kc_df, scope_meta, kw_meta, cache_key = resolve_analysis_datasets(
+        registry, scope_dict,
+    )
+    logger.info(
+        "Analysis scope: category=%s, magnet_keywords=%s/%s, cache_key=%s",
+        scope_meta.get("mode"),
+        kw_meta.get("matchedKeywordCount"),
+        kw_meta.get("totalKeywordCount"),
+        cache_key,
+    )
 
     engines: Dict[str, Any] = {}
 
@@ -82,7 +101,7 @@ def run_all_engines(top_n: int = DEFAULT_TOP_N) -> Dict[str, Any]:
                 result = future.result()
                 engines[name] = result
                 # Cache immediately so frontend can access it
-                analysis_cache.set_engine(name, result)
+                analysis_cache.set_engine(name, result, cache_key)
                 logger.info(f"Engine '{name}' completed and cached")
             except Exception as exc:
                 logger.exception(f"{name} engine failed")
@@ -93,7 +112,7 @@ def run_all_engines(top_n: int = DEFAULT_TOP_N) -> Dict[str, Any]:
                     "processing_time_seconds": 0.0,
                 }
                 engines[name] = error_result
-                analysis_cache.set_engine(name, error_result)
+                analysis_cache.set_engine(name, error_result, cache_key)
 
     # Finance depends on demand score — runs after parallel batch
     demand_score = (
@@ -101,7 +120,7 @@ def run_all_engines(top_n: int = DEFAULT_TOP_N) -> Dict[str, Any]:
         or engines.get("demand", {}).get("results", {}).get("overall_demand_score")
     )
     engines["finance"] = run_finance_intelligence(magnet_df, blackbox_df, demand_score=demand_score)
-    analysis_cache.set_engine("finance", engines["finance"])
+    analysis_cache.set_engine("finance", engines["finance"], cache_key)
 
     snapshot = {
         "top_n": top_n,

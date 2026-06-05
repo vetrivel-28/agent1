@@ -263,12 +263,19 @@ function HHIModal({ isOpen, onClose, hhi, topBrands, top5Share, totalBrands }: {
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function MarketConcentration() {
+  const { data: statusData } = useQuery({
+    queryKey: ['status'],
+    queryFn: api.getStatus,
+  });
+  const categoryKey = statusData?.data?.category_scope?.selected_categories?.join('|') || 'all';
+  const categoryScope = statusData?.data?.category_scope || {};
+
   const [isHHIOpen, setIsHHIOpen]   = useState(false);
   const [evidence, setEvidence]     = useState<EvidenceData | null>(null);
 
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['market-concentration'],
-    queryFn: () => api.getMarketConcentration(50),
+    queryKey: ['market-concentration', categoryKey],
+    queryFn: () => api.getMarketConcentration(50, categoryScope),
   });
 
   // Safe data extraction - handles undefined gracefully

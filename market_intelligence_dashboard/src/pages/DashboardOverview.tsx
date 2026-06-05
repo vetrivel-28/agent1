@@ -26,6 +26,7 @@ import { DataCoverageBanner } from '../components/ui/DataCoverageBanner';
 import { TrendComparison } from '../components/intelligence/TrendComparison';
 import { RevenueAtRisk } from '../components/intelligence/RevenueAtRisk';
 import { formatGenericLabel } from '../utils/formatters';
+import { scopeQueryKeys } from '../hooks/useCategoryScope';
 
 
 function InsightCard({ insight, onOpenEvidence }: { insight: any, onOpenEvidence: (evidence: any) => void }) {
@@ -54,11 +55,17 @@ function InsightCard({ insight, onOpenEvidence }: { insight: any, onOpenEvidence
 }
 
 export default function DashboardOverview() {
+  const { data: statusData } = useQuery({
+    queryKey: ['status'],
+    queryFn: api.getStatus,
+  });
+  const { categoryScope, categoryKey, keywordScopeKey, datasetSessionId } = scopeQueryKeys(statusData);
+
   const [evidence, setEvidence] = useState<EvidenceData | null>(null);
 
   const { data: reportResp, isLoading, isError, error } = useQuery({
-    queryKey: ['market-report'],
-    queryFn: () => api.getMarketReport(10),
+    queryKey: ['overview', datasetSessionId, categoryKey, keywordScopeKey],
+    queryFn: () => api.getMarketReport(10, categoryScope),
     retry: false,
     staleTime: 5 * 60 * 1000,
   });

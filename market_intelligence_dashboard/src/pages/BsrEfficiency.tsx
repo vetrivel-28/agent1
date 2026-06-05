@@ -207,9 +207,16 @@ function EfficiencyRing({ score }: { score: number }) {
 // ---------------------------------------------------------------------------
 
 export default function BsrEfficiency() {
+  const { data: statusData } = useQuery({
+    queryKey: ['status'],
+    queryFn: api.getStatus,
+  });
+  const categoryKey = statusData?.data?.category_scope?.selected_categories?.join('|') || 'all';
+  const categoryScope = statusData?.data?.category_scope || {};
+
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['bsr-efficiency'],
-    queryFn: () => api.getBsrEfficiency(50),
+    queryKey: ['bsr-efficiency', categoryKey],
+    queryFn: () => api.getBsrEfficiency(50, categoryScope),
   });
 
   if (isLoading) {

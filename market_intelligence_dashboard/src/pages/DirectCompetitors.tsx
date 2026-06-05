@@ -16,11 +16,18 @@ import { FilterBar } from '../components/filters/FilterBar';
 
 
 export default function DirectCompetitors() {
+  const { data: statusData } = useQuery({
+    queryKey: ['status'],
+    queryFn: api.getStatus,
+  });
+  const categoryKey = statusData?.data?.category_scope?.selected_categories?.join('|') || 'all';
+  const categoryScope = statusData?.data?.category_scope || {};
+
   const [selectedEvidence, setSelectedEvidence] = useState<EvidenceData | null>(null);
   
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['direct-competitors'],
-    queryFn: () => api.getDirectCompetitors(15, 17.5),
+    queryKey: ['direct-competitors', categoryKey],
+    queryFn: () => api.getDirectCompetitors(15, 17.5, categoryScope),
   });
 
   const results = data?.data?.results || {};

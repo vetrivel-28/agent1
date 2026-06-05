@@ -16,10 +16,15 @@ from app.utils.numeric_cleaner import clean_numeric_series
 from app.utils.theme_extraction import extract_dynamic_themes, extract_hierarchical_themes, assign_themes
 from app.utils.demand_classification import (
     apply_enhanced_classification,
+    build_theme_quality_summary,
     build_unclassified_keyword_table,
     compute_row_confidence,
+    compute_strategic_confidence,
+    enrich_segment_strategic_metadata,
     find_near_duplicate_themes,
+    get_generic_bucket_breakdown,
     group_unclassified_keywords,
+    is_broad_bucket,
     is_generic_theme,
     normalize_theme_display,
     qualification_label,
@@ -295,6 +300,9 @@ def _extract_segments(
 
     segment_list.sort(key=lambda x: x["demand_share"], reverse=True)
 
+    for i, seg in enumerate(segment_list):
+        segment_list[i] = enrich_segment_strategic_metadata(seg, total_heatmap_sv)
+
     unclassified_items = []
     for _, krow in tmp_exploded[tmp_exploded["_final_seg"] == "Other"].iterrows():
         reason = "No theme/classification value"
@@ -363,7 +371,11 @@ def _extract_segments(
             for g in unclassified_groups[:10]
         ],
         "possible_duplicate_themes": find_near_duplicate_themes(
-            [s["segment"] for s in segment_list if s["segment"] != "Other"]
+            [s["display_segment"] for s in segment_list if s["segment"] != "Other"]
+        ),
+        "theme_quality": build_theme_quality_summary(segment_list, total_heatmap_sv),
+        "generic_bucket_breakdown": get_generic_bucket_breakdown(
+            segment_list, unclassified_groups, total_heatmap_sv,
         ),
     }
 
@@ -539,6 +551,16 @@ def _run_internal(
         s["reliable_opportunity_score"] = round(score * (s["row_confidence"] / 100), 1)
 
     valid_segments = [s for s in segment_list if s["segment"] != "Other"]
+    strategic_segments = [s for s in valid_segments if s.get("strategic_eligible")]
+    excluded_strategic = [s for s in valid_segments if not s.get("strategic_eligible")]
+
+    generic_seg = next(
+        (s for s in segment_list if is_broad_bucket(s.get("segment", ""))),
+        None,
+    )
+    generic_demand_pct = float(generic_seg["demand_share"]) if generic_seg else diag_meta.get(
+        "unclassified_demand_pct", 0,
+    )
 
     # HHI concentration
     hhi_score = 0.0
@@ -550,47 +572,48 @@ def _run_internal(
         hhi_steps.append(f"{s['segment']}: ({dec:.3f})^2 = {sq:.4f}")
     hhi_score = min(round(hhi_score * 100.0, 2), 100.0)
 
-    # Largest Demand Segment
+    # Largest Demand Segment — specific themes only
     largest_demand = None
-    if valid_segments:
-        top_seg = max(valid_segments, key=lambda x: x["demand_share"])
+    if strategic_segments:
+        top_seg = max(strategic_segments, key=lambda x: x["demand_share"])
+        display = top_seg.get("display_segment", top_seg["segment"])
         req = ["segment", "total_search_volume", "demand_share", "keyword_count", "keywords"]
         fields = {
-            "segment": top_seg["segment"],
+            "segment": display,
             "total_search_volume": top_seg["total_search_volume"],
             "demand_share": top_seg["demand_share"],
             "keyword_count": top_seg["keyword_count"],
             "keywords": top_seg["keywords"],
         }
-        kpi_conf, missing = _kpi_confidence(fields, req)
-        
-        # Validation checks
+        data_conf, missing = _kpi_confidence(fields, req)
+        kpi_conf = compute_strategic_confidence(top_seg, data_conf)
         sum_themes_sv = sum(s["total_search_volume"] for s in valid_segments)
         unclassified_sv = diag_meta["unclassified_search_volume"]
         validation_sum = sum_themes_sv + unclassified_sv
-        
-        print("Total Search Volume from dataset =", total_market_sv)
-        print("Generic Search Volume from dataset =", next((s["total_search_volume"] for s in segment_list if s["segment"].lower() == "generic"), 0))
-        print("Generic row count =", next((s["keyword_count"] for s in segment_list if s["segment"].lower() == "generic"), 0))
-        print("Rows used (valid SV rows) =", diag_meta.get("valid_sv_count", diag_meta["total_keyword_count"]))
-        print("Rows excluded (missing+non-numeric) =", diag_meta.get("missing_sv_count", 0) + diag_meta.get("non_numeric_sv_count", 0))
-        
-        if validation_sum != total_market_sv:
-            print(f"WARNING: Validation check failed! Sum of themes ({sum_themes_sv}) + unclassified ({unclassified_sv}) = {validation_sum}, but total market SV = {total_market_sv}.")
-            
+
+        broad_note = ""
+        if generic_demand_pct >= (top_seg["demand_share"] + 0.01):
+            broad_note = (
+                f" Broad/generic demand is {generic_demand_pct:.1f}% of search volume "
+                f"and is not actionable as a single theme."
+            )
+
         largest_demand = {
-            "name": top_seg["segment"],
+            "name": display,
+            "raw_segment": top_seg["segment"],
             "demand_share": top_seg["demand_share"],
             "search_volume": top_seg["total_search_volume"],
             "confidence": kpi_conf,
             "confidence_level": _confidence_level_from_pct(kpi_conf),
             "business_implication": (
-                f"{top_seg['segment']} commands {top_seg['demand_share']}% of search demand — "
-                "the largest addressable segment in the active dataset."
+                f"{display} is the largest specific demand cluster, representing "
+                f"{top_seg['demand_share']}% of search volume across "
+                f"{top_seg['keyword_count']} keywords.{broad_note}"
             ),
             "subtitle": (
-                f"Represents {top_seg['demand_share']}% of total search volume "
-                f"({top_seg['total_search_volume']:,} searches across {top_seg['keyword_count']} keywords)."
+                f"Largest classified segment: {display} — "
+                f"{top_seg['demand_share']}% demand share "
+                f"({top_seg['total_search_volume']:,} searches)."
             ),
             "evidence": _create_evidence(
                 "Magnet",
@@ -601,7 +624,12 @@ def _run_internal(
                     "total_search_volume": total_market_sv,
                     "keyword_count": top_seg["keyword_count"],
                     "total_keyword_count": diag_meta["total_keyword_count"],
-                    "themes_compared": len(valid_segments),
+                    "themes_compared": len(strategic_segments),
+                    "themes_excluded": [
+                        {"segment": s["segment"], "reason": s.get("exclusion_reason")}
+                        for s in excluded_strategic[:10]
+                    ],
+                    "generic_demand_share_pct": generic_demand_pct,
                     "dataset_session_id": session_id,
                     "total_raw_rows": diag_meta.get("total_raw_rows", 0),
                     "valid_sv_count": diag_meta.get("valid_sv_count", 0),
@@ -615,25 +643,48 @@ def _run_internal(
                     f"4. Valid rows included: {diag_meta.get('valid_sv_count', 0):,}",
                     f"Total SV Formula: SUM(Search Volume) across {diag_meta.get('valid_sv_count', 0):,} valid rows",
                     f"Total SV: {total_market_sv:,}",
-                    f"Theme SV Formula: SUM(Search Volume) where Theme = '{top_seg['segment']}'",
+                    f"Theme SV Formula: SUM(Search Volume) where Theme = '{display}'",
                     f"Theme SV: {top_seg['total_search_volume']:,} from {top_seg['keyword_count']:,} keywords",
                     f"Final Calculation: {top_seg['total_search_volume']:,} / {total_market_sv:,} × 100 = {top_seg['demand_share']}%",
-                    f"Validation: Sum of all themes + unclassified = {validation_sum:,} == Total SV ({total_market_sv:,})"
+                    f"Validation: Sum of all themes + unclassified = {validation_sum:,} == Total SV ({total_market_sv:,})",
+                    f"Excluded {len(excluded_strategic)} non-specific themes from KPI selection",
                 ],
-                top_seg["segment"],
-                "Primary demand driver from active Magnet keyword dataset. Calculated directly from raw exact search volumes to prevent double counting.",
+                display,
+                "Largest specific classified theme from active Magnet keyword dataset.",
                 rows_included=top_seg["keyword_count"],
                 missing_fields=missing,
             ),
             "top_keywords": top_seg["keywords"][:20],
         }
+    elif valid_segments:
+        largest_demand = {
+            "empty_state": True,
+            "name": None,
+            "title": "No specific theme detected",
+            "subtitle": (
+                "Most demand is broad/generic. Review unclassified keyword groups "
+                "to create actionable themes."
+            ),
+            "confidence": round(
+                compute_strategic_confidence(
+                    {"theme_specificity_score": 20, "keywords": []},
+                    30,
+                ),
+                1,
+            ),
+            "generic_demand_share_pct": generic_demand_pct,
+            "business_implication": (
+                f"Broad/generic demand represents {generic_demand_pct:.1f}% of search volume. "
+                "Specific sub-theme extraction is required before strategic recommendations."
+            ),
+        }
 
     # Highest Efficiency
     best_monetized = None
-    if has_revenue and valid_segments:
+    if has_revenue and strategic_segments:
         best_monet_seg = None
         best_lift = -999.0
-        for s in valid_segments:
+        for s in strategic_segments:
             if s["demand_share"] <= 0:
                 continue
             lift = s["revenue_share"] / s["demand_share"]
@@ -646,19 +697,22 @@ def _run_internal(
             if total_market_ks:
                 fields["total_revenue"] = total_market_ks
                 fields["theme_revenue"] = int(best_monet_seg["revenue_share"] / 100 * total_market_ks)
-            kpi_conf, missing = _kpi_confidence(fields, req + (["total_revenue"] if has_revenue else []))
+            data_conf, missing = _kpi_confidence(fields, req + (["total_revenue"] if has_revenue else []))
+            kpi_conf = compute_strategic_confidence(best_monet_seg, data_conf)
+            display = best_monet_seg.get("display_segment", best_monet_seg["segment"])
             best_monetized = {
-                "name": best_monet_seg["segment"],
+                "name": display,
+                "raw_segment": best_monet_seg["segment"],
                 "lift": round(best_lift, 2),
                 "confidence": kpi_conf,
                 "confidence_level": _confidence_level_from_pct(kpi_conf),
                 "business_implication": (
-                    f"{best_monet_seg['segment']} converts search demand into revenue "
-                    f"{best_lift:.2f}× more efficiently than average — strong monetization vs demand share."
+                    f"{display} converts demand into revenue {best_lift:.2f}× better than average — "
+                    "strong monetization efficiency for this product theme."
                 ),
                 "subtitle": (
-                    f"Revenue efficiency ratio {best_lift:.2f}× "
-                    f"(revenue share {best_monet_seg['revenue_share']}% vs demand share {best_monet_seg['demand_share']}%)."
+                    f"Revenue efficiency {best_lift:.2f}× "
+                    f"(revenue {best_monet_seg['revenue_share']}% vs demand {best_monet_seg['demand_share']}%)."
                 ),
                 "evidence": _create_evidence(
                     "Magnet",
@@ -686,7 +740,7 @@ def _run_internal(
     # Undervalued theme
     most_undervalued = None
     undervalued_candidates = []
-    for s in valid_segments:
+    for s in strategic_segments:
         gap = s["demand_share"] - s["revenue_share"]
         if gap > UNDervalued_GAP_THRESHOLD:
             undervalued_candidates.append({**s, "gap": round(gap, 1)})
@@ -702,14 +756,17 @@ def _run_internal(
             "gap": best_gap_seg["gap"],
             "keyword_count": best_gap_seg["keyword_count"],
         }
-        kpi_conf, missing = _kpi_confidence(fields, req)
+        data_conf, missing = _kpi_confidence(fields, req)
+        kpi_conf = compute_strategic_confidence(best_gap_seg, data_conf)
+        display = best_gap_seg.get("display_segment", best_gap_seg["segment"])
         most_undervalued = {
-            "name": best_gap_seg["segment"],
+            "name": display,
+            "raw_segment": best_gap_seg["segment"],
             "gap": best_gap_seg["gap"],
             "confidence": kpi_conf,
             "confidence_level": _confidence_level_from_pct(kpi_conf),
             "business_implication": (
-                f"{best_gap_seg['segment']} has demand share {best_gap_seg['demand_share']}% but revenue share "
+                f"{display} has demand share {best_gap_seg['demand_share']}% but revenue share "
                 f"{best_gap_seg['revenue_share']}% — a {best_gap_seg['gap']:.1f} pt under-monetization gap."
             ),
             "subtitle": (
@@ -725,7 +782,7 @@ def _run_internal(
                     "revenue_share": best_gap_seg["revenue_share"],
                     "gap": best_gap_seg["gap"],
                     "minimum_gap_threshold": UNDervalued_GAP_THRESHOLD,
-                    "themes_checked": len(valid_segments),
+                    "themes_checked": len(strategic_segments) + len(excluded_strategic),
                     "themes_passing_threshold": len(undervalued_candidates),
                     "candidate_themes": [
                         {"segment": c["segment"], "gap": c["gap"]} for c in undervalued_candidates[:5]
@@ -770,7 +827,7 @@ def _run_internal(
                 "Revenue Gap = Demand Share - Revenue Share; threshold > 2 pts",
                 {
                     "minimum_gap_threshold": UNDervalued_GAP_THRESHOLD,
-                    "themes_checked": len(valid_segments),
+                    "themes_checked": len(strategic_segments) + len(excluded_strategic),
                     "themes_passing_threshold": 0,
                     "dataset_session_id": session_id,
                 },
@@ -786,12 +843,16 @@ def _run_internal(
     recommended_entry = None
     entry_candidates = []
     excluded_count = 0
-    for s in valid_segments:
-        if s.get("row_confidence", 0) < 20:
+    for s in strategic_segments:
+        strat_conf = compute_strategic_confidence(
+            s, s.get("row_confidence", 50),
+        )
+        if strat_conf < 30:
             excluded_count += 1
             continue
-        bes = _best_entry_score(s, max_ds, max_rs, s.get("row_confidence", 0))
+        bes = _best_entry_score(s, max_ds, max_rs, strat_conf)
         s["best_entry_score"] = bes
+        s["strategic_confidence"] = strat_conf
         entry_candidates.append(s)
 
     if entry_candidates:
@@ -803,12 +864,12 @@ def _run_internal(
             else "Monitor" if best_entry_seg["opportunity_score"] >= 30
             else "Low Priority"
         )
-        rec = qualification_label(rec_base, best_entry_seg.get("row_confidence", 0))
+        rec = qualification_label(rec_base, best_entry_seg.get("strategic_confidence", 0))
         req = [
             "opportunity_score", "demand_share", "revenue_share",
             "competition_index", "row_confidence", "candidates",
         ]
-        kpi_conf, missing = _kpi_confidence(
+        data_conf, missing = _kpi_confidence(
             {
                 "opportunity_score": best_entry_seg["opportunity_score"],
                 "demand_share": best_entry_seg["demand_share"],
@@ -819,16 +880,19 @@ def _run_internal(
             },
             req,
         )
+        kpi_conf = compute_strategic_confidence(best_entry_seg, data_conf)
         comp_adv = max(0, min(100, 100 - best_entry_seg["competition_index"]))
+        display = best_entry_seg.get("display_segment", best_entry_seg["segment"])
         recommended_entry = {
-            "name": best_entry_seg["segment"],
+            "name": display,
+            "raw_segment": best_entry_seg["segment"],
             "score": best_entry_seg.get("best_entry_score", 0),
             "opportunity_score": best_entry_seg["opportunity_score"],
             "confidence": kpi_conf,
             "confidence_level": _confidence_level_from_pct(kpi_conf),
             "recommendation": rec,
             "business_implication": (
-                f"{best_entry_seg['segment']} offers the best balanced entry profile "
+                f"{display} offers the best balanced entry profile "
                 f"(Best Entry Score {best_entry_seg.get('best_entry_score', 0):.1f}) — "
                 "combines opportunity, competition advantage, and monetization."
             ),
@@ -842,7 +906,7 @@ def _run_internal(
             ),
             "candidate_ranking": [
                 {
-                    "segment": c["segment"],
+                    "segment": c.get("display_segment", c["segment"]),
                     "best_entry_score": c.get("best_entry_score", 0),
                     "opportunity_score": c["opportunity_score"],
                     "competition_index": c["competition_index"],
@@ -878,6 +942,20 @@ def _run_internal(
                 missing_fields=missing,
             ),
         }
+    elif valid_segments and not entry_candidates:
+        recommended_entry = {
+            "empty_state": True,
+            "name": None,
+            "title": "No specific entry theme detected",
+            "subtitle": (
+                "No theme passed specificity and confidence checks for a balanced entry recommendation."
+            ),
+            "confidence": 30,
+            "business_implication": (
+                "Broad or classification-only buckets were excluded. "
+                "Refine themes using unclassified keyword groups before entry decisions."
+            ),
+        }
 
     # Opportunity database
     opp_db = []
@@ -886,11 +964,18 @@ def _run_internal(
         row_conf = s.get("row_confidence", 0)
         reliable = s.get("reliable_opportunity_score", 0)
 
+        theme_type = s.get("theme_type", "Specific")
+        display = s.get("display_segment", s["segment"])
+
         if s["segment"] == "Other":
             rec = "N/A"
             diff = "N/A"
+        elif theme_type in ("Broad", "Classification Type") or not s.get("strategic_eligible"):
+            rec = "Needs Refinement"
+            diff = "N/A"
         else:
             diff = "High" if s["competition_index"] >= 50 else "Moderate" if s["competition_index"] >= 20 else "Low"
+            strat_conf = compute_strategic_confidence(s, row_conf)
             if score >= 70:
                 rec_base = "Prime Entry"
             elif score >= 50:
@@ -899,7 +984,9 @@ def _run_internal(
                 rec_base = "Monitor"
             else:
                 rec_base = "Low Priority"
-            rec = qualification_label(rec_base, row_conf)
+            rec = qualification_label(rec_base, strat_conf)
+            if theme_type == "Derived":
+                reliable = round(score * (strat_conf / 100), 1)
 
         breakdown_steps = []
         if s["segment"] != "Other":
@@ -911,7 +998,11 @@ def _run_internal(
         formulas = "\n".join(s.get("formula_breakdown", {}).values()) if s.get("formula_breakdown") else ""
 
         opp_db.append({
-            "segment": s["segment"],
+            "segment": display,
+            "raw_segment": s["segment"],
+            "theme_type": theme_type,
+            "theme_specificity_score": s.get("theme_specificity_score", 0),
+            "strategic_eligible": s.get("strategic_eligible", False),
             "demand_share": s["demand_share"],
             "revenue_share": s["revenue_share"],
             "total_search_volume": s["total_search_volume"],
@@ -1034,6 +1125,8 @@ def _run_internal(
             "most_undervalued_theme": most_undervalued,
             "best_monetized_theme": best_monetized,
             "demand_opportunity_database": opp_db,
+            "theme_quality": diag_meta.get("theme_quality"),
+            "generic_bucket_breakdown": diag_meta.get("generic_bucket_breakdown"),
             "search_insights": [],
         },
         "elapsed_ms": round((time.time() - t0) * 1000, 1),

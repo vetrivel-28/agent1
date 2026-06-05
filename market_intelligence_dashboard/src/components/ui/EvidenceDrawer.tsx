@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { X, ChevronDown, ChevronUp, Database, Calculator, Info } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useQuery } from '@tanstack/react-query';
+import { api } from '../../services/api';
 import { cn } from '../../utils/cn';
 
 // ---------------------------------------------------------------------------
@@ -39,6 +41,8 @@ export interface EvidenceData {
   filtered_row_count?: number;
   total_row_count?: number;
   calculation_scope?: 'Global' | 'Filtered';
+  category_scope?: string[];
+  keyword_scope?: Record<string, any>;
   /** Full-width tables below the split */
   detail_tables?: Array<{
     title: string;
@@ -91,12 +95,20 @@ function CountsGrid({ counts }: { counts: Record<string, string | number> }) {
 }
 
 export function EvidenceDrawer({ evidence, isOpen, onClose }: EvidenceDrawerProps) {
+  const { data: statusData } = useQuery({
+    queryKey: ['status'],
+    queryFn: api.getStatus,
+    enabled: isOpen,
+  });
+
   if (!evidence || !isOpen) {
     return null;
   }
   
   const hasTopRecords = evidence.top_records && evidence.top_records.length > 0;
   const topRecordKeys = hasTopRecords ? Object.keys(evidence.top_records![0]) : [];
+  const cScope = statusData?.data?.category_scope;
+  const hasProductData = evidence.source_datasets?.some(d => d.toLowerCase().includes('blackbox'));
   
   return (
     <AnimatePresence>
@@ -154,6 +166,97 @@ export function EvidenceDrawer({ evidence, isOpen, onClose }: EvidenceDrawerProp
                 )}
               </div>
               
+              {/* Scope Proof Block */}
+              {(cScope || evidence.keyword_scope) && (
+                <div className="p-4 bg-muted/30 rounded-xl border border-border/50 text-sm">
+                  <h4 className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-3 flex items-center gap-2">
+                    <Database className="w-3.5 h-3.5" /> Calculation Scope
+                  </h4>
+                  
+                  {/* Category Scope */}
+                  {cScope && (
+                    <div className="space-y-2 mb-4 pb-4 border-b border-border/50">
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Category Scope</p>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Mode</span>
+                        <span className="font-semibold text-foreground">
+                          {cScope.mode === 'all' ? 'All Categories' : 'Selected Categories'}
+                        </span>
+                      </div>
+                      {cScope.mode === 'selected' && cScope.selected_categories && (
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Selected</span>
+                          <span className="font-semibold text-foreground text-right max-w-[200px] truncate" title={cScope.selected_categories.join(', ')}>
+                            {cScope.selected_categories.join(', ')}
+                          </span>
+                        </div>
+                      )}
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Total Rows (BlackBox)</span>
+                        <span className="font-mono text-muted-foreground">{cScope.blackbox_rows_total?.toLocaleString() ?? 0}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-foreground font-medium">Active Scoped Rows</span>
+                        <span className="font-mono font-bold text-emerald-500">{cScope.blackbox_rows_active?.toLocaleString() ?? 0}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground text-xs">Excluded Rows</span>
+                        <span className="font-mono text-xs text-muted-foreground">{cScope.blackbox_rows_excluded?.toLocaleString() ?? 0}</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Keyword Scope */}
+                  {evidence.keyword_scope && evidence.keyword_scope.mode === 'category_mapped' && (
+                    <div className="space-y-2">
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Keyword Scope</p>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Total Magnet Keywords</span>
+                        <span className="font-mono text-muted-foreground">{evidence.keyword_scope.totalKeywordCount?.toLocaleString() ?? 0}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-foreground font-medium">Category-Mapped Keywords</span>
+                        <span className="font-mono font-bold text-emerald-500">{evidence.keyword_scope.matchedKeywordCount?.toLocaleString() ?? 0}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground text-xs">Excluded Keywords</span>
+                        <span className="font-mono text-xs text-muted-foreground">{evidence.keyword_scope.excludedKeywordCount?.toLocaleString() ?? 0}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground text-xs">Mapping Confidence</span>
+                        <span className="font-mono text-xs text-muted-foreground">{evidence.keyword_scope.mappingConfidence?.toFixed(1) ?? 0}%</span>
+                      </div>
+                      {evidence.keyword_scope.mappingMethod && (
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground text-xs">Mapping Method</span>
+                          <span className="text-xs text-right max-w-[220px]">{evidence.keyword_scope.mappingMethod}</span>
+                        </div>
+                      )}
+                      {evidence.keyword_scope.topScopedPhrases && (
+                        <div className="pt-2 mt-2 border-t border-border/30">
+                          <span className="text-xs text-muted-foreground block mb-1">Top Scoped Product Phrases:</span>
+                          <div className="flex flex-wrap gap-1">
+                            {evidence.keyword_scope.topScopedPhrases.map((phrase: string, i: number) => (
+                              <span key={i} className="text-[10px] bg-muted/50 border border-border/50 px-1.5 py-0.5 rounded text-foreground/80">{phrase}</span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      {evidence.keyword_scope.topMatchedKeywords?.length > 0 && (
+                        <div className="pt-2 mt-2 border-t border-border/30">
+                          <span className="text-xs text-muted-foreground block mb-1">Top Matched Keywords:</span>
+                          <div className="flex flex-wrap gap-1">
+                            {evidence.keyword_scope.topMatchedKeywords.slice(0, 8).map((kw: string, i: number) => (
+                              <span key={i} className="text-[10px] bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 rounded text-foreground/80">{kw}</span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className="space-y-6">
                 {(evidence.business_summary || evidence.business_meaning) && (
                   <Section title="Business Meaning">
@@ -222,33 +325,50 @@ export function EvidenceDrawer({ evidence, isOpen, onClose }: EvidenceDrawerProp
                     )}
                   </div>
                   
-                  <div className="pt-2 border-t border-border/40">
-                    <p className="text-xs text-muted-foreground mb-1 font-medium">Calculation Scope</p>
-                    <span className={cn(
-                      "inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-semibold",
-                      (evidence.calculation_scope === 'Filtered' || !evidence.calculation_scope) ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"
-                    )}>
-                      Filtered BlackBox dataset
-                    </span>
-                  </div>
+                  {hasProductData && cScope && (
+                    <div className="pt-2 border-t border-border/40 mt-2 space-y-2">
+                      <div>
+                        <p className="text-xs text-muted-foreground mb-1 font-medium">Calculation Scope</p>
+                        <span className={cn(
+                          "inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-semibold",
+                          cScope.mode === 'all' || !cScope.selected_categories?.length ? "bg-primary/10 text-primary" : "bg-purple-500/10 text-purple-600 dark:text-purple-400"
+                        )}>
+                          {cScope.mode === 'all' || !cScope.selected_categories?.length 
+                            ? "All Categories" 
+                            : cScope.selected_categories.length > 1 
+                              ? `Selected Categories: ${cScope.selected_categories.length}`
+                              : `Selected Category: ${cScope.selected_categories[0]}`}
+                        </span>
+                      </div>
+                      
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        <div>
+                          <p className="text-muted-foreground mb-0.5 font-medium">Category Column</p>
+                          <p className="font-mono">{cScope.category_column || 'None'}</p>
+                        </div>
+                        <div>
+                          <p className="text-muted-foreground mb-0.5 font-medium">Excluded Rows</p>
+                          <p className="font-mono text-danger">{cScope.blackbox_rows_excluded?.toLocaleString() || 0}</p>
+                        </div>
+                      </div>
+                      
+                      <div>
+                        <p className="text-xs text-muted-foreground mb-0.5 font-medium">Active Scoped Rows</p>
+                        <p className="text-sm font-semibold text-emerald-500">
+                          {cScope.blackbox_rows_active?.toLocaleString() || 0} <span className="text-muted-foreground text-xs font-normal">of {cScope.blackbox_rows_total?.toLocaleString() || 0} total</span>
+                        </p>
+                      </div>
+                    </div>
+                  )}
 
                   {evidence.active_filters && Object.keys(evidence.active_filters).length > 0 && (
-                    <div className="pt-2 border-t border-border/40">
+                    <div className="pt-2 border-t border-border/40 mt-2">
                       <p className="text-xs text-muted-foreground mb-1.5 font-medium">Active Filters</p>
                       <div className="flex flex-wrap gap-1">
                         {Object.entries(evidence.active_filters).map(([k, v]) => (
                           <Chip key={k} label={`${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`} />
                         ))}
                       </div>
-                    </div>
-                  )}
-
-                  {evidence.filtered_row_count !== undefined && evidence.total_row_count !== undefined && (
-                    <div className="pt-2 border-t border-border/40">
-                      <p className="text-xs text-muted-foreground mb-1 font-medium">Filtered Rows</p>
-                      <p className="text-sm font-semibold">
-                        {evidence.filtered_row_count.toLocaleString()} / {evidence.total_row_count.toLocaleString()}
-                      </p>
                     </div>
                   )}
                   

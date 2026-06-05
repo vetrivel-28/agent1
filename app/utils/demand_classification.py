@@ -309,3 +309,243 @@ def qualification_label(base: str, confidence: float) -> str:
     if confidence >= 50:
         return f"{base} — Medium Confidence"
     return f"Directional {base}"
+
+
+# Labels that are classification types or broad buckets — not strategic themes
+CLASSIFICATION_TYPE_LABELS = {
+    "complement", "substitute", "direct", "generic", "other", "misc",
+    "unknown", "unclassified", "miscellaneous", "broad", "misc.",
+}
+
+BROAD_BUCKET_LABELS = CLASSIFICATION_TYPE_LABELS | {
+    "generic", "other", "misc", "unknown", "unclassified", "broad demand",
+}
+
+
+def is_classification_type_only(name: str) -> bool:
+    norm = normalize_text(name)
+    if not norm:
+        return True
+    if norm in CLASSIFICATION_TYPE_LABELS:
+        return True
+    words = norm.split()
+    return len(words) == 1 and words[0] in CLASSIFICATION_TYPE_LABELS
+
+
+def is_broad_bucket(name: str) -> bool:
+    norm = normalize_text(name)
+    if not norm:
+        return True
+    if norm in BROAD_BUCKET_LABELS:
+        return True
+    if norm.startswith("generic"):
+        return True
+    return is_classification_type_only(name)
+
+
+def derive_dominant_phrase_from_keywords(
+    keywords: List[Dict[str, Any]],
+    total_sv: float,
+) -> Optional[str]:
+    """Pick highest-SV meaningful phrase from keyword text in a segment."""
+    phrase_scores: Counter = Counter()
+    for item in keywords:
+        sv = float(item.get("search_volume", 0) or 0)
+        kw = str(item.get("keyword", ""))
+        for phrase in extract_meaningful_phrases(kw):
+            if is_generic_theme(phrase):
+                continue
+            phrase_scores[phrase] += sv
+    if not phrase_scores:
+        return None
+    best_phrase, score = phrase_scores.most_common(1)[0]
+    kw_count = sum(
+        1 for item in keywords
+        if best_phrase in normalize_text(str(item.get("keyword", "")))
+    )
+    min_sv = total_sv * 0.01 if total_sv > 0 else 0
+    if kw_count < 3 and score < min_sv:
+        return None
+    return normalize_theme_display(best_phrase)
+
+
+def compute_theme_specificity_score(segment: Dict[str, Any], total_sv: float) -> float:
+    display = str(segment.get("display_segment") or segment.get("segment", ""))
+    keywords = segment.get("keywords") or []
+    word_count = len(normalize_text(display).split())
+    if word_count >= 3:
+        phrase_spec = 90.0
+    elif word_count == 2:
+        phrase_spec = 72.0
+    elif word_count == 1 and not is_broad_bucket(display):
+        phrase_spec = 35.0
+    else:
+        phrase_spec = 12.0
+
+    dominant = normalize_text(display)
+    matching = sum(
+        1 for k in keywords
+        if dominant and dominant in normalize_text(str(k.get("keyword", "")))
+    )
+    consistency = (matching / len(keywords) * 100.0) if keywords else 0.0
+
+    theme_sv = float(segment.get("total_search_volume", 0) or 1)
+    top_sv = sum(float(k.get("search_volume", 0) or 0) for k in keywords[:5])
+    vol_conc = min(100.0, (top_sv / theme_sv) * 100.0) if theme_sv > 0 else 0.0
+
+    non_generic = 0.0 if is_broad_bucket(display) or is_classification_type_only(display) else 100.0
+
+    score = (
+        0.40 * phrase_spec
+        + 0.30 * consistency
+        + 0.20 * vol_conc
+        + 0.10 * non_generic
+    )
+    return round(min(100.0, max(0.0, score)), 1)
+
+
+def enrich_segment_strategic_metadata(
+    segment: Dict[str, Any],
+    total_sv: float,
+) -> Dict[str, Any]:
+    """Add display_segment, theme_type, specificity, eligibility fields."""
+    raw_name = str(segment.get("segment", ""))
+    keywords = segment.get("keywords") or []
+    exclusion_reason = None
+    theme_type = "Specific"
+    display_name = raw_name
+
+    if raw_name == "Other":
+        theme_type = "Broad"
+        exclusion_reason = "Unclassified bucket (Other)"
+    elif is_broad_bucket(raw_name) or is_classification_type_only(raw_name):
+        derived = derive_dominant_phrase_from_keywords(keywords, total_sv)
+        if derived and not is_broad_bucket(derived):
+            display_name = derived
+            theme_type = "Derived"
+            if is_classification_type_only(raw_name):
+                segment["derived_from_classification"] = raw_name
+        elif is_classification_type_only(raw_name):
+            theme_type = "Classification Type"
+            exclusion_reason = (
+                f"'{raw_name}' is a classification type, not a specific product theme"
+            )
+        else:
+            theme_type = "Broad"
+            exclusion_reason = f"'{raw_name}' is a broad/generic bucket — needs sub-theme extraction"
+    else:
+        display_name = normalize_theme_display(raw_name)
+
+    segment["segment"] = raw_name
+    segment["display_segment"] = display_name
+    segment["theme_type"] = theme_type
+    segment["theme_specificity_score"] = compute_theme_specificity_score(
+        {**segment, "display_segment": display_name}, total_sv
+    )
+
+    eligible, elig_reason = is_strategic_eligible(segment, total_sv, exclusion_reason)
+    segment["strategic_eligible"] = eligible
+    segment["exclusion_reason"] = elig_reason if not eligible else None
+    return segment
+
+
+def is_strategic_eligible(
+    segment: Dict[str, Any],
+    total_sv: float,
+    preset_reason: Optional[str] = None,
+) -> Tuple[bool, str]:
+    if preset_reason:
+        return False, preset_reason
+    if segment.get("segment") == "Other":
+        return False, "Unclassified bucket (Other)"
+    if segment.get("theme_type") in ("Broad", "Classification Type"):
+        return False, segment.get("exclusion_reason") or "Non-specific theme bucket"
+    spec = float(segment.get("theme_specificity_score", 0))
+    if spec < 50:
+        return False, f"Theme specificity {spec:.0f}% is below minimum 50%"
+    count = int(segment.get("keyword_count", 0))
+    sv = float(segment.get("total_search_volume", 0))
+    min_sv = total_sv * 0.01 if total_sv > 0 else 0
+    if count < 3 and sv < min_sv:
+        return False, "Requires ≥3 keywords or ≥1% of total search volume"
+    if not segment.get("keywords"):
+        return False, "No supporting keywords available"
+    return True, ""
+
+
+def compute_strategic_confidence(
+    segment: Dict[str, Any],
+    data_completeness: float,
+) -> float:
+    """Strategic Confidence = 50% data + 30% specificity + 20% evidence quality."""
+    spec = float(segment.get("theme_specificity_score", 0))
+    kws = segment.get("keywords") or []
+    evidence_pts = 0.0
+    if kws:
+        evidence_pts += 40
+    if len(kws) >= 3:
+        evidence_pts += 30
+    if segment.get("total_search_volume", 0) > 0:
+        evidence_pts += 30
+    evidence_quality = min(100.0, evidence_pts)
+    strategic = 0.50 * data_completeness + 0.30 * spec + 0.20 * evidence_quality
+    if segment.get("theme_type") in ("Broad", "Classification Type"):
+        strategic = min(strategic, 35.0)
+    return round(min(100.0, strategic), 1)
+
+
+def build_theme_quality_summary(
+    segments: List[Dict[str, Any]],
+    total_sv: float,
+) -> Dict[str, Any]:
+    non_other = [s for s in segments if s.get("segment") != "Other"]
+    broad = [s for s in non_other if s.get("theme_type") in ("Broad", "Classification Type")]
+    specific = [s for s in non_other if s.get("theme_type") in ("Specific", "Derived")]
+    eligible = [s for s in non_other if s.get("strategic_eligible")]
+    excluded = [s for s in non_other if not s.get("strategic_eligible")]
+
+    generic_seg = next(
+        (s for s in segments if normalize_text(s.get("segment", "")) == "generic"),
+        None,
+    )
+    generic_share = float(generic_seg["demand_share"]) if generic_seg else 0.0
+
+    return {
+        "total_themes_detected": len(non_other),
+        "specific_themes": len(specific),
+        "broad_or_classification_themes": len(broad),
+        "eligible_strategic_themes": len(eligible),
+        "excluded_themes": len(excluded),
+        "generic_demand_share_pct": round(generic_share, 2),
+        "excluded_theme_details": [
+            {
+                "segment": s.get("segment"),
+                "display_segment": s.get("display_segment"),
+                "reason": s.get("exclusion_reason"),
+            }
+            for s in excluded[:15]
+        ],
+    }
+
+
+def get_generic_bucket_breakdown(
+    segments: List[Dict[str, Any]],
+    unclassified_groups: List[Dict[str, Any]],
+    total_sv: float,
+) -> Dict[str, Any]:
+    generic = next(
+        (s for s in segments if normalize_text(s.get("segment", "")) == "generic"),
+        None,
+    )
+    if not generic and not unclassified_groups:
+        return {}
+    return {
+        "generic_demand_share_pct": generic["demand_share"] if generic else 0,
+        "generic_keyword_count": generic["keyword_count"] if generic else 0,
+        "generic_search_volume": generic["total_search_volume"] if generic else 0,
+        "suggested_sub_themes": unclassified_groups[:10],
+        "note": (
+            "Broad/generic demand should be split using deterministic phrase grouping "
+            "before making strategic recommendations."
+        ),
+    }

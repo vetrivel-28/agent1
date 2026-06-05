@@ -20,7 +20,10 @@ from app.utils.numeric_cleaner import clean_numeric_series
 logger = get_logger("siei_engine")
 
 _KEYWORD_CANDIDATES  = ["Keyword Phrase", "Keyword"]
-_SEARCH_VOL_CANDIDATES = ["Search Volume", "search volume", "SearchVolume", "Monthly Search Volume"]
+_SEARCH_VOL_CANDIDATES = ["Search Volume", "search volume", "SearchVolume", "Monthly Search Volume",
+    "Search Vol.", "Search Vol", "search vol", "search_volume",
+    "Search Volume (Exact)", "Magnet Search Volume", "Monthly Searches",
+    "Exact Monthly Search Volume"]
 _KEYWORD_SALES_CANDIDATES = ["Keyword Sales", "keyword sales", "Sales", "sales"]
 _CLASS_KEYWORD_CANDIDATES = ["Keyword Phrase", "Keyword", "keyword"]
 _CLASS_LABEL_CANDIDATES = ["Classification", "classification", "Class", "class"]
@@ -83,7 +86,7 @@ def _mk_evidence(
 
 
 def _format_num(v: Any, digits: int = 4) -> Optional[float]:
-    if v is None or (isinstance(v, float) and np.isnan(v)):
+    if v is None or (isinstance(v, float) and (np.isnan(v) or np.isinf(v))):
         return None
     return round(float(v), digits)
 
@@ -555,7 +558,15 @@ def run(
         return str(row.get("keyword", "—")) if row is not None else "—"
 
     # ── Record builder ────────────────────────────────────────────────────────
-    def _records(df: pd.DataFrame, limit: Optional[int] = None) -> List[Dict]:
+        # ── Define Segmentation Thresholds ────────────────────────────────────────
+    thresholds = {
+        "high_demand_cutoff": 60.0,
+        "low_demand_cutoff": 60.0,
+        "high_eff_cutoff": 60.0,
+        "low_eff_cutoff": 40.0,
+    }
+
+    def _records(df: pd.DataFrame, thresholds: Dict[str, float], limit: Optional[int] = None) -> List[Dict]:
         out = []
         subset = df.head(limit) if limit is not None else df
         for _, row in subset.iterrows():
@@ -593,18 +604,18 @@ def run(
                 },
                 "evidence": _keyword_row_evidence(
                     row, benchmark_rps_1k, n, rows_before - rows_after,
-                    high_demand_cutoff=high_demand_cutoff,
-                    low_demand_cutoff=low_demand_cutoff,
-                    high_eff_cutoff=high_eff_cutoff,
-                    low_eff_cutoff=low_eff_cutoff,
+                    high_demand_cutoff=thresholds['high_demand_cutoff'],
+                    low_demand_cutoff=thresholds['low_demand_cutoff'],
+                    high_eff_cutoff=thresholds['high_eff_cutoff'],
+                    low_eff_cutoff=thresholds['low_eff_cutoff'],
                 ),
                 "llm_explanation": None,
                 "rule_based_explanation": (
                     f"Keyword '{str(row.get('keyword', ''))}' is '{str(row.get('quadrant', 'Low Priority'))}' "
                     f"because Demand Percentile={float(row.get('demand_percentile', 0.0)):.2f} and "
                     f"Revenue Efficiency Index={float(row.get('revenue_efficiency_percentile', 0.0)):.2f}. "
-                    f"Dataset thresholds: high_demand≥{high_demand_cutoff:.1f}, low_demand≤{low_demand_cutoff:.1f}, "
-                    f"high_eff≥{high_eff_cutoff:.1f}, low_eff≤{low_eff_cutoff:.1f}."
+                    f"Dataset thresholds: high_demand≥{thresholds['high_demand_cutoff']:.1f}, low_demand≤{thresholds['low_demand_cutoff']:.1f}, "
+                    f"high_eff≥{thresholds['high_eff_cutoff']:.1f}, low_eff≤{thresholds['low_eff_cutoff']:.1f}."
                 ),
             }
             rec["llm_explanation"] = rec["rule_based_explanation"]
@@ -618,25 +629,17 @@ def run(
         return out
 
     # ── Dynamic quantile-based segmentation thresholds ───────────────────────
-    # Compute dataset-relative thresholds so all four segments can appear
-    # when there is enough variance in the data.
     demand_arr = work["demand_percentile"].values
     efficiency_arr = work["revenue_efficiency_percentile"].values
 
-    high_demand_cutoff   = float(np.percentile(demand_arr,    60)) if n >= 10 else 60.0
-    low_demand_cutoff    = float(np.percentile(demand_arr,    40)) if n >= 10 else 40.0
-    high_eff_cutoff      = float(np.percentile(efficiency_arr, 60)) if n >= 10 else 60.0
-    low_eff_cutoff       = float(np.percentile(efficiency_arr, 40)) if n >= 10 else 40.0
-
-    # Re-classify using dataset-relative thresholds
     def _quadrant_dynamic(demand_pct: float, efficiency_pct: float) -> str:
-        if demand_pct >= high_demand_cutoff and efficiency_pct >= high_eff_cutoff:
+        if demand_pct >= thresholds["high_demand_cutoff"] and efficiency_pct >= thresholds["high_eff_cutoff"]:
             return "Demand Winners"
-        if demand_pct >= high_demand_cutoff and efficiency_pct <= low_eff_cutoff:
+        if demand_pct >= thresholds["high_demand_cutoff"] and efficiency_pct < thresholds["low_eff_cutoff"]:
             return "Friction Keywords"
-        if demand_pct < high_demand_cutoff and efficiency_pct >= high_eff_cutoff:
+        if demand_pct < thresholds["low_demand_cutoff"] and efficiency_pct >= thresholds["high_eff_cutoff"]:
             return "Hidden Gems"
-        if demand_pct <= low_demand_cutoff and efficiency_pct <= low_eff_cutoff:
+        if demand_pct < thresholds["low_demand_cutoff"] and efficiency_pct < thresholds["low_eff_cutoff"]:
             return "Low Priority"
         return "Monitor"
 
@@ -783,8 +786,17 @@ def run(
     elapsed = round(time.time() - t0, 3)
     
     # ── Full drill-down data extraction ───────────────────────────────────────
-    high_intent_full_records = _records(work[work["is_high_revenue_potential"]].sort_values("revenue_efficiency_percentile", ascending=False))
-    friction_full_records = _records(friction_df)
+    required_cols = ["keyword", "search_vol", "kw_sales", "demand_percentile", "revenue_efficiency_percentile"]
+    missing_cols = [c for c in required_cols if c not in work.columns]
+    if missing_cols:
+        return {
+            "status": "error",
+            "message": "Missing required columns for segmentation: " + ", ".join(missing_cols),
+            "missing_fields": missing_cols,
+        }
+
+    high_intent_full_records = _records(work[work["is_high_revenue_potential"]].sort_values("revenue_efficiency_percentile", ascending=False), thresholds)
+    friction_full_records = _records(friction_df, thresholds)
     
     clustered_friction_rows = _cluster_friction_keywords(friction_full_records, benchmark_rps_1k)
 
@@ -808,10 +820,10 @@ def run(
 
     # Segment threshold metadata for frontend display
     segment_thresholds = {
-        "high_demand_cutoff":   round(high_demand_cutoff, 2),
-        "low_demand_cutoff":    round(low_demand_cutoff, 2),
-        "high_eff_cutoff":      round(high_eff_cutoff, 2),
-        "low_eff_cutoff":       round(low_eff_cutoff, 2),
+        "high_demand_cutoff":   round(thresholds["high_demand_cutoff"], 2),
+        "low_demand_cutoff":    round(thresholds["low_demand_cutoff"], 2),
+        "high_eff_cutoff":      round(thresholds["high_eff_cutoff"], 2),
+        "low_eff_cutoff":       round(thresholds["low_eff_cutoff"], 2),
         "method":               "dataset-relative quantile thresholds (60th/40th percentile of this dataset)",
         "benchmark_rps_1k_p75": round(benchmark_rps_1k, 6),
         "eff_winsorize_p5":     round(p5, 6),
@@ -836,10 +848,10 @@ def run(
                 "Demand Percentile = percentile_rank(Search Volume) × 100; "
                 "Revenue Efficiency = winsorized percentile rank(Revenue / 1K Searches) normalized to 0–100; "
                 "Thresholds are dataset-relative quantiles (60th/40th percentile of this dataset); "
-                "Demand Winners = Demand ≥ high_demand_cutoff AND Efficiency ≥ high_eff_cutoff; "
-                "Friction Keywords = Demand ≥ high_demand_cutoff AND Efficiency ≤ low_eff_cutoff; "
-                "Hidden Gems = Demand < high_demand_cutoff AND Efficiency ≥ high_eff_cutoff; "
-                "Low Priority = Demand ≤ low_demand_cutoff AND Efficiency ≤ low_eff_cutoff; "
+                "Demand Winners = Demand ≥ thresholds['high_demand_cutoff'] AND Efficiency ≥ thresholds['high_eff_cutoff']; "
+                "Friction Keywords = Demand ≥ thresholds['high_demand_cutoff'] AND Efficiency ≤ thresholds['low_eff_cutoff']; "
+                "Hidden Gems = Demand < thresholds['high_demand_cutoff'] AND Efficiency ≥ thresholds['high_eff_cutoff']; "
+                "Low Priority = Demand ≤ thresholds['low_demand_cutoff'] AND Efficiency ≤ thresholds['low_eff_cutoff']; "
                 "Monitor = all remaining keywords; "
                 "Recoverable Revenue = max(0, Benchmark Revenue/1K − Actual Revenue/1K) × Search Volume / 1000, "
                 "where Benchmark = 75th percentile(Revenue / 1K Searches)."
@@ -861,10 +873,10 @@ def run(
             "biggest_friction_keyword": {},
 
             # Segment tables (full — no sampling cap)
-            "demand_winners":    _records(demand_winners_df),
-            "friction_keywords": _records(friction_df),
-            "hidden_gems":       _records(hidden_gems_df),
-            "all_keywords":      _records(work.sort_values("efficiency", ascending=False), min(n, 300)),
+            "demand_winners":    _records(demand_winners_df, thresholds),
+            "friction_keywords": _records(friction_df, thresholds),
+            "hidden_gems":       _records(hidden_gems_df, thresholds),
+            "all_keywords":      _records(work.sort_values("efficiency", ascending=False), thresholds, min(n, 300)),
 
             # Full drill-down data
             "high_intent_keywords_full": high_intent_full_records,
@@ -892,26 +904,26 @@ def run(
             "summary_cards": {
                 "high_revenue_potential": {
                     "count": high_intent_count,
-                    "formula": f"Demand Percentile ≥ {high_demand_cutoff:.1f} AND Revenue Efficiency Index ≥ {high_eff_cutoff:.1f} (dataset-relative thresholds)",
+                    "formula": f"Demand Percentile ≥ {thresholds['high_demand_cutoff']:.1f} AND Revenue Efficiency Index ≥ {thresholds['high_eff_cutoff']:.1f} (dataset-relative thresholds)",
                     "thresholds": {
-                        "demand_percentile_min": high_demand_cutoff,
-                        "revenue_efficiency_percentile_min": high_eff_cutoff,
+                        "demand_percentile_min": thresholds["high_demand_cutoff"],
+                        "revenue_efficiency_percentile_min": thresholds["high_eff_cutoff"],
                         "method": "dataset-relative 60th percentile",
                     },
-                    "items": _records(demand_winners_df, max(top_n, 50)),
+                    "items": _records(demand_winners_df, thresholds, max(top_n, 50)),
                     "evidence": _mk_evidence(
                         metric_name="Demand Winners",
                         metric_value=high_intent_count,
-                        formula=f"Demand Percentile ≥ {high_demand_cutoff:.1f} AND Revenue Efficiency Index ≥ {high_eff_cutoff:.1f}",
+                        formula=f"Demand Percentile ≥ {thresholds['high_demand_cutoff']:.1f} AND Revenue Efficiency Index ≥ {thresholds['high_eff_cutoff']:.1f}",
                         source_columns=["Keyword Phrase", "Search Volume", "Keyword Sales"],
                         rows_included=high_intent_count,
                         rows_excluded=n - high_intent_count,
                         thresholds={
-                            "demand_high_cutoff": high_demand_cutoff,
-                            "efficiency_high_cutoff": high_eff_cutoff,
+                            "demand_high_cutoff": thresholds["high_demand_cutoff"],
+                            "efficiency_high_cutoff": thresholds["high_eff_cutoff"],
                         },
                         example={
-                            "rule": f"Demand Percentile ≥ {high_demand_cutoff:.1f} AND Revenue Efficiency Index ≥ {high_eff_cutoff:.1f}",
+                            "rule": f"Demand Percentile ≥ {thresholds['high_demand_cutoff']:.1f} AND Revenue Efficiency Index ≥ {thresholds['high_eff_cutoff']:.1f}",
                             "top_keyword": _kw(best_converting),
                             "top_keyword_demand_percentile": _sv(best_converting.get("demand_percentile")) if best_converting is not None else None,
                             "top_keyword_efficiency_index": _sv(best_converting.get("revenue_efficiency_percentile")) if best_converting is not None else None,
@@ -920,27 +932,27 @@ def run(
                 },
                 "friction_keywords": {
                     "count": friction_count,
-                    "formula": f"Demand Percentile ≥ {high_demand_cutoff:.1f} AND Revenue Efficiency Index ≤ {low_eff_cutoff:.1f} (dataset-relative thresholds)",
+                    "formula": f"Demand Percentile ≥ {thresholds['high_demand_cutoff']:.1f} AND Revenue Efficiency Index ≤ {thresholds['low_eff_cutoff']:.1f} (dataset-relative thresholds)",
                     "thresholds": {
-                        "demand_high_cutoff": high_demand_cutoff,
-                        "efficiency_low_cutoff": low_eff_cutoff,
+                        "demand_high_cutoff": thresholds["high_demand_cutoff"],
+                        "efficiency_low_cutoff": thresholds["low_eff_cutoff"],
                         "method": "dataset-relative 60th/40th percentile quantiles",
                     },
-                    "items": _records(friction_df),  # all friction keywords — no cap
+                    "items": _records(friction_df, thresholds),  # all friction keywords — no cap
                     "clusters": clustered_friction_rows[:max(top_n, 50)],
                     "evidence": _mk_evidence(
                         metric_name="Friction Keywords",
                         metric_value=friction_count,
-                        formula=f"Demand Percentile ≥ {high_demand_cutoff:.1f} AND Revenue Efficiency Index ≤ {low_eff_cutoff:.1f}",
+                        formula=f"Demand Percentile ≥ {thresholds['high_demand_cutoff']:.1f} AND Revenue Efficiency Index ≤ {thresholds['low_eff_cutoff']:.1f}",
                         source_columns=["Keyword Phrase", "Search Volume", "Keyword Sales"],
                         rows_included=friction_count,
                         rows_excluded=n - friction_count,
                         thresholds={
-                            "demand_high_cutoff": high_demand_cutoff,
-                            "efficiency_low_cutoff": low_eff_cutoff,
+                            "demand_high_cutoff": thresholds["high_demand_cutoff"],
+                            "efficiency_low_cutoff": thresholds["low_eff_cutoff"],
                         },
                         example={
-                            "rule": f"Demand Percentile ≥ {high_demand_cutoff:.1f} AND Revenue Efficiency Index ≤ {low_eff_cutoff:.1f}",
+                            "rule": f"Demand Percentile ≥ {thresholds['high_demand_cutoff']:.1f} AND Revenue Efficiency Index ≤ {thresholds['low_eff_cutoff']:.1f}",
                             "top_friction_keyword": _kw(biggest_friction),
                             "top_friction_demand_percentile": _sv(biggest_friction.get("demand_percentile")) if biggest_friction is not None else None,
                             "top_friction_efficiency_index": _sv(biggest_friction.get("revenue_efficiency_percentile")) if biggest_friction is not None else None,
@@ -963,14 +975,14 @@ def run(
                 },
             },
             # ── Keyword rows (capped at 300 for performance) ─────────────────
-            "keyword_rows": _records(work.sort_values("revenue_efficiency_percentile", ascending=False), min(n, 300)),
+            "keyword_rows": _records(work.sort_values("revenue_efficiency_percentile", ascending=False), thresholds, min(n, 300)),
             "friction_rows": clustered_friction_rows[:max(top_n, 50)],
             # ── Legacy fields (backward compat) ─────────────────────────────
             "market_siei_score":                   avg_efficiency,
-            "highest_efficiency_keywords":         _records(demand_winners_df, top_n),
-            "lowest_efficiency_keywords":          _records(friction_df,       top_n),
-            "market_friction_keywords":            _records(friction_df,       top_n),
-            "click_heavy_low_conversion_keywords": _records(friction_df,       top_n),
+            "highest_efficiency_keywords":         _records(demand_winners_df, thresholds, top_n),
+            "lowest_efficiency_keywords":          _records(friction_df,       thresholds, top_n),
+            "market_friction_keywords":            _records(friction_df,       thresholds, top_n),
+            "click_heavy_low_conversion_keywords": _records(friction_df,       thresholds, top_n),
             "siei_percentile_20":                  round(float(work["efficiency"].quantile(0.20)), 2),
             "siei_percentile_80":                  round(float(work["efficiency"].quantile(0.80)), 2),
         },
@@ -1050,7 +1062,7 @@ def _generate_insights(
 
 
 def _sv(v: Any) -> Any:
-    if v is None or (isinstance(v, float) and np.isnan(v)):
+    if v is None or (isinstance(v, float) and (np.isnan(v) or np.isinf(v))):
         return None
     if isinstance(v, np.integer):
         return int(v)

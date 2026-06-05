@@ -465,7 +465,9 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
     # Adaptive momentum cutoffs
     momentum_cutoff_75 = float(brand_agg["momentum_score"].quantile(0.75))
     momentum_cutoff_50 = float(brand_agg["momentum_score"].median())
+    momentum_cutoff_25 = float(brand_agg["momentum_score"].quantile(0.25))
     momentum_cutoff = momentum_cutoff_75
+    momentum_low_threshold = momentum_cutoff_25
     
     def adaptive_classify(row, cutoff):
         tier = row["revenue_tier"]
@@ -801,6 +803,9 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
                     "revenue_tiers": {"A": "Top 60% cumulative revenue", "B": "Next 25% (up to 85%)", "C": "Remaining long tail"},
                     "market_power_cutoff": "Used revenue tier structure",
                     "momentum_cutoff": round(momentum_cutoff, 2),
+                    "momentum_high_threshold": round(momentum_cutoff_75, 2),
+                    "momentum_low_threshold": round(momentum_low_threshold, 2),
+                    "momentum_median": round(momentum_cutoff_50, 2),
                     "group_counts": quadrant_counts,
                     "group_definitions": {
                         "Dominant Leaders": "Revenue Tier A + High Momentum",
@@ -813,7 +818,18 @@ def run(blackbox_df: Optional[pd.DataFrame], top_n: int = 10) -> Dict[str, Any]:
                         "leader_market_share": round(leader_share, 4),
                     },
                 },
-                "classification_rules": {"rule_text": _CLASSIFICATION_RULE, "thresholds": {"momentum_cutoff": round(momentum_cutoff, 2)}},
+                "classification_rules": {
+                    "rule_text": _CLASSIFICATION_RULE,
+                    "thresholds": {
+                        "momentum_cutoff": round(momentum_cutoff, 2),
+                        "momentum_high_threshold": round(momentum_cutoff_75, 2),
+                        "momentum_low_threshold": round(momentum_low_threshold, 2),
+                        "momentum_median": round(momentum_cutoff_50, 2),
+                        "percentile_25": round(momentum_cutoff_25, 2),
+                        "percentile_50": round(momentum_cutoff_50, 2),
+                        "percentile_75": round(momentum_cutoff_75, 2),
+                    },
+                },
                 "quadrant_audit": {
                     "counts": quadrant_counts,
                     "counts_by_label": {

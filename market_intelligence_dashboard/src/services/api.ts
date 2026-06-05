@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { enrichCategoryScope, type CategoryScopePayload } from '../hooks/useCategoryScope';
 
 export const apiClient = axios.create({
   baseURL: 'http://localhost:8000/api/v1',
@@ -28,6 +29,13 @@ export const api = {
     return response.data;
   },
 
+  startAnalysis: async (options?: { useFullBlackbox?: boolean }) => {
+    const response = await apiClient.post('/start-analysis', {
+      use_full_blackbox: options?.useFullBlackbox ?? false,
+    });
+    return response.data;
+  },
+
   uploadDatasets: async (formData: FormData) => {
     const response = await apiClient.post('/upload-datasets', formData, {
       headers: {
@@ -36,41 +44,46 @@ export const api = {
     });
     return response.data;
   },
+
+  removeDataset: async (datasetType: string) => {
+    const response = await apiClient.post(`/remove-dataset/${datasetType}`);
+    return response.data;
+  },
   
-  getDemandStrength: async (topN = 10) => {
-    const response = await apiClient.post(`/demand-strength?top_n=${topN}`, undefined, {
+  getDemandStrength: async (topN = 10, scope: CategoryScopePayload = {}) => {
+    const response = await apiClient.post(`/demand-strength?top_n=${topN}`, enrichCategoryScope(scope), {
       timeout: 90_000,
     });
     return response.data;
   },
   
-  getRevenueMomentum: async (topN = 10) => {
-    const response = await apiClient.post(`/revenue-momentum?top_n=${topN}`);
+  getRevenueMomentum: async (topN = 10, scope: CategoryScopePayload = {}) => {
+    const response = await apiClient.post(`/revenue-momentum?top_n=${topN}`, enrichCategoryScope(scope));
     return response.data;
   },
   
-  getBsrEfficiency: async (topN = 10) => {
-    const response = await apiClient.post(`/bsr-efficiency?top_n=${topN}`);
+  getBsrEfficiency: async (topN = 10, scope: CategoryScopePayload = {}) => {
+    const response = await apiClient.post(`/bsr-efficiency?top_n=${topN}`, enrichCategoryScope(scope));
     return response.data;
   },
   
-  getDemandVelocity: async (topN = 10) => {
-    const response = await apiClient.post(`/demand-velocity?top_n=${topN}`);
+  getDemandVelocity: async (topN = 10, scope: CategoryScopePayload = {}) => {
+    const response = await apiClient.post(`/demand-velocity?top_n=${topN}`, enrichCategoryScope(scope));
     return response.data;
   },
   
-  getSearchIntentEfficiency: async (topN = 10) => {
-    const response = await apiClient.post(`/search-intent-efficiency?top_n=${topN}`);
+  getSearchIntentEfficiency: async (topN = 10, scope: CategoryScopePayload = {}) => {
+    const response = await apiClient.post(`/search-intent-efficiency?top_n=${topN}`, enrichCategoryScope(scope));
     return response.data;
   },
   
-  getMarketConcentration: async (topN = 10) => {
-    const response = await apiClient.post(`/market-concentration?top_n=${topN}`);
+  getMarketConcentration: async (topN = 10, scope: CategoryScopePayload = {}) => {
+    const response = await apiClient.post(`/market-concentration?top_n=${topN}`, enrichCategoryScope(scope));
     return response.data;
   },
   
-  getMarketReport: async (topN = 10) => {
-    const response = await apiClient.get(`/market-report?top_n=${topN}`);
+  getMarketReport: async (topN = 10, scope: CategoryScopePayload = {}) => {
+    const response = await apiClient.post(`/market-report?top_n=${topN}`, enrichCategoryScope(scope));
     return response.data;
   },
 
@@ -79,8 +92,8 @@ export const api = {
     return response.data;
   },
 
-  getWhitespaceOpportunities: async (topN = 15) => {
-    const response = await apiClient.post(`/whitespace-opportunities?top_n=${topN}`);
+  getWhitespaceOpportunities: async (topN = 15, scope: CategoryScopePayload = {}) => {
+    const response = await apiClient.post(`/whitespace-opportunities?top_n=${topN}`, enrichCategoryScope(scope));
     return response.data;
   },
 
@@ -89,33 +102,33 @@ export const api = {
     return response.data;
   },
 
-  getDirectCompetitors: async (topN = 15, priceTolerancePct = 17.5) => {
-    const response = await apiClient.post(`/direct-competitors?top_n=${topN}&price_tolerance_pct=${priceTolerancePct}`);
+  getDirectCompetitors: async (topN = 15, priceTolerancePct = 17.5, scope: CategoryScopePayload = {}) => {
+    const response = await apiClient.post(`/direct-competitors?top_n=${topN}&price_tolerance_pct=${priceTolerancePct}`, enrichCategoryScope(scope));
     return response.data;
   },
 
-  getPriceElasticity: async (nBuckets = 5) => {
-    const response = await apiClient.post(`/price-elasticity?n_buckets=${nBuckets}`);
+  getPriceElasticity: async (nBuckets = 5, scope: CategoryScopePayload = {}) => {
+    const response = await apiClient.post(`/price-elasticity?n_buckets=${nBuckets}`, enrichCategoryScope(scope));
     return response.data;
   },
 
-  getSubstituteIntelligence: async (topN = 10) => {
-    const response = await apiClient.post(`/substitute-intelligence?top_n=${topN}`);
+  getSubstituteIntelligence: async (topN = 10, scope: CategoryScopePayload = {}) => {
+    const response = await apiClient.post(`/substitute-intelligence?top_n=${topN}`, enrichCategoryScope(scope));
     return response.data;
   },
 
-  getComplementIntelligence: async (topN = 10) => {
-    const response = await apiClient.post(`/complement-intelligence?top_n=${topN}`);
+  getComplementIntelligence: async (topN = 10, scope: CategoryScopePayload = {}) => {
+    const response = await apiClient.post(`/complement-intelligence?top_n=${topN}`, enrichCategoryScope(scope));
     return response.data;
   },
 
-  getBundleOpportunities: async (topN = 10) => {
-    const response = await apiClient.post(`/bundle-opportunities?top_n=${topN}`);
+  getBundleOpportunities: async (topN = 10, scope: CategoryScopePayload = {}) => {
+    const response = await apiClient.post(`/bundle-opportunities?top_n=${topN}`, enrichCategoryScope(scope));
     return response.data;
   },
 
-  getFinanceIntelligence: async () => {
-    const response = await apiClient.post('/finance-intelligence');
+  getFinanceIntelligence: async (scope: CategoryScopePayload = {}) => {
+    const response = await apiClient.post('/finance-intelligence', enrichCategoryScope(scope));
     return response.data;
   },
 
@@ -128,6 +141,15 @@ export const api = {
     const response = await apiClient.get(`/market-report/pdf?top_n=${topN}&report_mode=${reportMode}&include_charts=${includeCharts}`, {
       responseType: 'blob',
     });
+    return response.data;
+  },
+
+  runConsumerAdoptionSimulator: async (populationSize = 1000, scope: CategoryScopePayload = {}) => {
+    const response = await apiClient.post(
+      `/consumer-adoption-simulator?population_size=${populationSize}`,
+      enrichCategoryScope(scope),
+      { timeout: 120_000 },
+    );
     return response.data;
   },
 };

@@ -18,6 +18,7 @@ import { EvidenceDrawer, type EvidenceData } from '../components/ui/EvidenceDraw
 import { formatGenericLabel } from '../utils/formatters';
 import { useDatasetFilters, type FilterConfig } from '../hooks/useDatasetFilters';
 import { FilterBar } from '../components/filters/FilterBar';
+import { scopeQueryKeys } from '../hooks/useCategoryScope';
 
 
 type RawEvidence = {
@@ -105,7 +106,18 @@ type Diagnostics = {
   top_unclassified_keywords_table?: Array<Record<string, unknown>>;
   suggested_theme_repairs?: Array<Record<string, unknown>>;
   possible_duplicate_themes?: Array<Record<string, unknown>>;
+  theme_quality?: Record<string, unknown>;
   evidence?: RawEvidence;
+};
+
+type ThemeQuality = {
+  total_themes_detected?: number;
+  specific_themes?: number;
+  broad_or_classification_themes?: number;
+  eligible_strategic_themes?: number;
+  excluded_themes?: number;
+  generic_demand_share_pct?: number;
+  excluded_theme_details?: Array<Record<string, unknown>>;
 };
 
 function formatRec(base: string, confidence?: number): string {
@@ -295,9 +307,15 @@ function segmentEvidence(
 }
 
 export default function DemandStrength() {
+  const { data: statusData } = useQuery({
+    queryKey: ['status'],
+    queryFn: api.getStatus,
+  });
+  const { categoryScope, categoryKey, keywordScopeKey, datasetSessionId } = scopeQueryKeys(statusData);
+
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['demand-intelligence'],
-    queryFn: () => api.getDemandStrength(50),
+    queryKey: ['demand-strength', datasetSessionId, categoryKey, keywordScopeKey],
+    queryFn: () => api.getDemandStrength(50, categoryScope),
     retry: false,
     refetchOnWindowFocus: false,
   });
@@ -306,6 +324,8 @@ export default function DemandStrength() {
 
   // Safe data extraction - runs unconditionally, handles undefined gracefully
   const results = data?.data?.results || {};
+  const keywordScope = data?.data?.keyword_scope;
+  const scopeLimitedMessage = results.scope_limited_message as string | undefined;
   const largestDemand = results.largest_demand_segment as MetricWithEvidence | undefined;
   const recommendedEntry = results.recommended_entry as MetricWithEvidence | undefined;
   const undervalued = results.most_undervalued_theme as MetricWithEvidence | undefined;
@@ -318,14 +338,18 @@ export default function DemandStrength() {
     ? results.demand_opportunity_database 
     : [];
 
+  const themeQuality = (diagnostics.theme_quality || results.theme_quality || {}) as ThemeQuality;
+
   const filterConfigs: FilterConfig<SegmentRow>[] = [
     { id: 'theme', label: 'Theme', type: 'search', getValue: r => r.segment },
-    { id: 'classification', label: 'Classification', type: 'select', getValue: r => r.classification_source || 'Unknown' },
     { id: 'recommendation', label: 'Recommendation', type: 'select', getValue: r => r.recommendation },
-    { id: 'demandShare', label: 'Demand Share %', type: 'range', getValue: r => r.demand_share },
-    { id: 'revenueShare', label: 'Revenue Share %', type: 'range', getValue: r => r.revenue_share },
-    { id: 'oppScore', label: 'Opportunity Score', type: 'range', getValue: r => r.opportunity_score },
-    { id: 'competition', label: 'Competition Index', type: 'range', getValue: r => r.competition_index },
+    { id: 'confidence', label: 'Confidence', type: 'select', getValue: r => {
+      const c = r.row_confidence ?? 0;
+      if (c >= 80) return 'High';
+      if (c >= 50) return 'Medium';
+      return 'Low';
+    }},
+    { id: 'source', label: 'Source Type', type: 'select', getValue: r => r.classification_source || 'Unknown' },
   ];
 
   const {
@@ -405,7 +429,8 @@ export default function DemandStrength() {
       cell: (r) => {
         const rec = r.recommendation || 'N/A';
         const color =
-          rec.includes('Prime') ? 'text-success'
+          rec.includes('Needs Refinement') ? 'text-warning'
+          : rec.includes('Prime') ? 'text-success'
           : rec.includes('Strong') ? 'text-success/80'
           : rec.includes('Low') || rec.includes('Directional') ? 'text-muted-foreground'
           : 'text-warning';
@@ -443,6 +468,15 @@ export default function DemandStrength() {
         <p className="text-[10px] font-mono text-muted-foreground mb-4 -mt-6">
           Active session: {sessionId}
         </p>
+      )}
+
+      {scopeLimitedMessage && (
+        <Card className="border-l-4 border-warning bg-warning/5 mb-6">
+          <CardContent className="p-4 text-sm text-warning flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5" />
+            <span>{scopeLimitedMessage}</span>
+          </CardContent>
+        </Card>
       )}
 
       {/* Data quality panel */}
@@ -514,12 +548,45 @@ export default function DemandStrength() {
         </PageSection>
       )}
 
+      {(themeQuality.eligible_strategic_themes != null || themeQuality.generic_demand_share_pct != null) && (
+        <PageSection title="Theme Quality Summary">
+          <Card className="border-border/50 bg-card">
+            <CardContent className="p-6 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 text-sm">
+              <div>
+                <p className="text-muted-foreground text-xs">Themes detected</p>
+                <p className="font-bold">{themeQuality.total_themes_detected ?? '—'}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground text-xs">Specific themes</p>
+                <p className="font-bold text-success">{themeQuality.specific_themes ?? '—'}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground text-xs">Broad / classification</p>
+                <p className="font-bold text-warning">{themeQuality.broad_or_classification_themes ?? '—'}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground text-xs">Eligible for KPIs</p>
+                <p className="font-bold">{themeQuality.eligible_strategic_themes ?? '—'}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground text-xs">Excluded</p>
+                <p className="font-bold">{themeQuality.excluded_themes ?? '—'}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground text-xs">Generic demand share</p>
+                <p className="font-bold">{Number(themeQuality.generic_demand_share_pct ?? 0).toFixed(1)}%</p>
+              </div>
+            </CardContent>
+          </Card>
+        </PageSection>
+      )}
+
       <PageSection title="Strategic Demand Metrics">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
 
           <KPICard
-            label="Largest Segment"
-            value={largestDemand?.name || 'Insufficient data'}
+            label={largestDemand?.empty_state ? 'Largest Classified Segment' : 'Largest Segment'}
+            value={largestDemand?.empty_state ? (largestDemand.title || 'No specific theme detected') : (largestDemand?.name || 'Insufficient data')}
             implication={largestDemand?.subtitle || largestDemand?.business_implication || 'Upload keyword data'}
             confidence={largestDemand?.confidence}
             icon={Target}
@@ -585,7 +652,7 @@ export default function DemandStrength() {
 
           <KPICard
             label="Best Entry"
-            value={recommendedEntry?.name || 'Insufficient data'}
+            value={recommendedEntry?.empty_state ? (recommendedEntry.title || 'No specific entry theme') : (recommendedEntry?.name || 'Insufficient data')}
             implication={recommendedEntry?.subtitle || recommendedEntry?.business_implication || ''}
             confidence={recommendedEntry?.confidence}
             icon={Rocket}

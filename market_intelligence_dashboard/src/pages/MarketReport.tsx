@@ -1,5 +1,5 @@
 import React from 'react';
-import { useQueries } from '@tanstack/react-query';
+import { useQueries, useQuery } from '@tanstack/react-query';
 import { api } from '../services/api';
 import { Card, CardContent } from '../components/ui/Card';
 import { DataTable, type ColumnDef } from '../components/ui/DataTable';
@@ -34,16 +34,23 @@ function ReportPage({ pageNumber, title, children }: { pageNumber: number, title
 // --- Main Report Component ---
 
 export default function MarketReport() {
+  const { data: statusData } = useQuery({
+    queryKey: ['status'],
+    queryFn: api.getStatus,
+  });
+  const categoryKey = statusData?.data?.category_scope?.selected_categories?.join('|') || 'all';
+  const categoryScope = statusData?.data?.category_scope || {};
+
   const results = useQueries({
     queries: [
-      { queryKey: ['market-report'], queryFn: () => api.getMarketReport(50) },
-      { queryKey: ['market-concentration'], queryFn: () => api.getMarketConcentration(50) },
-      { queryKey: ['demand-strength'], queryFn: () => api.getDemandStrength(50) },
-      { queryKey: ['demand-velocity'], queryFn: () => api.getDemandVelocity(50) },
-      { queryKey: ['whitespace-opportunities'], queryFn: () => api.getWhitespaceOpportunities(15) },
-      { queryKey: ['revenue-momentum'], queryFn: () => api.getRevenueMomentum(50) },
-      { queryKey: ['price-elasticity'], queryFn: () => api.getPriceElasticity(5) },
-      { queryKey: ['direct-competitors'], queryFn: () => api.getDirectCompetitors(15) },
+      { queryKey: ['market-report', categoryKey], queryFn: () => api.getMarketReport(50, categoryScope) },
+      { queryKey: ['market-concentration', categoryKey], queryFn: () => api.getMarketConcentration(50, categoryScope) },
+      { queryKey: ['demand-strength', categoryKey], queryFn: () => api.getDemandStrength(50, categoryScope) },
+      { queryKey: ['demand-velocity', categoryKey], queryFn: () => api.getDemandVelocity(50, categoryScope) },
+      { queryKey: ['whitespace-opportunities', categoryKey], queryFn: () => api.getWhitespaceOpportunities(15, categoryScope) },
+      { queryKey: ['revenue-momentum', categoryKey], queryFn: () => api.getRevenueMomentum(50, categoryScope) },
+      { queryKey: ['price-elasticity', categoryKey], queryFn: () => api.getPriceElasticity(5, categoryScope) },
+      { queryKey: ['direct-competitors', categoryKey], queryFn: () => api.getDirectCompetitors(15, categoryScope) },
     ]
   });
 

@@ -40,19 +40,21 @@ class AnalysisCache:
         with self._lock:
             return self._snapshot
 
-    def get_engine(self, name: str) -> Optional[Dict[str, Any]]:
+    def get_engine(self, name: str, scope_key: str = "all") -> Optional[Dict[str, Any]]:
         with self._lock:
             if not self._snapshot:
                 return None
-            return self._snapshot.get("engines", {}).get(name)
+            key = f"{name}_{scope_key}"
+            return self._snapshot.get("engines", {}).get(key)
 
-    def set_engine(self, name: str, result: Dict[str, Any]) -> None:
+    def set_engine(self, name: str, result: Dict[str, Any], scope_key: str = "all") -> None:
         """Cache a single engine result incrementally."""
         with self._lock:
             if not self._snapshot:
                 self._snapshot = {"engines": {}, "top_n": 10}
                 self._timestamp = time.time()
-            self._snapshot.setdefault("engines", {})[name] = result
+            key = f"{name}_{scope_key}"
+            self._snapshot.setdefault("engines", {})[key] = result
             self._engines_completed += 1
 
     def set_processing(self, total_engines: int) -> None:

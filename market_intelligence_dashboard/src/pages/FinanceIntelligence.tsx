@@ -419,13 +419,22 @@ function BulletList({ items, variant, emptyMessage }: { items: string[]; variant
 // Main page
 // ---------------------------------------------------------------------------
 export default function FinanceIntelligence() {
+  const { data: statusData } = useQuery({
+    queryKey: ['status'],
+    queryFn: api.getStatus,
+  });
+  const categoryKey = statusData?.data?.category_scope?.selected_categories?.join('|') || 'all';
+  const categoryScope = statusData?.data?.category_scope || {};
+
   const [evidenceFor, setEvidenceFor] = useState<{ title: string; metric: MetricBlock } | null>(null);
   const [showMatrixExplanation, setShowMatrixExplanation] = useState(false);
 
-  const { data, isLoading, isError } = useQuery({
-    queryKey: ['finance-intelligence'],
-    queryFn: () => api.getFinanceIntelligence(),
+  const { data: finData, isLoading, isError, error } = useQuery({
+    queryKey: ['finance-intelligence', categoryKey],
+    queryFn: () => api.getFinanceIntelligence(categoryScope),
   });
+  
+  const data = finData;
 
   if (isLoading) return <DashboardSkeleton />;
 

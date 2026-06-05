@@ -18,6 +18,7 @@ import {
   LineChart,
   Lightbulb,
   Tags,
+  Users,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -202,6 +203,7 @@ export function Sidebar() {
           {bottomStandalone.map((item) => (
             <NavItemLink key={item.name} item={item} />
           ))}
+          <NavItemLink item={{ name: 'Consumer Adoption Simulator', href: '/consumer-adoption', icon: Users }} />
         </div>
       </nav>
       <div className="p-4 border-t">

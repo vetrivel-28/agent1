@@ -96,11 +96,18 @@ type RevenueMomentumPayload = {
     rule_text?: string;
     thresholds?: {
       momentum_cutoff?: number;
+      momentum_high_threshold?: number;
+      momentum_low_threshold?: number;
+      momentum_median?: number;
+      percentile_50?: number;
     };
   };
   classification_summary?: {
     revenue_tiers?: Record<string, string>;
     momentum_cutoff?: number;
+    momentum_high_threshold?: number;
+    momentum_low_threshold?: number;
+    momentum_median?: number;
     group_definitions?: Record<string, string>;
   };
 };
@@ -209,7 +216,13 @@ function toEvidenceData(be: BackendEvidence | null | undefined, displayValue: an
 }
 
 // Convert ledger row evidence to comprehensive EvidenceData with momentum breakdown
-function ledgerRowEvidence(row: LedgerRow, momentumCutoff: number, totalRevenue: number, filterContext?: any): EvidenceData | null {
+function ledgerRowEvidence(
+  row: LedgerRow,
+  momentumHigh: number,
+  momentumLow: number,
+  totalRevenue: number,
+  filterContext?: Record<string, unknown>,
+): EvidenceData | null {
   const be = row.evidence;
   
   // Build comprehensive calculation steps
@@ -232,7 +245,7 @@ function ledgerRowEvidence(row: LedgerRow, momentumCutoff: number, totalRevenue:
     `5. Momentum Score Components:`,
     ...availableComponents.map(([name, score]) => `   - ${name}: ${score.toFixed(1)}`),
     `6. Weighted Momentum Score: ${row.momentum_score.toFixed(1)}`,
-    `7. Momentum Classification: ${row.momentum_score >= momentumCutoff ? 'High' : row.momentum_score >= 40 ? 'Medium' : 'Low'}`,
+    `7. Momentum Classification: ${row.momentum_score >= momentumHigh ? 'High' : row.momentum_score >= momentumLow ? 'Medium' : 'Low'}`,
     `8. Final Classification: ${row.classification}`,
     `9. Primary Growth Driver: ${row.primary_engine || 'N/A'}`,
   ];
@@ -262,11 +275,11 @@ function ledgerRowEvidence(row: LedgerRow, momentumCutoff: number, totalRevenue:
     top_records: topRecords,
     aggregation_method: `Brand-level aggregation: ${row.product_count || 0} product(s) grouped under "${row.brand}". Momentum calculated from weighted growth signals.`,
     thresholds: {
-      high: `High Momentum: ≥ ${momentumCutoff.toFixed(1)} (75th percentile of dataset)`,
-      medium: `Medium Momentum: ${40} to ${momentumCutoff.toFixed(1)}`,
-      low: `Low Momentum: < 40`,
+      high: `High Momentum: score ≥ ${momentumHigh.toFixed(1)} (75th percentile)`,
+      medium: `Medium Momentum: ${momentumLow.toFixed(1)} ≤ score < ${momentumHigh.toFixed(1)}`,
+      low: `Low Momentum: score < ${momentumLow.toFixed(1)} (25th percentile)`,
     },
-    classification_reason: row.classification_reason || `"${row.brand}" classified as "${row.classification}" based on Revenue Tier "${row.revenue_tier || 'C'}" and Momentum Score ${row.momentum_score.toFixed(1)} (${row.momentum_score >= momentumCutoff ? 'High' : row.momentum_score >= 40 ? 'Medium' : 'Low'} momentum).`,
+    classification_reason: row.classification_reason || `"${row.brand}" classified as "${row.classification}" based on Revenue Tier "${row.revenue_tier || 'C'}" and Momentum Score ${row.momentum_score.toFixed(1)} (${row.momentum_score >= momentumHigh ? 'High' : row.momentum_score >= momentumLow ? 'Medium' : 'Low'} momentum).`,
     confidence_note: `Momentum score calculated from ${componentCount} available signal components out of 5 total signals. Confidence: ${componentCount >= 4 ? 'High' : componentCount >= 3 ? 'Medium' : 'Low'}. Missing components are excluded and weights are normalized.`,
     data_quality_notes: componentCount < 5 ? [`${5 - componentCount} momentum component(s) missing or zero — weights normalized across available components`] : undefined,
     llm_used: false,
@@ -377,13 +390,20 @@ function KPIDrillDownModal({
 }
 
 export default function RevenueMomentum() {
+  const { data: statusData } = useQuery({
+    queryKey: ['status'],
+    queryFn: api.getStatus,
+  });
+  const categoryKey = statusData?.data?.category_scope?.selected_categories?.join('|') || 'all';
+  const categoryScope = statusData?.data?.category_scope || {};
+
   const [selectedGroupKey, setSelectedGroupKey] = useState<keyof RevenueMomentumPayload['metrics'] | null>(null);
   const [selectedEvidence, setSelectedEvidence] = useState<EvidenceData | null>(null);
   const [drillDownConfig, setDrillDownConfig] = useState<{ title: string; explanation: string; items: LedgerRow[] } | null>(null);
 
   const { data, isLoading, isError } = useQuery({
-    queryKey: ['revenue-momentum'],
-    queryFn: () => api.getRevenueMomentum(500),
+    queryKey: ['revenue-momentum', categoryKey],
+    queryFn: () => api.getRevenueMomentum(500, categoryScope),
   });
 
   const rm: RevenueMomentumPayload = data?.data?.results?.revenue_momentum || {
@@ -399,9 +419,9 @@ export default function RevenueMomentum() {
 
   const filterConfigs: FilterConfig<LedgerRow>[] = [
     { id: 'brand', label: 'Brand', type: 'search', getValue: r => r.brand },
-    { id: 'revenue', label: 'Revenue', type: 'range', getValue: r => Number(r.parent_revenue) || 0 },
-    { id: 'score', label: 'Momentum Score', type: 'range', getValue: r => Number(r.momentum_score) || 0 },
-    { id: 'signal', label: 'Signal Type', type: 'select', getValue: r => r.momentum_score && r.momentum_score >= 75 ? 'High Momentum' : 'Stagnant / Declining' },
+    { id: 'tier', label: 'Revenue Tier', type: 'select', getValue: r => r.revenue_tier || 'C' },
+    { id: 'classification', label: 'Classification', type: 'select', getValue: r => r.classification },
+    { id: 'driver', label: 'Growth Driver', type: 'select', getValue: r => r.primary_engine || 'N/A' },
   ];
 
   const {
@@ -423,7 +443,21 @@ export default function RevenueMomentum() {
     [rm.metrics]
   );
 
-  const momentumCutoff = rm.classification_rules?.thresholds?.momentum_cutoff || rm.classification_summary?.momentum_cutoff || 75;
+  const momentumHigh =
+    rm.classification_summary?.momentum_high_threshold
+    ?? rm.classification_rules?.thresholds?.momentum_high_threshold
+    ?? rm.classification_rules?.thresholds?.momentum_cutoff
+    ?? rm.classification_summary?.momentum_cutoff
+    ?? 75;
+  const momentumLow =
+    rm.classification_summary?.momentum_low_threshold
+    ?? rm.classification_rules?.thresholds?.momentum_low_threshold
+    ?? 25;
+  const momentumMedian =
+    rm.classification_summary?.momentum_median
+    ?? rm.classification_rules?.thresholds?.momentum_median
+    ?? rm.classification_rules?.thresholds?.percentile_50
+    ?? 50;
   const tierDefinitions = rm.classification_summary?.revenue_tiers || {
     A: 'Top 60% cumulative revenue',
     B: 'Next 25% (60-85%)',
@@ -455,7 +489,7 @@ export default function RevenueMomentum() {
     { header: 'Market Share %', accessorKey: 'revenue_share', cell: (r) => `${Number(r.revenue_share || 0).toFixed(2)}%` },
     { header: 'Market Power', accessorKey: 'market_power_score', cell: (r) => <span className="font-mono text-muted-foreground">{Number(r.market_power_score || 0).toFixed(2)}</span> },
     { header: 'Revenue Tier', accessorKey: 'revenue_tier', cell: (r) => <Badge variant="outline">{r.revenue_tier || 'C'}</Badge> },
-    { header: 'Momentum Score', accessorKey: 'momentum_score', cell: (r) => <ScoreBar score={Number(r.momentum_score || 0)} onClick={(e) => { e.stopPropagation(); setSelectedEvidence(ledgerRowEvidence(r, momentumCutoff, rm.total_market_revenue || 0, { active_filters: activeFilters, filtered_row_count: filteredData.length, total_row_count: rm.momentum_ledger?.length || 0 })); }} /> },
+    { header: 'Momentum Score', accessorKey: 'momentum_score', cell: (r) => <ScoreBar score={Number(r.momentum_score || 0)} onClick={(e) => { e.stopPropagation(); setSelectedEvidence(ledgerRowEvidence(r, momentumHigh, momentumLow, rm.total_market_revenue || 0, { active_filters: activeFilters, filtered_row_count: filteredData.length, total_row_count: rm.momentum_ledger?.length || 0 })); }} /> },
     { header: 'Growth Driver', accessorKey: 'primary_engine', cell: (r) => <Badge variant="outline">{r.primary_engine || 'N/A'}</Badge> },
     { header: 'Classification', accessorKey: 'classification', cell: (r) => <Badge variant="outline">{r.classification}</Badge> },
   ];
@@ -464,7 +498,7 @@ export default function RevenueMomentum() {
     { header: '#', accessorKey: 'row_number', cell: (r) => <span className="font-mono text-muted-foreground">{r.row_number ?? '-'}</span> },
     { header: 'Ticker / Brand', accessorKey: 'brand', cell: (r) => <span className="font-bold text-foreground uppercase tracking-wide">{r.brand}</span> },
     { header: 'Market Share %', accessorKey: 'revenue_share', cell: (r) => <span className="font-mono">{Number(r.revenue_share || 0).toFixed(2)}%</span> },
-    { header: 'Momentum', accessorKey: 'momentum_score', cell: (r) => <ScoreBar score={Number(r.momentum_score || 0)} onClick={(e) => { e?.stopPropagation(); setSelectedEvidence(ledgerRowEvidence(r, momentumCutoff, rm.total_market_revenue || 0, { active_filters: activeFilters, filtered_row_count: filteredData.length, total_row_count: rm.momentum_ledger?.length || 0 })); }} /> },
+    { header: 'Momentum', accessorKey: 'momentum_score', cell: (r) => <ScoreBar score={Number(r.momentum_score || 0)} onClick={(e) => { e?.stopPropagation(); setSelectedEvidence(ledgerRowEvidence(r, momentumHigh, momentumLow, rm.total_market_revenue || 0, { active_filters: activeFilters, filtered_row_count: filteredData.length, total_row_count: rm.momentum_ledger?.length || 0 })); }} /> },
     { header: 'Power / Tier', accessorKey: 'market_power_score', cell: (r) => <span className="font-mono">{Number(r.market_power_score || 0).toFixed(0)} / {r.revenue_tier || 'C'}</span> },
     { header: 'Growth Driver', accessorKey: 'primary_engine', cell: (r) => <Badge variant="outline">{r.primary_engine || 'N/A'}</Badge> },
     { header: 'Classification', accessorKey: 'classification', cell: (r) => <Badge variant="outline">{r.classification}</Badge> },
@@ -522,12 +556,12 @@ export default function RevenueMomentum() {
                   source_rows: [],
                   calculation_steps: [
                     `Filter brands with Revenue Tier = A (top 60% cumulative revenue)`,
-                    `Filter brands with Momentum Score >= ${momentumCutoff.toFixed(1)}`,
+                    `Filter brands with Momentum Score >= ${momentumHigh.toFixed(1)}`,
                     `Count matching brands: ${rm.metrics.market_leaders.count}`,
                   ],
                   intermediate_values: {},
                   final_value: rm.metrics.market_leaders.count,
-                  classification_rule: `Revenue Tier A + High Momentum (Score >= ${momentumCutoff.toFixed(1)})`,
+                  classification_rule: `Revenue Tier A + High Momentum (Score >= ${momentumHigh.toFixed(1)})`,
                 },
                 rm.metrics.market_leaders.count,
                 brands
@@ -550,12 +584,12 @@ export default function RevenueMomentum() {
                   source_rows: [],
                   calculation_steps: [
                     `Filter brands with Revenue Tier = B or C (not top tier)`,
-                    `Filter brands with Momentum Score >= ${momentumCutoff.toFixed(1)}`,
+                    `Filter brands with Momentum Score >= ${momentumHigh.toFixed(1)}`,
                     `Count matching brands: ${rm.metrics.emerging_brands.count}`,
                   ],
                   intermediate_values: {},
                   final_value: rm.metrics.emerging_brands.count,
-                  classification_rule: `Revenue Tier B/C + High Momentum (Score >= ${momentumCutoff.toFixed(1)})`,
+                  classification_rule: `Revenue Tier B/C + High Momentum (Score >= ${momentumHigh.toFixed(1)})`,
                 },
                 rm.metrics.emerging_brands.count,
                 brands
@@ -578,12 +612,12 @@ export default function RevenueMomentum() {
                   source_rows: [],
                   calculation_steps: [
                     `Filter brands with Revenue Tier = A or B (top/mid tier)`,
-                    `Filter brands with Momentum Score < ${momentumCutoff.toFixed(1)}`,
+                    `Filter brands with Momentum Score < ${momentumHigh.toFixed(1)}`,
                     `Count matching brands: ${rm.metrics.premium_brands.count}`,
                   ],
                   intermediate_values: {},
                   final_value: rm.metrics.premium_brands.count,
-                  classification_rule: `Revenue Tier A/B + Low/Medium Momentum (Score < ${momentumCutoff.toFixed(1)})`,
+                  classification_rule: `Revenue Tier A/B + Low/Medium Momentum (Score < ${momentumHigh.toFixed(1)})`,
                 },
                 rm.metrics.premium_brands.count,
                 brands
@@ -606,12 +640,12 @@ export default function RevenueMomentum() {
                   source_rows: [],
                   calculation_steps: [
                     `Filter brands with Revenue Tier = C (long tail)`,
-                    `Filter brands with Momentum Score < ${momentumCutoff.toFixed(1)}`,
+                    `Filter brands with Momentum Score < ${momentumHigh.toFixed(1)}`,
                     `Count matching brands: ${rm.metrics.niche_players.count}`,
                   ],
                   intermediate_values: {},
                   final_value: rm.metrics.niche_players.count,
-                  classification_rule: `Revenue Tier C + Low/Medium Momentum (Score < ${momentumCutoff.toFixed(1)})`,
+                  classification_rule: `Revenue Tier C + Low/Medium Momentum (Score < ${momentumHigh.toFixed(1)})`,
                 },
                 rm.metrics.niche_players.count,
                 brands
@@ -723,10 +757,10 @@ export default function RevenueMomentum() {
                 <button
                   type="button"
                   onClick={() => {
-                    const highMomentumBrands = rm.momentum_ledger.filter(b => b.momentum_score >= momentumCutoff);
+                    const highMomentumBrands = rm.momentum_ledger.filter(b => b.momentum_score >= momentumHigh);
                     setDrillDownConfig({
                       title: 'High Momentum Brands',
-                      explanation: `Brands with momentum score ≥ ${momentumCutoff.toFixed(1)} (75th percentile of dataset). These brands show strong growth signals across multiple indicators.`,
+                      explanation: `Brands with momentum score ≥ ${momentumHigh.toFixed(1)} (75th percentile). Strong growth signals across available indicators.`,
                       items: highMomentumBrands,
                     });
                   }}
@@ -735,19 +769,21 @@ export default function RevenueMomentum() {
                   <div className="flex items-center justify-between mb-1">
                     <p className="font-bold text-success">High Momentum</p>
                     <Badge variant="outline" className="bg-success/10 border-success/30 text-success">
-                      {rm.momentum_ledger.filter(b => b.momentum_score >= momentumCutoff).length} brands
+                      {rm.momentum_ledger.filter(b => b.momentum_score >= momentumHigh).length} brands
                     </Badge>
                   </div>
-                  <p className="text-xs text-muted-foreground">Score ≥ {momentumCutoff.toFixed(1)} (75th percentile)</p>
+                  <p className="text-xs text-muted-foreground">Score ≥ {momentumHigh.toFixed(1)} (75th percentile)</p>
                 </button>
                 
                 <button
                   type="button"
                   onClick={() => {
-                    const medMomentumBrands = rm.momentum_ledger.filter(b => b.momentum_score >= 40 && b.momentum_score < momentumCutoff);
+                    const medMomentumBrands = rm.momentum_ledger.filter(
+                      b => b.momentum_score >= momentumLow && b.momentum_score < momentumHigh,
+                    );
                     setDrillDownConfig({
                       title: 'Medium Momentum Brands',
-                      explanation: `Brands with momentum score between 40 and ${momentumCutoff.toFixed(1)}. These brands show moderate growth signals.`,
+                      explanation: `Brands with ${momentumLow.toFixed(1)} ≤ momentum score < ${momentumHigh.toFixed(1)} (between 25th and 75th percentile).`,
                       items: medMomentumBrands,
                     });
                   }}
@@ -756,19 +792,23 @@ export default function RevenueMomentum() {
                   <div className="flex items-center justify-between mb-1">
                     <p className="font-bold text-warning">Medium Momentum</p>
                     <Badge variant="outline" className="bg-warning/10 border-warning/30 text-warning">
-                      {rm.momentum_ledger.filter(b => b.momentum_score >= 40 && b.momentum_score < momentumCutoff).length} brands
+                      {rm.momentum_ledger.filter(
+                        b => b.momentum_score >= momentumLow && b.momentum_score < momentumHigh,
+                      ).length} brands
                     </Badge>
                   </div>
-                  <p className="text-xs text-muted-foreground">Score: 40 to {momentumCutoff.toFixed(1)}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {momentumLow.toFixed(1)} ≤ score &lt; {momentumHigh.toFixed(1)}
+                  </p>
                 </button>
                 
                 <button
                   type="button"
                   onClick={() => {
-                    const lowMomentumBrands = rm.momentum_ledger.filter(b => b.momentum_score < 40);
+                    const lowMomentumBrands = rm.momentum_ledger.filter(b => b.momentum_score < momentumLow);
                     setDrillDownConfig({
                       title: 'Low Momentum Brands',
-                      explanation: `Brands with momentum score < 40. These brands show weak or declining growth signals.`,
+                      explanation: `Brands with momentum score < ${momentumLow.toFixed(1)} (below 25th percentile). Weak or declining growth signals.`,
                       items: lowMomentumBrands,
                     });
                   }}
@@ -777,10 +817,10 @@ export default function RevenueMomentum() {
                   <div className="flex items-center justify-between mb-1">
                     <p className="font-bold text-muted-foreground">Low Momentum</p>
                     <Badge variant="outline" className="bg-muted border-border text-muted-foreground">
-                      {rm.momentum_ledger.filter(b => b.momentum_score < 40).length} brands
+                      {rm.momentum_ledger.filter(b => b.momentum_score < momentumLow).length} brands
                     </Badge>
                   </div>
-                  <p className="text-xs text-muted-foreground">Score &lt; 40</p>
+                  <p className="text-xs text-muted-foreground">Score &lt; {momentumLow.toFixed(1)} (25th percentile)</p>
                 </button>
               </div>
             </CardContent>
@@ -838,7 +878,7 @@ export default function RevenueMomentum() {
               data={rm.momentum_ledger.slice().sort((a, b) => Number(b.revenue_share || 0) - Number(a.revenue_share || 0) || Number(b.momentum_score || 0) - Number(a.momentum_score || 0))}
               pageSize={15}
               rowKey={(row, i) => `${row.brand}-${row.row_number ?? i}`}
-              onRowClick={(row) => setSelectedEvidence(ledgerRowEvidence(row, momentumCutoff, rm.total_market_revenue || 0, { active_filters: activeFilters, filtered_row_count: filteredData.length, total_row_count: rm.momentum_ledger?.length || 0 }))}
+              onRowClick={(row) => setSelectedEvidence(ledgerRowEvidence(row, momentumHigh, momentumLow, rm.total_market_revenue || 0, { active_filters: activeFilters, filtered_row_count: filteredData.length, total_row_count: rm.momentum_ledger?.length || 0 }))}
             />
           </CardContent>
         </Card>
@@ -915,7 +955,7 @@ export default function RevenueMomentum() {
               data={selectedGroup.items.slice().sort((a, b) => Number(b.revenue_share || 0) - Number(a.revenue_share || 0) || Number(b.momentum_score || 0) - Number(a.momentum_score || 0))}
               pageSize={20}
               rowKey={(row, i) => `${row.brand}-${row.row_number ?? i}`}
-              onRowClick={(row) => setSelectedEvidence(ledgerRowEvidence(row, momentumCutoff, rm.total_market_revenue || 0, { active_filters: activeFilters, filtered_row_count: filteredData.length, total_row_count: rm.momentum_ledger?.length || 0 }))}
+              onRowClick={(row) => setSelectedEvidence(ledgerRowEvidence(row, momentumHigh, momentumLow, rm.total_market_revenue || 0, { active_filters: activeFilters, filtered_row_count: filteredData.length, total_row_count: rm.momentum_ledger?.length || 0 }))}
             />
           </div>
         )}

@@ -17,9 +17,16 @@ import { formatGenericLabel } from '../utils/formatters';
 
 
 export default function DemandVelocity() {
+  const { data: statusData } = useQuery({
+    queryKey: ['status'],
+    queryFn: api.getStatus,
+  });
+  const categoryKey = statusData?.data?.category_scope?.selected_categories?.join('|') || 'all';
+  const categoryScope = statusData?.data?.category_scope || {};
+
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['demand-velocity'],
-    queryFn: () => api.getDemandVelocity(10),
+    queryKey: ['demand-velocity', categoryKey],
+    queryFn: () => api.getDemandVelocity(10, categoryScope),
   });
 
   if (isLoading) return <DashboardSkeleton />;
