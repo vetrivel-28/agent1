@@ -8,10 +8,13 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import Papa from 'papaparse';
 import JSZip from 'jszip';
+import { Modal } from '../components/ui/Modal';
 import { AnalysisProgressModal } from '../components/modals/AnalysisProgressModal';
 import type { AnalysisStatus } from '../components/modals/AnalysisProgressModal';
 import { historyStorage } from '../services/historyStorage';
 import { PageHeader } from '../components/layout/PageHeader';
+import { formatGenericLabel } from '../utils/formatters';
+
 
 type DetectedFile = {
   file: File;
@@ -38,34 +41,179 @@ export default function DatasetUpload() {
     details?: any;
   }>({ type: 'idle', message: '' });
 
+  const [categoryModal, setCategoryModal] = useState<{
+    isOpen: boolean;
+    categories: any[];
+    columnName: string;
+    isSetting: boolean;
+  }>({ isOpen: false, categories: [], columnName: '', isSetting: false });
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const mutation = useMutation({
     mutationFn: (formData: FormData) => api.uploadDatasets(formData),
-    onSuccess: (data) => {
-      setUploadStatus({
-        type: 'success',
-        message: 'Datasets uploaded successfully.',
-        details: data
-      });
-      
-      const blackboxRows = detectedDatasets.find(d => d.type === 'blackbox')?.rows || 0;
-      const magnetRows = detectedDatasets.find(d => d.type === 'magnet')?.rows || 0;
-      
-      historyStorage.saveEntry({
-        runDate: Date.now(),
-        datasetName: detectedDatasets[0]?.file.name || 'Analysis Package',
-        keywords: magnetRows,
-        products: blackboxRows,
-        brands: 0,
-      });
-      // Navigation is now handled by the modal success effect
+    onSuccess: async (data) => {
+      try {
+        // Health check before category detection
+        try {
+          await api.getHealth();
+        } catch (healthErr: any) {
+          console.error('[Upload] Backend health check failed:', healthErr);
+          setUploadStatus({
+            type: 'error',
+            message: 'Backend is not reachable. Check that the API server is running at http://localhost:8000',
+            details: { healthCheckFailed: true, originalError: healthErr }
+          });
+          return;
+        }
+
+        // Detect categories
+        const catRes = await api.detectCategories();
+        
+        // Check if backend returned error
+        if (!catRes.success || catRes.status === 'error') {
+          const errorType = catRes.data?.error_type || catRes.error_type;
+          const missingColumn = catRes.data?.missing_column || catRes.missing_column;
+          
+          if (errorType === 'schema_error') {
+            setUploadStatus({
+              type: 'error',
+              message: `CSV schema validation failed: ${catRes.message || 'Missing required columns'}`,
+              details: {
+                error_type: errorType,
+                missing_column: missingColumn,
+                backend_message: catRes.message
+              }
+            });
+            return;
+          }
+          
+          if (errorType === 'dataset_not_loaded') {
+            setUploadStatus({
+              type: 'error',
+              message: 'BlackBox dataset not loaded on backend. This may be a backend state issue.',
+              details: catRes
+            });
+            return;
+          }
+        }
+        
+        // Success - check for categories
+        const categories = catRes.data?.categories || catRes.categories;
+        const hasCategories = catRes.data?.has_categories ?? catRes.has_categories ?? false;
+        
+        if (hasCategories && categories && categories.length > 0) {
+          setCategoryModal({
+            isOpen: true,
+            categories: categories,
+            columnName: catRes.data?.column || catRes.column || 'Category',
+            isSetting: false
+          });
+          
+          if (categories.length === 1) {
+            setSelectedCategories([categories[0].category]);
+          }
+          
+        } else {
+          // No categories found, proceed as normal
+          setUploadStatus({
+            type: 'success',
+            message: 'Datasets uploaded successfully. No category filtering needed.',
+            details: data
+          });
+        }
+        
+        const blackboxRows = detectedDatasets.find(d => d.type === 'blackbox')?.rows || 0;
+        const magnetRows = detectedDatasets.find(d => d.type === 'magnet')?.rows || 0;
+        
+        historyStorage.saveEntry({
+          runDate: Date.now(),
+          datasetName: detectedDatasets[0]?.file.name || 'Analysis Package',
+          keywords: magnetRows,
+          products: blackboxRows,
+          brands: 0,
+        });
+      } catch (err: any) {
+        console.error('[Upload] Category detection error:', err);
+        
+        // Detect CORS or network errors
+        if (!err.response) {
+          // Network error - no response received
+          const isCors = err.message?.includes('Network Error') || 
+                        err.message?.includes('CORS') ||
+                        err.code === 'ERR_NETWORK';
+          
+          if (isCors) {
+            setUploadStatus({
+              type: 'error',
+              message: 'Backend connection failed. Check API server and CORS settings.',
+              details: {
+                error_type: 'cors_or_network',
+                message: 'Frontend could not reach backend. Ensure API is running at http://localhost:8000 and CORS is configured.',
+                original_error: err.message
+              }
+            });
+            return;
+          }
+          
+          setUploadStatus({
+            type: 'error',
+            message: 'Network error: Unable to connect to backend API.',
+            details: err
+          });
+          return;
+        }
+        
+        // Backend returned error response
+        const backendMessage = err.response?.data?.message || err.message;
+        setUploadStatus({
+          type: 'error',
+          message: `Category detection failed: ${backendMessage}`,
+          details: err.response?.data
+        });
+      }
     },
     onError: (error: any) => {
+      console.error('[Upload] Upload mutation error:', error);
+      
+      // Check for CORS/network errors
+      if (!error.response) {
+        setUploadStatus({
+          type: 'error',
+          message: 'Backend connection failed. Check that API server is running at http://localhost:8000',
+          details: { network_error: true, message: error.message }
+        });
+        return;
+      }
+      
+      // Extract error details
       const errList = error.response?.data?.errors;
-      const firstMsg = Array.isArray(errList) && errList[0]?.message
-        ? errList[0].message
-        : error.response?.data?.message;
+      const firstErr = Array.isArray(errList) && errList[0];
+      
+      if (firstErr) {
+        const dataset = firstErr.dataset;
+        const message = firstErr.message;
+        const missingCols = firstErr.missing_columns;
+        const detectedCols = firstErr.detected_columns;
+        
+        if (missingCols && missingCols.length > 0) {
+          setUploadStatus({
+            type: 'error',
+            message: `CSV schema validation failed for ${dataset || 'dataset'}`,
+            details: {
+              dataset: dataset,
+              message: message,
+              missing_columns: missingCols,
+              detected_columns: detectedCols,
+              expected_format: `${dataset || 'Dataset'} requires columns: ${missingCols.join(', ')}`
+            }
+          });
+          return;
+        }
+      }
+      
+      const firstMsg = firstErr?.message || error.response?.data?.message;
       setUploadStatus({
         type: 'error',
         message: firstMsg || error.response?.data?.detail?.[0]?.msg || error.message || 'Upload validation failed.',
@@ -73,6 +221,26 @@ export default function DatasetUpload() {
       });
     }
   });
+
+  const handleConfirmCategory = async () => {
+    if (selectedCategories.length === 0) return;
+    setCategoryModal(prev => ({ ...prev, isSetting: true }));
+    try {
+      await api.setCategory(selectedCategories);
+      setCategoryModal(prev => ({ ...prev, isOpen: false, isSetting: false }));
+      setUploadStatus({
+        type: 'success',
+        message: 'Categories applied successfully.',
+      });
+    } catch (err) {
+      setCategoryModal(prev => ({ ...prev, isSetting: false }));
+      setUploadStatus({
+        type: 'error',
+        message: 'Failed to set categories.',
+        details: err
+      });
+    }
+  };
 
   const handleModalClose = () => {
     if (uploadStatus.type === 'success') {
@@ -528,6 +696,73 @@ export default function DatasetUpload() {
           </Card>
         </div>
       </div>
+
+
+      {categoryModal.isOpen && (
+        <Modal
+          isOpen={categoryModal.isOpen}
+          onClose={() => {}}
+          title="Select Market Category"
+          maxWidth="max-w-2xl"
+        >
+          <p className="text-sm text-muted-foreground mb-4 px-1">
+            Your BlackBox dataset contains multiple product categories. Select the category you want to analyze before calculations begin. Detected from: {categoryModal.columnName}
+          </p>
+          <div className="space-y-4 max-h-[60vh] overflow-y-auto p-1">
+            {categoryModal.categories.map((c, i) => {
+              const isSelected = selectedCategories.includes(c.category);
+              return (
+                <div 
+                  key={i} 
+                  className={`p-4 border rounded-xl cursor-pointer transition-all ${isSelected ? 'border-primary bg-primary/5' : 'border-border bg-card hover:border-primary/50'}`}
+                  onClick={() => {
+                    if (isSelected) {
+                      setSelectedCategories(prev => prev.filter(x => x !== c.category));
+                    } else {
+                      setSelectedCategories(prev => [...prev, c.category]);
+                    }
+                  }}
+                >
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <h4 className="font-bold text-foreground text-lg">{c.category}</h4>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        {c.product_count} products | {c.revenue > 0 ? `$${c.revenue.toLocaleString()}` : `${c.units_sold} units`}
+                      </p>
+                    </div>
+                    <div className={`w-5 h-5 rounded-sm border flex items-center justify-center ${isSelected ? 'bg-primary border-primary' : 'border-muted-foreground'}`}>
+                      {isSelected && <CheckCircle className="w-3.5 h-3.5 text-primary-foreground" />}
+                    </div>
+                  </div>
+                  {c.sample_products && c.sample_products.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-border/50">
+                      <p className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Sample Products</p>
+                      <ul className="text-xs text-muted-foreground list-disc list-inside truncate">
+                        {c.sample_products.map((p: string, idx: number) => (
+                          <li key={idx} className="truncate">{p}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <div className="mt-6 flex justify-end gap-3 pt-4 border-t border-border">
+            <Button variant="outline" onClick={() => {
+              setCategoryModal(prev => ({ ...prev, isOpen: false }));
+              setUploadStatus({ type: 'idle', message: '' });
+              setDetectedDatasets([]);
+            }}>Cancel Upload</Button>
+            <Button 
+              disabled={selectedCategories.length === 0 || categoryModal.isSetting}
+              onClick={handleConfirmCategory}
+            >
+              {categoryModal.isSetting ? 'Applying...' : 'Start Analysis'}
+            </Button>
+          </div>
+        </Modal>
+      )}
 
       <AnalysisProgressModal
         status={getModalStatus()}

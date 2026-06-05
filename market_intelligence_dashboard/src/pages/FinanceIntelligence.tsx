@@ -16,6 +16,8 @@ import { cn } from '../utils/cn';
 import { PageHeader } from '../components/layout/PageHeader';
 import { PageSection } from '../components/layout/PageSection';
 import { DashboardSkeleton } from '../components/ui/Skeletons';
+import { formatGenericLabel } from '../utils/formatters';
+
 
 // ---------------------------------------------------------------------------
 // Types
@@ -172,7 +174,7 @@ function EvidenceDrawer({ title, metric, onClose }: { title: string; metric: Met
                   <span className="text-3xl font-black font-mono">{score.toFixed(0)}</span>
                   <div>
                     <p className="text-xs text-muted-foreground uppercase tracking-wide">Final Score / 100</p>
-                    <p className={cn('text-sm font-semibold', classColor(metric.classification ?? ''))}>{metric.classification}</p>
+                    <p className={cn('text-sm font-semibold', classColor(metric.classification ?? ''))}>{formatGenericLabel(metric.classification)}</p>
                   </div>
                 </div>
                 {confidenceLabel && (
@@ -572,7 +574,7 @@ export default function FinanceIntelligence() {
       : `Entry cost pressure appears low (${eciScore!.toFixed(0)}/100) — confidence limited due to missing cost data`
     );
   if (pvsOk && pvsScore! >= 60)
-    opportunities.push(`Price positioning potential is ${pvs_data.classification} (${pvsScore!.toFixed(0)}/100) — supports premium pricing`);
+    opportunities.push(`Price positioning potential is ${formatGenericLabel(pvs_data.classification)} (${pvsScore!.toFixed(0)}/100) — supports premium pricing`);
   if (marketAttractivenessScore != null && marketAttractivenessScore >= 60)
     opportunities.push(`Market attractiveness score ${marketAttractivenessScore.toFixed(0)}/100 — favorable entry conditions`);
 
@@ -582,7 +584,7 @@ export default function FinanceIntelligence() {
   if (apiOk && api_data.classification === 'Medium' && apiScore! > 55)
     risks.push(`Moderate-to-high advertising pressure (${apiScore!.toFixed(0)}/100) — monitor keyword bid trends`);
   if (edOk && edScore! > 60)
-    risks.push(`Entry difficulty is ${entry_difficulty_data.classification} (${edScore!.toFixed(0)}/100)`);
+    risks.push(`Entry difficulty is ${formatGenericLabel(entry_difficulty_data.classification)} (${edScore!.toFixed(0)}/100)`);
   if (eciOk && eciScore! > 60)
     risks.push(`Entry cost index is high (${eciScore!.toFixed(0)}/100) — significant investment needed to compete`);
   if (marketRiskScore > 60)
@@ -593,11 +595,11 @@ export default function FinanceIntelligence() {
 
   // Executive brief panels — match actual metric values
   const keyFinding = apiOk && edOk
-    ? `Advertising pressure is ${api_data.classification} (${apiScore!.toFixed(0)}/100) and entry difficulty is ${entry_difficulty_data.classification} (${edScore!.toFixed(0)}/100) — signals indicate ${marketAttractivenessLabel.toLowerCase()} entry conditions.`
+    ? `Advertising pressure is ${formatGenericLabel(api_data.classification)} (${apiScore!.toFixed(0)}/100) and entry difficulty is ${formatGenericLabel(entry_difficulty_data.classification)} (${edScore!.toFixed(0)}/100) — signals indicate ${marketAttractivenessLabel.toLowerCase()} entry conditions.`
     : apiOk
-      ? `Advertising pressure is ${api_data.classification} (${apiScore!.toFixed(0)}/100). Entry difficulty data is incomplete — upload datasets with CPR, Sponsored ASINs, Review Count columns.`
+      ? `Advertising pressure is ${formatGenericLabel(api_data.classification)} (${apiScore!.toFixed(0)}/100). Entry difficulty data is incomplete — upload datasets with CPR, Sponsored ASINs, Review Count columns.`
       : edOk
-        ? `Entry difficulty is ${entry_difficulty_data.classification} (${edScore!.toFixed(0)}/100). Advertising signals incomplete — upload Magnet with H10 PPC Sugg. Bid or Sponsored ASINs columns.`
+        ? `Entry difficulty is ${formatGenericLabel(entry_difficulty_data.classification)} (${edScore!.toFixed(0)}/100). Advertising signals incomplete — upload Magnet with H10 PPC Sugg. Bid or Sponsored ASINs columns.`
         : 'Upload Magnet with H10 PPC Sugg. Bid, Sponsored ASINs, and CPR columns to generate market entry intelligence.';
 
   let highestBarrier = { name: '', score: 0 };
@@ -622,9 +624,9 @@ export default function FinanceIntelligence() {
 
   const entryInvestment = apiOk
     ? `Entry investment requirement appears ${(api_data.capital_requirement ?? 'moderate').toLowerCase()} based on advertising pressure (${apiScore!.toFixed(0)}/100).`
-    + (eciOk ? ` Entry cost index: ${eciScore!.toFixed(0)}/100 (${entry_cost_data.classification}).` : '')
+    + (eciOk ? ` Entry cost index: ${eciScore!.toFixed(0)}/100 (${formatGenericLabel(entry_cost_data.classification)}).` : '')
     : eciOk
-      ? `Entry cost index is ${entry_cost_data.classification} (${eciScore!.toFixed(0)}/100).`
+      ? `Entry cost index is ${formatGenericLabel(entry_cost_data.classification)} (${eciScore!.toFixed(0)}/100).`
       : 'Entry investment signals will appear when H10 PPC Sugg. Bid or CPR data is available.';
 
   const maInsight = marketAttractivenessScore == null
@@ -777,7 +779,7 @@ export default function FinanceIntelligence() {
             <div className="w-full bg-muted rounded-full h-2 mb-3">
               <div className={cn('h-2 rounded-full', scoreColor(pvsScore!, false).replace('text-', 'bg-'))} style={{ width: `${pvsScore}%` }} />
             </div>
-            <p className={cn('text-sm font-semibold mb-1', classColor(pvs_data.classification ?? ''))}>{pvs_data.classification}</p>
+            <p className={cn('text-sm font-semibold mb-1', classColor(pvs_data.classification ?? ''))}>{formatGenericLabel(pvs_data.classification)}</p>
             <p className="text-xs text-muted-foreground leading-relaxed">{pvs_data.mini_insight ?? 'Price-band analysis from BlackBox product price distribution.'}</p>
           </CardContent>
         </Card>

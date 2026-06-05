@@ -10,7 +10,11 @@ import { formatCurrency } from '../utils/cn';
 // Unified Layouts
 import { PageSection } from '../components/layout/PageSection';
 import { DashboardSkeleton } from '../components/ui/Skeletons';
-import { EvidenceModal, type EvidenceData } from '../components/ui/EvidenceModal';
+import { EvidenceDrawer, type EvidenceData } from '../components/ui/EvidenceDrawer';
+import { formatGenericLabel } from '../utils/formatters';
+import { useDatasetFilters, type FilterConfig } from '../hooks/useDatasetFilters';
+import { FilterBar } from '../components/filters/FilterBar';
+
 
 export default function ComplementIntelligence() {
   const [selectedEvidence, setSelectedEvidence] = useState<EvidenceData | null>(null);
@@ -19,6 +23,25 @@ export default function ComplementIntelligence() {
     queryKey: ['complement-intelligence'],
     queryFn: () => api.getComplementIntelligence(10),
   });
+
+  const results = data?.data?.results || {};
+  const items = results.complement_products || [];
+  
+  const filterConfigs: FilterConfig<any>[] = [
+    { id: 'brand', label: 'Brand', type: 'search', getValue: r => r.brand },
+    { id: 'classification', label: 'Product Type / Classification', type: 'select', getValue: r => r.category || 'Product' },
+    { id: 'price_band', label: 'Price Band', type: 'select', getValue: r => r.price ? (r.price > 50 ? 'Premium' : 'Standard') : 'Unknown' },
+    { id: 'category_scope', label: 'Category Scope', type: 'select', getValue: r => 'Filtered BlackBox' },
+  ];
+
+  const {
+    filteredData,
+    activeFilters,
+    setFilter,
+    clearFilter,
+    clearAll,
+    filterOptions
+  } = useDatasetFilters<any>(items, filterConfigs);
 
   if (isLoading) return <DashboardSkeleton />;
 
@@ -34,11 +57,11 @@ export default function ComplementIntelligence() {
     );
   }
 
-  const results = data?.data?.results || {};
-  const items = results.complement_products || [];
-  const top_items = items.slice(0, 10);
+  
 
-  const createComplementEvidence = (item: any, rank: number): EvidenceData => {
+  const top_items = filteredData.slice(0, 10);
+
+  const createComplementEvidence = (item: any, rank: number, filterContext?: any): EvidenceData => {
     const reasonArray = Array.isArray(item.reason) ? item.reason : [];
     const reasonText = Array.isArray(item.reason) 
       ? reasonArray.map((r: any) => `${r.label}: ${r.value}`).join('; ')
@@ -56,6 +79,10 @@ export default function ComplementIntelligence() {
       source_datasets: metadata['Source Dataset'] ? [metadata['Source Dataset']] : ['Magnet', 'BlackBox'],
       source_columns: metadata['Source Columns']?.split(',').map((c: string) => c.trim()) || ['keyword', 'category', 'product_title', 'use_case'],
       source_row_count: parseInt(metadata['Supporting Products']?.split(' ')[0]) || parseInt(metadata['Supporting Keywords']?.split(' ')[0]) || 0,
+      active_filters: filterContext?.active_filters,
+      filtered_row_count: filterContext?.filtered_row_count,
+      total_row_count: filterContext?.total_row_count,
+      calculation_scope: filterContext ? 'Filtered' : 'Global',
       formula: 'Complement products identified through companion use case analysis, purchase adjacency patterns, and ecosystem logic',
       calculation_steps: [
         'Analyze product categories and use cases from dataset',
@@ -92,6 +119,16 @@ export default function ComplementIntelligence() {
 
   return (
     <div className="space-y-4">
+      <FilterBar 
+        configs={filterConfigs}
+        activeFilters={activeFilters}
+        setFilter={setFilter}
+        clearFilter={clearFilter}
+        clearAll={clearAll}
+        filterOptions={filterOptions}
+        totalRecords={items.length}
+        filteredRecords={filteredData.length}
+      />
       <PageSection title="Complement Products">
         <div className="grid grid-cols-1 gap-4">
         {top_items.map((item: any, idx: number) => {
@@ -102,7 +139,7 @@ export default function ComplementIntelligence() {
               key={idx} 
               className="overflow-hidden border-l-4 cursor-pointer hover:border-primary/70 hover:shadow-md transition-all" 
               style={{borderLeftColor: 'hsl(var(--primary))'}}
-              onClick={() => setSelectedEvidence(createComplementEvidence(item, idx + 1))}
+              onClick={() => setSelectedEvidence(createComplementEvidence(item, idx + 1, { active_filters: activeFilters, filtered_row_count: filteredData.length, total_row_count: items.length }))}
             >
               <CardContent className="p-5 flex flex-col gap-3">
                 <h3 className="font-bold text-xl leading-tight text-primary">{titleText}</h3>
@@ -130,7 +167,7 @@ export default function ComplementIntelligence() {
         </div>
       </PageSection>
 
-      <EvidenceModal
+      <EvidenceDrawer
         isOpen={!!selectedEvidence}
         onClose={() => setSelectedEvidence(null)}
         evidence={selectedEvidence}

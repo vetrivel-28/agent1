@@ -9,6 +9,8 @@ import { DashboardSkeleton } from '../components/ui/Skeletons';
 import { FileText, Target, TrendingUp, ShieldAlert, AlertTriangle, DollarSign, ActivitySquare } from 'lucide-react';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip as RechartsTooltip, CartesianGrid, PieChart, Pie, Cell, Legend } from 'recharts';
 import { Button } from '../components/ui/Button';
+import { formatGenericLabel } from '../utils/formatters';
+
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#64748b', '#0ea5e9'];
 
@@ -438,7 +440,7 @@ export default function MarketReport() {
             <div key={i} className="bg-card border border-border/50 p-4 rounded-lg">
               <div className="flex justify-between items-center mb-2">
                 <span className="font-bold">{z.zone}</span>
-                <Badge variant="outline">{z.classification}</Badge>
+                <Badge variant="outline">{formatGenericLabel(z.classification)}</Badge>
               </div>
               <p className="text-sm text-muted-foreground">Volume Share: <span className="font-bold text-foreground">{(z.volume_share * 100).toFixed(1)}%</span></p>
             </div>

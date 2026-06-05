@@ -16,6 +16,8 @@ import {
 } from 'recharts';
 import { motion } from 'framer-motion';
 import { cn } from '../utils/cn';
+import { formatGenericLabel } from '../utils/formatters';
+
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -169,7 +171,7 @@ function ScatterTip({ active, payload }: any) {
         </div>
       </div>
       <div className="pt-2 border-t border-border/50">
-        <span className={cn('text-[10px] px-2 py-0.5 rounded-full border font-bold uppercase tracking-wider', segmentBadge(d.segment))}>{d.segment}</span>
+        <span className={cn('text-[10px] px-2 py-0.5 rounded-full border font-bold uppercase tracking-wider', segmentBadge(d.segment))}>{formatGenericLabel(d.segment)}</span>
       </div>
     </div>
   );
@@ -333,7 +335,7 @@ export default function BsrEfficiency() {
               
               <div className="mt-3 pt-2 border-t border-border/50">
                 <p className="text-[10px] uppercase font-bold text-muted-foreground mb-1">Classification</p>
-                <span className={cn('text-[10px] px-2 py-0.5 rounded-full font-bold border uppercase tracking-wider', segmentBadge(row.segment))}>{row.segment}</span>
+                <span className={cn('text-[10px] px-2 py-0.5 rounded-full font-bold border uppercase tracking-wider', segmentBadge(row.segment))}>{formatGenericLabel(row.segment)}</span>
               </div>
               
               <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-border/50" />
@@ -363,7 +365,7 @@ export default function BsrEfficiency() {
       accessorKey: 'segment',
       cell: (row) => (
         <span className={cn('text-[10px] px-2 py-0.5 rounded-full font-bold border uppercase tracking-wider', segmentBadge(row.segment))}>
-          {row.segment}
+          {formatGenericLabel(row.segment)}
         </span>
       ),
     },

@@ -13,6 +13,8 @@ import { PageSection } from '../components/layout/PageSection';
 import { ChartContainer } from '../components/ui/ChartContainer';
 import { DashboardSkeleton } from '../components/ui/Skeletons';
 import { isEngineOk, getEngineErrorMessage } from '../utils/analysisStatus';
+import { formatGenericLabel } from '../utils/formatters';
+
 
 export default function DemandVelocity() {
   const { data, isLoading, isError, error } = useQuery({

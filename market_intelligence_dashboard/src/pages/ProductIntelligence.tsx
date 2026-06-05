@@ -10,6 +10,8 @@ import ComplementIntelligence from './ComplementIntelligence';
 import BundleOpportunities from './BundleOpportunities';
 import { cn } from '../utils/cn';
 import { PageHeader } from '../components/layout/PageHeader';
+import { formatGenericLabel } from '../utils/formatters';
+
 
 const tabs = [
   { id: 'competitors', label: 'Direct Products', icon: Users, component: DirectCompetitors },

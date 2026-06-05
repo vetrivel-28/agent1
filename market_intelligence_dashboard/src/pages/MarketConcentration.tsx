@@ -18,7 +18,12 @@ import { PageSection } from '../components/layout/PageSection';
 import { KPICard } from '../components/ui/KPICard';
 import { ChartContainer } from '../components/ui/ChartContainer';
 import { DashboardSkeleton } from '../components/ui/Skeletons';
-import { EvidenceModal, type EvidenceData } from '../components/ui/EvidenceModal';
+import { EvidenceDrawer, type EvidenceData } from '../components/ui/EvidenceDrawer';
+import { formatGenericLabel } from '../utils/formatters';
+import { useDatasetFilters, type FilterConfig } from '../hooks/useDatasetFilters';
+import { FilterBar } from '../components/filters/FilterBar';
+
+
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -112,7 +117,7 @@ function BarTip({ active, payload }: any) {
       <div className="flex justify-between"><span className="text-muted-foreground">Units Sold:</span><span className="font-medium">{d.units_sold?.toLocaleString() || 0}</span></div>
       <div className="flex justify-between"><span className="text-muted-foreground">ASP:</span><span className="font-medium">{formatCurrency(d.asp || 0)}</span></div>
       <div className="flex justify-between"><span className="text-muted-foreground">Share:</span><span className="font-medium text-primary">{d.revenue_share?.toFixed(2)}%</span></div>
-      <div className="flex justify-between"><span className="text-muted-foreground">Segment:</span><span className="font-medium">{d.segment}</span></div>
+      <div className="flex justify-between"><span className="text-muted-foreground">Segment:</span><span className="font-medium">{formatGenericLabel(d.segment)}</span></div>
     </div>
   );
 }
@@ -266,6 +271,44 @@ export default function MarketConcentration() {
     queryFn: () => api.getMarketConcentration(50),
   });
 
+  // Safe data extraction - handles undefined gracefully
+  const structure        = data?.data?.results?.market_structure || {};
+  const topBrands: BrandRanking[] = Array.isArray(structure.brand_rankings) 
+    ? structure.brand_rankings 
+    : [];
+  const landscape: CompetitiveSegment[] = Array.isArray(structure.competitive_landscape) 
+    ? structure.competitive_landscape 
+    : [];
+  const hhi: number      = data?.data?.results?.hhi_score ?? 0;
+  const totalRevenue     = structure.total_market_revenue      ?? 0;
+  const totalUnits       = structure.total_units_sold          ?? 0;
+  const totalBrands      = structure.active_brand_count        ?? 0;
+  const top1Share        = Number(structure.top_1_share        ?? 0);
+  const top3Share        = Number(structure.top_3_share        ?? 0);
+  const top5Share        = Number(structure.top_5_share        ?? 0);
+  const concentrationType: string = structure.concentration_type ?? 'N/A';
+  const totalProducts    = structure.total_products            ?? 0;
+  const top10Share       = topBrands.slice(0, 10).reduce((s: number, b) => s + (b.revenue_share ?? 0), 0);
+  const leader           = topBrands[0] || null;
+
+  const filterConfigs: FilterConfig<BrandRanking>[] = [
+    { id: 'brand', label: 'Brand', type: 'search', getValue: r => r.brand },
+    { id: 'segment', label: 'Segment', type: 'select', getValue: r => r.segment },
+    { id: 'revenue', label: 'Revenue', type: 'range', getValue: r => r.parent_revenue },
+    { id: 'units', label: 'Units Sold', type: 'range', getValue: r => r.units_sold },
+    { id: 'products', label: 'Products', type: 'range', getValue: r => r.product_count },
+    { id: 'share', label: 'Market Share %', type: 'range', getValue: r => r.revenue_share },
+  ];
+
+  const {
+    filteredData,
+    activeFilters,
+    setFilter,
+    clearFilter,
+    clearAll,
+    filterOptions
+  } = useDatasetFilters<BrandRanking>(topBrands, filterConfigs);
+
   if (isLoading) return <DashboardSkeleton />;
 
   if (isError || !isEngineOk(data)) {
@@ -280,34 +323,26 @@ export default function MarketConcentration() {
     );
   }
 
-  const structure        = data.data?.results?.market_structure || {};
-  const topBrands: BrandRanking[] = structure.brand_rankings   || [];
-  const landscape: CompetitiveSegment[] = structure.competitive_landscape || [];
-  const hhi: number      = data.data?.results?.hhi_score ?? 0;
-  const totalRevenue     = structure.total_market_revenue      ?? 0;
-  const totalUnits       = structure.total_units_sold          ?? 0;
-  const totalBrands      = structure.active_brand_count        ?? 0;
-  const top1Share        = Number(structure.top_1_share        ?? 0);
-  const top3Share        = Number(structure.top_3_share        ?? 0);
-  const top5Share        = Number(structure.top_5_share        ?? 0);
-  const concentrationType: string = structure.concentration_type ?? 'N/A';
-  const totalProducts    = structure.total_products            ?? 0;
-  const top10Share       = topBrands.slice(0, 10).reduce((s: number, b) => s + (b.revenue_share ?? 0), 0);
-  const leader           = topBrands[0] || null;
+  
+
+  const filteredTop10Brands = filteredData.slice(0, 10);
+  const filteredOthersRevenue = filteredData.slice(10).reduce((s: number, b) => s + (b.parent_revenue ?? 0), 0);
+  const filteredOthersShare   = filteredData.slice(10).reduce((s: number, b) => s + (b.revenue_share  ?? 0), 0);
+
   const top10Brands      = topBrands.slice(0, 10);
 
   const othersRevenue = topBrands.slice(10).reduce((s: number, b) => s + (b.parent_revenue ?? 0), 0);
   const othersShare   = topBrands.slice(10).reduce((s: number, b) => s + (b.revenue_share  ?? 0), 0);
   const barData = [
-    ...top10Brands.map((b) => ({
+    ...filteredTop10Brands.map((b) => ({
       ...b,
       brand:     b.brand?.length > 20 ? b.brand.slice(0, 18) + '…' : b.brand,
       fullBrand: b.brand,
     })),
-    ...(othersShare > 0 ? [{
+    ...(filteredOthersShare > 0 ? [{
       rank: 99, brand: 'Others', fullBrand: 'Others (aggregated)',
-      parent_revenue: othersRevenue,
-      revenue_share: parseFloat(othersShare.toFixed(2)),
+      parent_revenue: filteredOthersRevenue,
+      revenue_share: parseFloat(filteredOthersShare.toFixed(2)),
       segment: 'Long Tail',
     }] : []),
   ];
@@ -474,7 +509,7 @@ export default function MarketConcentration() {
     };
   }
 
-  function brandRowEvidence(row: BrandRanking): EvidenceData {
+  function brandRowEvidence(row: BrandRanking, filterContext?: { active_filters: Record<string, any>; filtered_row_count: number; total_row_count: number; }): EvidenceData {
     const confidence = row.product_count > 0 ? 95 : 50;
     
     return {
@@ -483,6 +518,10 @@ export default function MarketConcentration() {
       source_datasets: ['BlackBox Products Dataset'],
       source_columns: ['Brand', 'Parent Level Revenue', 'Parent Level Units Sold', 'Price'],
       source_row_count: row.product_count,
+    active_filters: filterContext?.active_filters,
+    filtered_row_count: filterContext?.filtered_row_count,
+    total_row_count: filterContext?.total_row_count,
+    calculation_scope: filterContext ? 'Filtered' : 'Global',
       formula: 'Brand Revenue = SUM(Parent Level Revenue) for all rows where Brand matches this brand name',
       aggregation_method: 'Summation of revenue across all products belonging to this brand',
       calculation_steps: [
@@ -495,7 +534,7 @@ export default function MarketConcentration() {
         `7. Sum "Parent Level Units Sold" = ${row.units_sold?.toLocaleString() || 0}`,
         `8. Calculate ASP = Revenue / Units = ${formatCurrency(row.asp || 0)}`,
         `9. Rank by revenue descending: Rank #${row.rank}`,
-        `10. Segment classification: ${row.segment}`,
+        `10. Segment classification: ${formatGenericLabel(row.segment)}`,
       ],
       top_records: [{
         brand: row.brand,
@@ -512,24 +551,24 @@ export default function MarketConcentration() {
         medium: 'Strong Competitors — ranks 4–10, between 1–10% share',
         low: 'Long Tail — ranks 11+, typically <1% individual share',
       },
-      classification_reason: `"${row.brand}" classified as "${row.segment}". Rank: #${row.rank}. Revenue share: ${row.revenue_share.toFixed(2)}%. Products: ${row.product_count.toLocaleString()}.`,
+      classification_reason: `"${row.brand}" classified as "${formatGenericLabel(row.segment)}". Rank: #${row.rank}. Revenue share: ${row.revenue_share.toFixed(2)}%. Products: ${row.product_count.toLocaleString()}.`,
       confidence_note: `${confidence}% confidence — based on ${row.product_count.toLocaleString()} product(s) with valid revenue data under this brand.`,
     };
   }
 
   function landscapeEvidence(seg: CompetitiveSegment): EvidenceData {
     return {
-      title: `Competitive Segment: ${seg.segment}`,
+      title: `Competitive Segment: ${formatGenericLabel(seg.segment)}`,
       displayed_value: formatCurrency(seg.combined_revenue),
       source_datasets: ['BlackBox Products Dataset'],
       source_columns: ['Brand', 'Parent Level Revenue'],
       source_row_count: seg.brand_count,
-      formula: `Combined Revenue = SUM(Parent Level Revenue) for all brands in the "${seg.segment}" tier.`,
-      aggregation_method: `Brands are grouped into "${seg.segment}" by revenue share percentile. Combined revenue is the sum of all brands in this tier.`,
+      formula: `Combined Revenue = SUM(Parent Level Revenue) for all brands in the "${formatGenericLabel(seg.segment)}" tier.`,
+      aggregation_method: `Brands are grouped into "${formatGenericLabel(seg.segment)}" by revenue share percentile. Combined revenue is the sum of all brands in this tier.`,
       calculation_steps: [
         `1. Rank all brands by total revenue descending.`,
         `2. Assign segment tier based on rank and revenue share thresholds.`,
-        `3. "${seg.segment}" contains ${seg.brand_count} brand(s).`,
+        `3. "${formatGenericLabel(seg.segment)}" contains ${seg.brand_count} brand(s).`,
         `4. Combined Revenue = ${formatCurrency(seg.combined_revenue)}`,
         `5. Combined Share = ${seg.combined_share.toFixed(1)}%`,
         `6. Top brands: ${seg.top_brands.slice(0, 3).join(', ')}`,
@@ -572,14 +611,14 @@ export default function MarketConcentration() {
     { header: 'Units Sold', cell: (row) => <span className="text-sm">{row.units_sold?.toLocaleString() || 0}</span> },
     { header: 'ASP',        cell: (row) => <span className="text-sm font-medium text-primary">{formatCurrency(row.asp || 0)}</span> },
     { header: 'Products',   cell: (row) => <span className="text-sm">{row.product_count.toLocaleString()}</span> },
-    { header: 'Segment',    cell: (row) => <Badge variant="outline" className={segmentBadgeClass(row.segment)}>{row.segment}</Badge> },
+    { header: 'Segment',    cell: (row) => <Badge variant="outline" className={segmentBadgeClass(row.segment)}>{formatGenericLabel(row.segment)}</Badge> },
   ];
 
   return (
     <div className="pb-16 max-w-[1400px] mx-auto px-6">
 
       {/* Shared evidence modal */}
-      <EvidenceModal
+      <EvidenceDrawer
         isOpen={!!evidence}
         onClose={() => setEvidence(null)}
         evidence={evidence}
@@ -808,13 +847,13 @@ export default function MarketConcentration() {
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mb-8">
           {landscape.map((seg) => (
             <Card
-              key={seg.segment}
+              key={formatGenericLabel(seg.segment)}
               className="bg-card border-border/40 cursor-pointer hover:border-primary/40 transition-colors"
               onClick={() => setEvidence(landscapeEvidence(seg))}
             >
               <CardContent className="p-5">
                 <div className="flex items-center justify-between mb-3">
-                  <Badge variant="outline" className={segmentBadgeClass(seg.segment)}>{seg.segment}</Badge>
+                  <Badge variant="outline" className={segmentBadgeClass(seg.segment)}>{formatGenericLabel(seg.segment)}</Badge>
                   <span className="text-xs text-muted-foreground font-medium">{seg.brand_count} brands</span>
                 </div>
                 <p className="text-xl font-bold mb-1">{formatCurrency(seg.combined_revenue)}</p>
@@ -829,13 +868,25 @@ export default function MarketConcentration() {
         </div>
 
         {/* Brand Rankings table — rows clickable, no Evidence column */}
+        
+        <FilterBar 
+          configs={filterConfigs}
+          activeFilters={activeFilters}
+          setFilter={setFilter}
+          clearFilter={clearFilter}
+          clearAll={clearAll}
+          filterOptions={filterOptions}
+          totalRecords={topBrands.length}
+          filteredRecords={filteredData.length}
+        />
         <DataTable
+
           title="Brand Revenue Ranking"
           description="Sorted by Parent Level Revenue. Click any row for full calculation evidence."
           columns={columns}
-          data={topBrands}
+          data={filteredData}
           keyExtractor={(r) => r.brand}
-          onRowClick={(row) => setEvidence(brandRowEvidence(row))}
+          onRowClick={(row) => setEvidence(brandRowEvidence(row, { active_filters: activeFilters, filtered_row_count: filteredData.length, total_row_count: topBrands.length }))}
         />
       </PageSection>
 

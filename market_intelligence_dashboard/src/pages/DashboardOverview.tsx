@@ -16,7 +16,7 @@ import { isEngineOk, getEngineErrorMessage } from '../utils/analysisStatus';
 import { DashboardSkeleton } from '../components/ui/Skeletons';
 import { RecommendedActions } from '../components/intelligence/RecommendedActions';
 import { MetricExplainer } from '../components/ui/MetricExplainer';
-import { EvidenceModal, type EvidenceData } from '../components/ui/EvidenceModal';
+import { EvidenceDrawer, type EvidenceData } from '../components/ui/EvidenceDrawer';
 
 // Unified System Components
 import { PageHeader } from '../components/layout/PageHeader';
@@ -25,6 +25,8 @@ import { KPICard } from '../components/ui/KPICard';
 import { DataCoverageBanner } from '../components/ui/DataCoverageBanner';
 import { TrendComparison } from '../components/intelligence/TrendComparison';
 import { RevenueAtRisk } from '../components/intelligence/RevenueAtRisk';
+import { formatGenericLabel } from '../utils/formatters';
+
 
 function InsightCard({ insight, onOpenEvidence }: { insight: any, onOpenEvidence: (evidence: any) => void }) {
   return (
@@ -169,7 +171,7 @@ export default function DashboardOverview() {
 
   return (
     <>
-      <EvidenceModal
+      <EvidenceDrawer
         isOpen={!!evidence}
         onClose={() => setEvidence(null)}
         evidence={evidence}

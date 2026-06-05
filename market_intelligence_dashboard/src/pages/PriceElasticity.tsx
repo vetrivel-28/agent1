@@ -21,6 +21,8 @@ import { PageHeader } from '../components/layout/PageHeader';
 import { PageSection } from '../components/layout/PageSection';
 import { ChartContainer } from '../components/ui/ChartContainer';
 import { DashboardSkeleton } from '../components/ui/Skeletons';
+import { useDatasetFilters, type FilterConfig } from '../hooks/useDatasetFilters';
+import { FilterBar } from '../components/filters/FilterBar';
 
 // --- Types ---
 type Evidence = {
@@ -427,6 +429,22 @@ export default function PriceElasticity() {
     if (!results || Object.keys(results).length === 0) return null;
     return results as PricingIntelligenceData;
   }, [engineResponse]);
+
+  const filterConfigs: FilterConfig<BrandPosition>[] = [
+    { id: 'range', label: 'Price Band', type: 'select', getValue: r => r.price_range },
+    { id: 'brand', label: 'Brand', type: 'search', getValue: r => r.leading_brand },
+    { id: 'revenue_band', label: 'Revenue Band', type: 'select', getValue: r => r.total_parent_revenue > 1000000 ? 'High' : 'Normal' },
+    { id: 'category', label: 'Category Scope', type: 'select', getValue: r => 'Filtered BlackBox' },
+  ];
+
+  const {
+    filteredData: filteredBrandPositions,
+    activeFilters,
+    setFilter,
+    clearFilter,
+    clearAll,
+    filterOptions
+  } = useDatasetFilters<BrandPosition>(memoized?.brand_position_by_price_range || [], filterConfigs);
 
   if (isLoading) return <DashboardSkeleton />;
 
@@ -845,7 +863,7 @@ export default function PriceElasticity() {
         <CardContent className="p-0">
           <DataTable 
             columns={brandPositionColumns} 
-            data={pi.brand_position_by_price_range} 
+            data={filteredBrandPositions} 
             pageSize={10} 
             onRowClick={(row) => setModalState({ type: 'brand_details', title: `Brand Breakdown: ${row.price_range}`, tier: row.tier, brand_breakdown: row.brand_breakdown, evidence: row.evidence })}
           />

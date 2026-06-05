@@ -93,10 +93,42 @@ export function AnalysisProgressModal({
     };
   }, [status]);
 
-  // Improve Error States as requested
+  // Improve Error States with detailed error type detection
   const parseError = (err: string | undefined) => {
-    if (!err) return { title: "Analysis Failed", reason: "Unable to complete analysis. Please try again.", fix: "Check your network connection or dataset formatting." };
+    if (!err) return { 
+      title: "Analysis Failed", 
+      reason: "Unable to complete analysis. Please try again.", 
+      fix: "Check your network connection or dataset formatting." 
+    };
     
+    // CORS or network error
+    if (err.includes("Backend connection failed") || err.includes("CORS") || err.includes("not reachable")) {
+      return {
+        title: "Backend Connection Failed",
+        reason: "Frontend could not connect to the API server. This is not a CSV issue.",
+        fix: "1. Ensure backend is running: python -m uvicorn app.main:app --reload\n2. Check backend is accessible at http://localhost:8000\n3. Verify CORS is configured to allow localhost:5173"
+      };
+    }
+    
+    // Schema validation error
+    if (err.includes("CSV schema validation failed") || err.includes("Missing required column")) {
+      return {
+        title: "CSV Schema Validation Failed",
+        reason: err,
+        fix: "Review the missing columns listed above. Ensure your CSV headers exactly match the expected format for that dataset type (BlackBox, Magnet, or Classification)."
+      };
+    }
+    
+    // Dataset not loaded on backend
+    if (err.includes("not loaded on backend") || err.includes("dataset not loaded")) {
+      return {
+        title: "Backend State Issue",
+        reason: "Dataset was uploaded but backend reports it's not loaded. This may be a backend cache or state issue.",
+        fix: "1. Restart the backend server\n2. Clear backend cache\n3. Try uploading again"
+      };
+    }
+    
+    // Missing datasets
     if (err.includes("missing") || err.toLowerCase().includes("not uploaded")) {
       return {
         title: "Missing Required Datasets",
@@ -105,6 +137,7 @@ export function AnalysisProgressModal({
       };
     }
     
+    // Insufficient data diversity
     if (err.toLowerCase().includes("diversity") || err.toLowerCase().includes("insufficient")) {
        return {
         title: "Insufficient Data Diversity",
@@ -113,10 +146,11 @@ export function AnalysisProgressModal({
       };
     }
     
+    // Generic fallback
     return {
       title: "Analysis Processing Error",
       reason: err,
-      fix: "Verify your CSV schemas exactly match the required formats."
+      fix: "Check backend logs for detailed error information. Verify CSV schemas match expected formats."
     };
   };
 
@@ -234,11 +268,11 @@ export function AnalysisProgressModal({
                 <div className="bg-danger/5 border border-danger/10 rounded-lg p-4 w-full text-left mb-8 space-y-3">
                   <div>
                     <p className="text-xs font-bold uppercase tracking-wider text-danger/70 mb-1">Reason</p>
-                    <p className="text-sm font-medium text-foreground">{parsedError.reason}</p>
+                    <p className="text-sm font-medium text-foreground whitespace-pre-line">{parsedError.reason}</p>
                   </div>
                   <div>
                     <p className="text-xs font-bold uppercase tracking-wider text-primary/70 mb-1">Suggested Action</p>
-                    <p className="text-sm font-medium text-foreground">{parsedError.fix}</p>
+                    <p className="text-sm font-medium text-foreground whitespace-pre-line">{parsedError.fix}</p>
                   </div>
                 </div>
 

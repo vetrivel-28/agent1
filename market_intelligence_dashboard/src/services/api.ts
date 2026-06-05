@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 export const apiClient = axios.create({
-  baseURL: 'http://127.0.0.1:8000/api/v1',
+  baseURL: 'http://localhost:8000/api/v1',
   headers: {
     'Content-Type': 'application/json',
   },
@@ -18,6 +18,16 @@ export const api = {
     return response.data;
   },
   
+  detectCategories: async () => {
+    const response = await apiClient.get('/detect-categories');
+    return response.data;
+  },
+
+  setCategory: async (categories: string[]) => {
+    const response = await apiClient.post('/set-category', { categories });
+    return response.data;
+  },
+
   uploadDatasets: async (formData: FormData) => {
     const response = await apiClient.post('/upload-datasets', formData, {
       headers: {

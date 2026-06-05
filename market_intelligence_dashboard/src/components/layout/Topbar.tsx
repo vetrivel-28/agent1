@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../../services/api';
 import { Badge } from '../ui/Badge';
 import { Server, Database, AlertCircle, CheckCircle2 } from 'lucide-react';
@@ -12,6 +13,15 @@ export function Topbar() {
     queryFn: api.getHealth,
     refetchInterval: 30000, // Check every 30s
   });
+
+  const { data: statusData } = useQuery({
+    queryKey: ['status'],
+    queryFn: api.getStatus,
+    refetchInterval: 10000,
+  });
+
+  const navigate = useNavigate();
+
 
   const healthData = health?.data || {};
   const isHealthy = health?.success === true && healthData?.status === 'ok';
@@ -40,6 +50,28 @@ export function Topbar() {
           </Badge>
         ) : (
           <>
+            {statusData?.data?.metadata?.blackbox?.selected_categories?.length > 0 && (
+              <div className="flex items-center gap-3 mr-4 border-r pr-4 border-border">
+                <div className="flex flex-col text-right">
+                  <span className="text-xs text-muted-foreground uppercase tracking-widest font-bold">Active Category</span>
+                  <span className="text-sm font-bold text-foreground">
+                    {statusData.data.metadata.blackbox.selected_categories.length > 1 
+                      ? `${statusData.data.metadata.blackbox.selected_categories.length} Selected`
+                      : statusData.data.metadata.blackbox.selected_categories[0]}
+                  </span>
+                </div>
+                <div className="flex flex-col text-right">
+                  <span className="text-[10px] text-muted-foreground">Products</span>
+                  <span className="text-[11px] font-mono text-emerald-500">
+                    {statusData.data.metadata.blackbox.filtered_rows} of {statusData.data.metadata.blackbox.original_rows}
+                  </span>
+                </div>
+                <Button variant="outline" size="sm" className="h-7 text-xs ml-2" onClick={() => navigate('/upload')}>
+                  Change
+                </Button>
+              </div>
+            )}
+            
             <div className="flex items-center gap-2 text-sm text-muted-foreground mr-4">
               <Database className="w-4 h-4" />
               <span>{loadedCount} Datasets Loaded</span>

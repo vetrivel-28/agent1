@@ -18,9 +18,13 @@ import { motion } from 'framer-motion';
 // Unified Layouts
 import { PageHeader } from '../components/layout/PageHeader';
 import { PageSection } from '../components/layout/PageSection';
-import { EvidenceModal, type EvidenceData } from '../components/ui/EvidenceModal';
+import { EvidenceDrawer, type EvidenceData } from '../components/ui/EvidenceDrawer';
 import { ChartContainer } from '../components/ui/ChartContainer';
 import { DashboardSkeleton } from '../components/ui/Skeletons';
+import { formatGenericLabel } from '../utils/formatters';
+import { useDatasetFilters, type FilterConfig } from '../hooks/useDatasetFilters';
+import { FilterBar } from '../components/filters/FilterBar';
+
 
 type WhitespaceKeyword = {
   keyword?: string;
@@ -170,7 +174,7 @@ function SegmentRevenueTip({ active, payload }: { active?: boolean; payload?: Ar
   const d = payload[0].payload;
   return (
     <div className="bg-card border border-border rounded-lg p-3 shadow-lg text-sm space-y-1">
-      <p className="font-semibold">Segment: {d.segment}</p>
+      <p className="font-semibold">Segment: {formatGenericLabel(d.segment)}</p>
       <p className="text-muted-foreground">Revenue Opportunity: <span className="text-foreground font-medium">{formatCurrency(Math.round(d.opportunity_revenue))}</span></p>
       <p className="text-muted-foreground">Unique Keywords: {d.keyword_count}</p>
       <p className="text-muted-foreground">Score: {d.avg_opportunity_score}/100</p>
@@ -202,6 +206,42 @@ export default function WhitespaceOpportunities() {
     placeholderData: (prev) => prev,
   });
 
+  // Safe data extraction - handles undefined gracefully
+  const r = whitespaceData?.data?.results || {};
+  const wsKeywords: WhitespaceKeyword[] = Array.isArray(r.top_whitespace_keywords) 
+    ? r.top_whitespace_keywords 
+    : [];
+  const distribution = r.opportunity_distribution || {};
+  const insights: { category: string; text: string }[] = Array.isArray(r.insights) 
+    ? r.insights 
+    : [];
+  const revenueSignal = r.revenue_opportunity_pool ?? 0;
+  const totalKeywords = r.total_keywords_analyzed ?? 0;
+  const extremeCount = distribution.extreme_opportunity ?? 0;
+  const highCount = distribution.high_opportunity ?? 0;
+  const entrySegments: EntrySegment[] = Array.isArray(r.entry_segments)
+    ? r.entry_segments.map((s: EntrySegment) => ({
+        ...s,
+        opportunity_revenue: s.opportunity_revenue ?? s.revenue_represented ?? 0,
+      }))
+    : [];
+
+  const filterConfigs: FilterConfig<EntrySegment>[] = [
+    { id: 'tier', label: 'Opportunity Tier', type: 'select', getValue: r => (r as any).opportunity_tier || (r.avg_opportunity_score > 80 ? 'High' : 'Medium') },
+    { id: 'dataset', label: 'Source Dataset', type: 'select', getValue: r => 'BlackBox / Magnet' },
+    { id: 'action', label: 'Suggested Action', type: 'select', getValue: r => r.recommended_action },
+    { id: 'search', label: 'Search Keyword/Segment', type: 'search', getValue: r => r.segment },
+  ];
+
+  const {
+    filteredData: filteredEntrySegments,
+    activeFilters,
+    setFilter,
+    clearFilter,
+    clearAll,
+    filterOptions
+  } = useDatasetFilters<EntrySegment>(entrySegments, filterConfigs);
+
   if (isLoading) return <DashboardSkeleton />;
 
   if (isError || !isEngineOk(whitespaceData)) {
@@ -216,19 +256,23 @@ export default function WhitespaceOpportunities() {
     );
   }
 
-  const r = whitespaceData.data?.results || {};
-  const wsKeywords: WhitespaceKeyword[] = r.top_whitespace_keywords || [];
-  const distribution = r.opportunity_distribution || {};
-  const insights: { category: string; text: string }[] = r.insights || [];
-  const revenueSignal = r.revenue_opportunity_pool ?? 0;
-  const totalKeywords = r.total_keywords_analyzed ?? 0;
-  const extremeCount = distribution.extreme_opportunity ?? 0;
-  const highCount = distribution.high_opportunity ?? 0;
-  const entrySegments: EntrySegment[] = (r.entry_segments || []).map((s: EntrySegment) => ({
-    ...s,
-    opportunity_revenue: s.opportunity_revenue ?? s.revenue_represented ?? 0,
-  }));
-  const topEntrySegments: TopEntrySegment[] = r.top_entry_segments?.length
+
+
+
+
+  const topEntrySegments: TopEntrySegment[] = Object.keys(activeFilters).length > 0
+    ? filteredEntrySegments.map((s) => ({
+        segment: s.segment,
+        revenue_opportunity: s.opportunity_revenue,
+        keyword_count: s.keyword_count,
+        primary_driver: s.primary_driver ?? '—',
+        competitive_intensity: s.competitive_intensity ?? '—',
+        recommended_action: s.recommended_action ?? 'Evaluate',
+        avg_opportunity_score: s.avg_opportunity_score,
+        recommended_priority: s.recommended_priority ?? 'Evaluate',
+        rank: s.rank,
+      }))
+    : r.top_entry_segments?.length
     ? r.top_entry_segments
     : entrySegments.map((s) => ({
         segment: s.segment,
@@ -410,67 +454,75 @@ export default function WhitespaceOpportunities() {
     };
   };
 
-  const createSegmentRowEvidence = (segment: EntrySegment): EvidenceData => {
+  const createSegmentRowEvidence = (row: EntrySegment, filterContext?: any): EvidenceData => {
     return {
-      title: `Segment: ${segment.segment}`,
-      displayed_value: `Revenue: ${formatNumber(Math.round(segment.opportunity_revenue))}`,
-      source_datasets: [titleDensityReliable ? 'Magnet + BlackBox' : 'Magnet'],
-      source_columns: ['keyword', 'keyword_sales', 'opportunity_label', 'segment'],
-      source_row_count: segment.keyword_count,
+      title: `Segment: ${row.segment}`,
+      displayed_value: formatCurrency(row.opportunity_revenue),
+      source_datasets: ['Magnet', 'BlackBox'],
+      source_columns: ['keyword', 'keyword_sales', 'segment'],
+      source_row_count: row.keyword_count,
+      active_filters: filterContext?.active_filters,
+      filtered_row_count: filterContext?.filtered_row_count,
+      total_row_count: filterContext?.total_row_count,
+      calculation_scope: filterContext ? 'Filtered' : 'Global',
       formula: 'Opportunity Revenue = Tier-weighted sum of keyword sales in this segment',
       aggregation_method: 'Sum of tier-weighted keyword sales',
       calculation_steps: [
-        `Filter keywords assigned to segment "${segment.segment}"`,
+        `Filter keywords assigned to segment "${formatGenericLabel(row.segment)}"`,
         'Apply tier weighting (100% extreme, partial high)',
         'Sum weighted keyword_sales values',
         'Calculate average opportunity score across segment keywords'
       ],
       top_records: [{
-        segment: segment.segment,
-        opportunity_revenue: Math.round(segment.opportunity_revenue),
-        keyword_count: segment.keyword_count,
-        avg_opportunity_score: segment.avg_opportunity_score.toFixed(1),
-        primary_driver: segment.primary_driver ?? '—',
-        competitive_intensity: segment.competitive_intensity ?? '—',
-        recommended_priority: segment.recommended_priority ?? '—'
+        segment: row.segment,
+        opportunity_revenue: Math.round(row.opportunity_revenue),
+        keyword_count: row.keyword_count,
+        avg_opportunity_score: row.avg_opportunity_score.toFixed(1),
+        primary_driver: row.primary_driver ?? '—',
+        competitive_intensity: row.competitive_intensity ?? '—',
+        recommended_priority: row.recommended_priority ?? '—'
       }],
       thresholds: {
         high: 'Enter First (Top revenue + favorable conditions)',
         medium: 'Evaluate (Moderate opportunity)',
         low: 'Monitor (Lower priority)'
       },
-      classification_reason: `Recommended priority: ${segment.recommended_priority ?? 'Evaluate'}. ${segment.primary_driver ? `Primary driver: ${segment.primary_driver}.` : ''} ${segment.competitive_intensity ? `Competition: ${segment.competitive_intensity}.` : ''}`,
-      confidence_note: `This segment contains ${segment.keyword_count.toLocaleString()} opportunity keywords with mean percentile score ${segment.avg_opportunity_score.toFixed(1)}/100`,
+      classification_reason: `Recommended priority: ${row.recommended_priority ?? 'Evaluate'}. ${row.primary_driver ? `Primary driver: ${row.primary_driver}.` : ''} ${row.competitive_intensity ? `Competition: ${row.competitive_intensity}.` : ''}`,
+      confidence_note: `This segment contains ${row.keyword_count.toLocaleString()} opportunity keywords with mean percentile score ${row.avg_opportunity_score.toFixed(1)}/100`,
       llm_used: false
     };
   };
 
-  const createTopEntrySegmentEvidence = (segment: TopEntrySegment): EvidenceData => {
+  const createTopEntrySegmentEvidence = (row: TopEntrySegment, filterContext?: any): EvidenceData => {
     return {
-      title: `Top Entry Segment: ${segment.segment}`,
-      displayed_value: `Revenue: ${formatNumber(Math.round(segment.revenue_opportunity))}`,
-      source_datasets: [titleDensityReliable ? 'Magnet + BlackBox' : 'Magnet'],
-      source_columns: ['keyword', 'keyword_sales', 'opportunity_label', 'segment'],
-      source_row_count: segment.keyword_count,
+      title: `Top Entry Segment: ${row.segment}`,
+      displayed_value: formatCurrency(row.revenue_opportunity),
+      source_datasets: ['Magnet', 'BlackBox'],
+      source_columns: ['keyword', 'keyword_sales', 'segment', 'search_volume', 'title_density', 'click_share'],
+      source_row_count: row.keyword_count,
+      active_filters: filterContext?.active_filters,
+      filtered_row_count: filterContext?.filtered_row_count,
+      total_row_count: filterContext?.total_row_count,
+      calculation_scope: filterContext ? 'Filtered' : 'Global',
       formula: 'Opportunity Revenue = Tier-weighted sum of keyword sales + actionable recommendation',
       aggregation_method: 'Sum of tier-weighted keyword sales with strategic overlay',
       calculation_steps: [
-        `Filter keywords in segment "${segment.segment}"`,
+        `Filter keywords in segment "${formatGenericLabel(row.segment)}"`,
         'Calculate tier-weighted revenue opportunity',
         'Assess competitive intensity',
         'Determine recommended action based on opportunity + competition'
       ],
       top_records: [{
-        segment: segment.segment,
-        revenue_opportunity: Math.round(segment.revenue_opportunity),
-        keyword_count: segment.keyword_count,
-        avg_opportunity_score: segment.avg_opportunity_score.toFixed(1),
-        primary_driver: segment.primary_driver,
-        competitive_intensity: segment.competitive_intensity,
-        recommended_action: segment.recommended_action
+        segment: row.segment,
+        revenue_opportunity: Math.round(row.revenue_opportunity),
+        keyword_count: row.keyword_count,
+        avg_opportunity_score: row.avg_opportunity_score.toFixed(1),
+        primary_driver: row.primary_driver,
+        competitive_intensity: row.competitive_intensity,
+        recommended_action: row.recommended_action
       }],
-      classification_reason: `${segment.recommended_action}. Primary driver: ${segment.primary_driver}. Competitive intensity: ${segment.competitive_intensity}`,
-      confidence_note: `Rank ${segment.rank} entry segment with ${segment.keyword_count.toLocaleString()} keywords, average score ${segment.avg_opportunity_score.toFixed(1)}/100`,
+      classification_reason: `${row.recommended_action}. Primary driver: ${row.primary_driver}. Competitive intensity: ${row.competitive_intensity}`,
+      confidence_note: `Rank ${row.rank} entry segment with ${row.keyword_count.toLocaleString()} keywords, average score ${row.avg_opportunity_score.toFixed(1)}/100`,
       llm_used: false
     };
   };
@@ -581,7 +633,7 @@ export default function WhitespaceOpportunities() {
   };
 
   const topEntryColumns: Column<TopEntrySegment>[] = [
-    { header: 'Segment', accessorKey: 'segment', cell: (row) => <span className="font-semibold text-sm">{row.segment}</span> },
+    { header: 'Segment', accessorKey: 'segment', cell: (row) => <span className="font-semibold text-sm">{formatGenericLabel(row.segment)}</span> },
     {
       header: 'Revenue Opportunity',
       accessorKey: 'revenue_opportunity',
@@ -615,7 +667,7 @@ export default function WhitespaceOpportunities() {
 
   const segmentTableColumns: Column<EntrySegment>[] = [
     { header: 'Rank', accessorKey: 'rank', cell: (row) => <span className="font-mono font-bold text-sm">{row.rank}</span> },
-    { header: 'Segment', accessorKey: 'segment', cell: (row) => <span className="font-semibold text-sm">{row.segment}</span> },
+    { header: 'Segment', accessorKey: 'segment', cell: (row) => <span className="font-semibold text-sm">{formatGenericLabel(row.segment)}</span> },
     {
       header: 'Opportunity Revenue',
       accessorKey: 'opportunity_revenue',
@@ -807,15 +859,25 @@ export default function WhitespaceOpportunities() {
       {entrySegments.length > 0 && (
         <PageSection title="3. Segment Revenue Analysis">
           <div className="space-y-6">
+            <FilterBar 
+              configs={filterConfigs}
+              activeFilters={activeFilters}
+              setFilter={setFilter}
+              clearFilter={clearFilter}
+              clearAll={clearAll}
+              filterOptions={filterOptions}
+              totalRecords={entrySegments.length}
+              filteredRecords={filteredEntrySegments.length}
+            />
             <ChartContainer
-              title="Revenue Opportunity by Segment"
+              title="Revenue Opportunity by Keyword Theme"
               yAxisLabel="Addressable Revenue"
-              xAxisLabel="Product Segment"
-              businessExplanation="Visualizes addressable revenue by product theme — sorted by revenue opportunity descending."
+              xAxisLabel="Keyword Theme"
+              businessExplanation="Visualizes addressable revenue by keyword theme — sorted by revenue opportunity descending."
             >
               <div className="h-[360px]">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={entrySegments.slice(0, 12)} margin={{ top: 12, right: 16, left: 0, bottom: 56 }}>
+                <BarChart data={filteredEntrySegments.slice(0, 12)} margin={{ top: 12, right: 16, left: 0, bottom: 56 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
                   <XAxis dataKey="segment" stroke="hsl(var(--muted-foreground))" fontSize={10} angle={-32} textAnchor="end" height={80} interval={0} />
                   <YAxis stroke="hsl(var(--muted-foreground))" fontSize={11} tickFormatter={(v) => formatNumber(v)} axisLine={false} tickLine={false} />
@@ -846,9 +908,9 @@ export default function WhitespaceOpportunities() {
                 <CardContent>
               <DataTable 
                 columns={segmentTableColumns} 
-                data={entrySegments} 
+                data={filteredEntrySegments} 
                 pageSize={12}
-                onRowClick={(row) => setSelectedEvidence(createSegmentRowEvidence(row))}
+                onRowClick={(row) => setSelectedEvidence(createSegmentRowEvidence(row, { active_filters: activeFilters, filtered_row_count: filteredEntrySegments.length, total_row_count: entrySegments.length }))}
               />
                 </CardContent>
               </Card>
@@ -863,7 +925,7 @@ export default function WhitespaceOpportunities() {
                 columns={topEntryColumns} 
                 data={topEntrySegments} 
                 pageSize={10}
-                onRowClick={(row) => setSelectedEvidence(createTopEntrySegmentEvidence(row))}
+                onRowClick={(row) => setSelectedEvidence(createTopEntrySegmentEvidence(row, { active_filters: activeFilters, filtered_row_count: filteredEntrySegments.length, total_row_count: entrySegments.length }))}
               />
                 </CardContent>
               </Card>
@@ -970,7 +1032,7 @@ export default function WhitespaceOpportunities() {
         </div>
       )}
 
-      <EvidenceModal
+      <EvidenceDrawer
         isOpen={!!selectedEvidence}
         onClose={() => setSelectedEvidence(null)}
         evidence={selectedEvidence}

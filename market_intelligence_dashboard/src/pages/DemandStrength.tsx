@@ -14,7 +14,11 @@ import { PageHeader } from '../components/layout/PageHeader';
 import { PageSection } from '../components/layout/PageSection';
 import { KPICard } from '../components/ui/KPICard';
 import { DashboardSkeleton } from '../components/ui/Skeletons';
-import { EvidenceModal, type EvidenceData } from '../components/ui/EvidenceModal';
+import { EvidenceDrawer, type EvidenceData } from '../components/ui/EvidenceDrawer';
+import { formatGenericLabel } from '../utils/formatters';
+import { useDatasetFilters, type FilterConfig } from '../hooks/useDatasetFilters';
+import { FilterBar } from '../components/filters/FilterBar';
+
 
 type RawEvidence = {
   source_dataset: string;
@@ -229,7 +233,15 @@ function diagnosticsEvidence(diag: Diagnostics): EvidenceData {
   };
 }
 
-function segmentEvidence(row: SegmentRow, diag: Diagnostics): EvidenceData {
+function segmentEvidence(
+  row: SegmentRow,
+  diag: Diagnostics,
+  filterContext?: {
+    active_filters: Record<string, any>;
+    filtered_row_count: number;
+    total_row_count: number;
+  }
+): EvidenceData {
   const rec = row.evidence;
   const sv = (rec?.source_values || {}) as Record<string, unknown>;
   const gapLabel = row.revenue_gap_label || (row.demand_revenue_gap > 0 ? 'Revenue Gap' : 'Revenue Premium');
@@ -241,14 +253,18 @@ function segmentEvidence(row: SegmentRow, diag: Diagnostics): EvidenceData {
   }));
 
   return {
-    title: `Theme: ${row.segment}`,
+    title: `Theme: ${formatGenericLabel(row.segment)}`,
     displayed_value: `Score ${Number(row.opportunity_score).toFixed(1)} (Reliable: ${Number(row.reliable_opportunity_score ?? 0).toFixed(1)})`,
     source_datasets: [rec?.source_dataset || 'Magnet'],
     source_columns: rec?.source_columns || [],
     source_row_count: row.keyword_count ?? 0,
+    active_filters: filterContext?.active_filters,
+    filtered_row_count: filterContext?.filtered_row_count,
+    total_row_count: filterContext?.total_row_count,
+    calculation_scope: filterContext ? 'Filtered' : 'Global',
     formula: rec?.formula || 'Opportunity Score = weighted demand, monetization, competition, gap',
     calculation_steps: rec?.calculation_steps ?? [],
-    business_summary: `"${row.segment}" — ${row.recommendation}`,
+    business_summary: `"${formatGenericLabel(row.segment)}" — ${row.recommendation}`,
     business_meaning: `Demand ${Number(row.demand_share).toFixed(1)}% vs revenue ${Number(row.revenue_share).toFixed(1)}%. ${gapLabel}: ${Math.abs(Number(row.demand_revenue_gap)).toFixed(1)} pts.`,
     recommendation: row.recommendation,
     suggested_action:
@@ -288,6 +304,39 @@ export default function DemandStrength() {
 
   const [evidence, setEvidence] = useState<EvidenceData | null>(null);
 
+  // Safe data extraction - runs unconditionally, handles undefined gracefully
+  const results = data?.data?.results || {};
+  const largestDemand = results.largest_demand_segment as MetricWithEvidence | undefined;
+  const recommendedEntry = results.recommended_entry as MetricWithEvidence | undefined;
+  const undervalued = results.most_undervalued_theme as MetricWithEvidence | undefined;
+  const monetized = results.best_monetized_theme as MetricWithEvidence | undefined;
+  const diagnostics = (results.classification_diagnostics || {}) as Diagnostics;
+  const sessionId = (results as { dataset_session_id?: string }).dataset_session_id
+    || diagnostics.dataset_session_id;
+
+  const db: SegmentRow[] = Array.isArray(results.demand_opportunity_database) 
+    ? results.demand_opportunity_database 
+    : [];
+
+  const filterConfigs: FilterConfig<SegmentRow>[] = [
+    { id: 'theme', label: 'Theme', type: 'search', getValue: r => r.segment },
+    { id: 'classification', label: 'Classification', type: 'select', getValue: r => r.classification_source || 'Unknown' },
+    { id: 'recommendation', label: 'Recommendation', type: 'select', getValue: r => r.recommendation },
+    { id: 'demandShare', label: 'Demand Share %', type: 'range', getValue: r => r.demand_share },
+    { id: 'revenueShare', label: 'Revenue Share %', type: 'range', getValue: r => r.revenue_share },
+    { id: 'oppScore', label: 'Opportunity Score', type: 'range', getValue: r => r.opportunity_score },
+    { id: 'competition', label: 'Competition Index', type: 'range', getValue: r => r.competition_index },
+  ];
+
+  const {
+    filteredData,
+    activeFilters,
+    setFilter,
+    clearFilter,
+    clearAll,
+    filterOptions
+  } = useDatasetFilters<SegmentRow>(db, filterConfigs);
+
   if (isLoading) return <DashboardSkeleton />;
 
   if (isError || !data || !isEngineOk(data)) {
@@ -306,16 +355,7 @@ export default function DemandStrength() {
     );
   }
 
-  const results = data.data?.results || {};
-  const largestDemand = results.largest_demand_segment as MetricWithEvidence | undefined;
-  const recommendedEntry = results.recommended_entry as MetricWithEvidence | undefined;
-  const undervalued = results.most_undervalued_theme as MetricWithEvidence | undefined;
-  const monetized = results.best_monetized_theme as MetricWithEvidence | undefined;
-  const diagnostics = (results.classification_diagnostics || {}) as Diagnostics;
-  const sessionId = (results as { dataset_session_id?: string }).dataset_session_id
-    || diagnostics.dataset_session_id;
-
-  const db: SegmentRow[] = results.demand_opportunity_database || [];
+  
 
   const showQualityPanel =
     diagnostics.show_warning ||
@@ -327,7 +367,7 @@ export default function DemandStrength() {
       header: 'Theme',
       cell: (r) => (
         <span className="font-semibold text-foreground/90">
-          {r.segment}
+          {formatGenericLabel(r.segment)}
           {r.row_confidence != null && r.row_confidence < 50 && (
             <AlertTriangle className="inline w-3 h-3 ml-1 text-warning" />
           )}
@@ -387,7 +427,7 @@ export default function DemandStrength() {
   return (
     <div className="pb-16 max-w-[1400px] mx-auto px-6">
 
-      <EvidenceModal
+      <EvidenceDrawer
         isOpen={!!evidence}
         onClose={() => setEvidence(null)}
         evidence={evidence}
@@ -483,6 +523,7 @@ export default function DemandStrength() {
             implication={largestDemand?.subtitle || largestDemand?.business_implication || 'Upload keyword data'}
             confidence={largestDemand?.confidence}
             icon={Target}
+            scope="Global"
             onClick={() => setEvidence(rawToEvidence('Largest Demand Segment', largestDemand?.evidence, {
               displayed_value: largestDemand?.name || '—',
               business_summary: largestDemand?.business_implication,
@@ -506,6 +547,7 @@ export default function DemandStrength() {
             implication={monetized?.subtitle || monetized?.business_implication || 'Requires Keyword Sales column'}
             confidence={monetized?.confidence}
             icon={TrendingUp}
+            scope="Global"
             onClick={() => monetized && setEvidence(rawToEvidence('Highest Efficiency', monetized.evidence, {
               displayed_value: monetized.name || '—',
               business_summary: monetized.business_implication,
@@ -525,6 +567,7 @@ export default function DemandStrength() {
             implication={undervaluedImplication || ''}
             confidence={undervalued?.confidence}
             icon={TrendingDown}
+            scope="Global"
             onClick={() => setEvidence(rawToEvidence('Undervalued Theme', undervalued?.evidence, {
               displayed_value: undervalued?.empty_state ? 'None detected' : (undervalued?.name || '—'),
               business_summary: undervalued?.business_implication,
@@ -546,6 +589,7 @@ export default function DemandStrength() {
             implication={recommendedEntry?.subtitle || recommendedEntry?.business_implication || ''}
             confidence={recommendedEntry?.confidence}
             icon={Rocket}
+            scope="Global"
             onClick={() => recommendedEntry && setEvidence(rawToEvidence('Best Entry Opportunity', recommendedEntry.evidence, {
               displayed_value: recommendedEntry.name || '—',
               business_summary: recommendedEntry.business_implication,
@@ -576,6 +620,16 @@ export default function DemandStrength() {
       </PageSection>
 
       <PageSection title="Opportunity Database">
+        <FilterBar 
+          configs={filterConfigs}
+          activeFilters={activeFilters}
+          setFilter={setFilter}
+          clearFilter={clearFilter}
+          clearAll={clearAll}
+          filterOptions={filterOptions}
+          totalRecords={db.length}
+          filteredRecords={filteredData.length}
+        />
         {db.length === 0 ? (
           <Card className="border-border/50">
             <CardContent className="p-6 text-center text-muted-foreground text-sm">
@@ -584,10 +638,14 @@ export default function DemandStrength() {
           </Card>
         ) : (
           <DataTable
-            data={db}
+            data={filteredData}
             columns={columns}
             keyExtractor={(r) => r.segment}
-            onRowClick={(row) => setEvidence(segmentEvidence(row, diagnostics))}
+            onRowClick={(row) => setEvidence(segmentEvidence(row, diagnostics, {
+              active_filters: activeFilters,
+              filtered_row_count: filteredData.length,
+              total_row_count: db.length
+            }))}
           />
         )}
         {diagnostics.confidence_level === 'Low' && (

@@ -148,6 +148,68 @@ def get_status():
 # Dataset Upload
 # =========================================================================
 
+
+@router.get(
+    "/detect-categories",
+    summary="Detect BlackBox categories",
+    description="Returns a list of unique categories found in the uploaded BlackBox dataset.",
+)
+def detect_categories():
+    try:
+        logger.info("Detecting categories from uploaded BlackBox dataset")
+        
+        # Check if BlackBox is loaded
+        if not registry.is_blackbox_loaded():
+            logger.warning("Detect-categories called but BlackBox dataset not loaded")
+            return format_response({
+                "status": "error",
+                "message": "BlackBox dataset not loaded. Please upload a BlackBox CSV file first.",
+                "error_type": "dataset_not_loaded"
+            })
+        
+        # Get detected categories
+        res = registry.get_detected_categories()
+        logger.info(f"Categories detected: {res.get('has_categories', False)}, count: {len(res.get('categories', []))}")
+        
+        if not res.get('has_categories', False):
+            logger.info("No categories found in dataset - single category or no category column")
+        
+        return format_response(res)
+        
+    except KeyError as e:
+        logger.error(f"Schema error detecting categories - missing column: {str(e)}", exc_info=True)
+        return format_response({
+            "status": "error",
+            "message": f"BlackBox schema error: missing required column '{str(e)}'",
+            "error_type": "schema_error",
+            "missing_column": str(e)
+        })
+    except Exception as e:
+        logger.error(f"Unexpected error detecting categories: {str(e)}", exc_info=True)
+        return format_response({
+            "status": "error",
+            "message": f"Internal server error while detecting categories: {str(e)}",
+            "error_type": "internal_error"
+        })
+
+from pydantic import BaseModel
+class SetCategoryRequest(BaseModel):
+    categories: list[str]
+
+@router.post(
+    "/set-category",
+    summary="Set active categories",
+    description="Filters the BlackBox dataset to the selected categories and clears cache.",
+)
+def set_category(req: SetCategoryRequest):
+    logger.info(f"Setting category to: {req.categories}")
+    res = registry.set_category(req.categories)
+    # clear cache so engines recalculate with new dataset
+    from app.services.analysis_cache import analysis_cache
+    analysis_cache.clear()
+    return format_response(res)
+
+
 @router.post(
     "/upload-datasets",
     response_model=StandardResponse,

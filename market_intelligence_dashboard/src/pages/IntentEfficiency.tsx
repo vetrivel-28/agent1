@@ -18,9 +18,14 @@ import { motion, AnimatePresence } from 'framer-motion';
 // Unified Layouts
 import { PageHeader } from '../components/layout/PageHeader';
 import { PageSection } from '../components/layout/PageSection';
-import { EvidenceModal, type EvidenceData } from '../components/ui/EvidenceModal';
+import { EvidenceDrawer, type EvidenceData } from '../components/ui/EvidenceDrawer';
 import { ChartContainer } from '../components/ui/ChartContainer';
 import { DashboardSkeleton } from '../components/ui/Skeletons';
+import { formatGenericLabel } from '../utils/formatters';
+import { useDatasetFilters, type FilterConfig } from '../hooks/useDatasetFilters';
+import { FilterBar } from '../components/filters/FilterBar';
+
+
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -171,7 +176,7 @@ function backendEvidenceToData(be: any, displayValue: any, title: string): Evide
   };
 }
 
-function keywordRowEvidence(k: any, benchmark: number): EvidenceData | null {
+function keywordRowEvidence(k: any, benchmark: number, filterContext?: any): EvidenceData | null {
   const sv = Number(k.search_volume ?? 0);
   const ks = Number(k.keyword_revenue ?? k.revenue ?? 0);
   const rps = sv > 0 ? (ks / sv) * 1000 : 0;
@@ -207,6 +212,10 @@ function keywordRowEvidence(k: any, benchmark: number): EvidenceData | null {
     source_datasets: ['Magnet Keyword Dataset'],
     source_columns: ['Keyword Phrase', 'Search Volume', 'Keyword Sales'],
     source_row_count: 1,
+    active_filters: filterContext?.active_filters,
+    filtered_row_count: filterContext?.filtered_row_count,
+    total_row_count: filterContext?.total_row_count,
+    calculation_scope: filterContext ? 'Filtered' : 'Global',
     formula: 'Revenue Efficiency Index = percentile_rank(Keyword Sales / Search Volume × 1000) × 100; Demand Percentile = percentile_rank(Search Volume) × 100',
     calculation_steps: calcSteps,
     top_records: [{
@@ -290,7 +299,7 @@ function ScatterTip({ active, payload }: any) {
 
 function IntentEfficiencyInner() {
   // All hooks unconditionally at top — no early returns before these
-  const [activeFilter, setActiveFilter] = useState<'all' | 'demand' | 'friction' | 'hidden' | 'low'>('all');
+  
   const [selectedEvidence, setSelectedEvidence] = useState<EvidenceData | null>(null);
 
   const { data, isLoading, isError } = useQuery({
@@ -363,40 +372,48 @@ function IntentEfficiencyInner() {
     return sorted.slice(0, 300);
   }, [scatterRaw]);
 
-  const displayScatter = useMemo(() => {
-    if (activeFilter === 'all') return scatter;
-    
-    const targetSegment = 
-      activeFilter === 'demand' ? 'Demand Winner' :
-      activeFilter === 'friction' ? 'Friction Keyword' :
-      activeFilter === 'hidden' ? 'Hidden Gem' :
-      activeFilter === 'low' ? 'Low Priority' : null;
-    
-    if (!targetSegment) return scatter;
-    
-    return scatter.filter(pt => pt.segment === targetSegment);
-  }, [scatter, activeFilter]);
+  
 
-  const filteredKeywordRows = useMemo(() => {
-    if (activeFilter === 'all') return rows;
-    
-    const targetSegment = 
-      activeFilter === 'demand' ? 'Demand Winner' :
-      activeFilter === 'friction' ? 'Friction Keyword' :
-      activeFilter === 'hidden' ? 'Hidden Gem' :
-      activeFilter === 'low' ? 'Low Priority' : null;
-    
-    if (!targetSegment) return rows;
-    
-    return rows.filter(r => r.segment === targetSegment);
-  }, [rows, activeFilter]);
+  
+
+  
+  const filterConfigs: FilterConfig<any>[] = [
+    { id: 'keyword', label: 'Keyword', type: 'search', getValue: r => r.keyword },
+    { id: 'segment', label: 'Segment', type: 'select', getValue: r => r.segment },
+    { id: 'search_volume', label: 'Search Volume', type: 'range', getValue: r => r.search_volume },
+    { id: 'demand_percentile', label: 'Demand Percentile', type: 'range', getValue: r => r.demand_percentile },
+    { id: 'efficiency_score', label: 'Efficiency Index', type: 'range', getValue: r => r.efficiency_score },
+    { id: 'keyword_sales', label: 'Keyword Sales', type: 'range', getValue: r => r.keyword_sales ?? r.keyword_revenue ?? r.revenue },
+    { id: 'rev_per_1k', label: 'Rev / 1K Searches', type: 'range', getValue: r => r.revenue_per_1000_searches },
+  ];
+
+  const {
+    filteredData: filteredKeywordRows,
+    activeFilters,
+    setFilter,
+    clearFilter,
+    clearAll,
+    filterOptions
+  } = useDatasetFilters<any>(rows, filterConfigs);
+
+  const displayScatter = useMemo(() => {
+    if (Object.keys(activeFilters).length === 0) return scatterRaw;
+    const allowed = new Set(filteredKeywordRows.map(r => r.keyword));
+    return scatterRaw.filter(pt => allowed.has(pt.keyword));
+  }, [scatterRaw, filteredKeywordRows, activeFilters]);
 
   const frictionRowsSorted = useMemo(() => {
-    return [...friction].sort((a, b) =>
-      (b.estimated_revenue_leakage ?? b.recoverable_revenue ?? 0) -
-      (a.estimated_revenue_leakage ?? a.recoverable_revenue ?? 0)
+    let baseFriction = friction;
+    if (Object.keys(activeFilters).length > 0) {
+      const allowed = new Set(filteredKeywordRows.map(r => r.keyword));
+      baseFriction = friction.filter(f => allowed.has(f.keyword));
+    }
+    return [...baseFriction].sort((a, b) =>
+      Number(b.estimated_revenue_leakage ?? b.recoverable_revenue ?? 0) - 
+      Number(a.estimated_revenue_leakage ?? a.recoverable_revenue ?? 0)
     );
-  }, [friction]);
+  }, [friction, filteredKeywordRows, activeFilters]);
+
 
   // Column definitions — stable memoized objects, Evidence column removed
   const keywordColumns = useMemo<Column<any>[]>(() => [
@@ -457,11 +474,23 @@ function IntentEfficiencyInner() {
   const frictionEvidence = summaryCards.friction_keywords?.evidence ?? {};
   const gapEvidence      = summaryCards.recoverable_revenue?.evidence ?? {};
 
-  // Counts for matrix legend — ALWAYS calculate from full dataset, never from filtered data
-  const dw = useMemo(() => rows.filter(r => r.segment === 'Demand Winner').length, [rows]);
-  const hg = useMemo(() => rows.filter(r => r.segment === 'Hidden Gem').length, [rows]);
-  const fk = useMemo(() => rows.filter(r => r.segment === 'Friction Keyword').length, [rows]);
-  const lp = useMemo(() => rows.filter(r => r.segment === 'Low Priority').length, [rows]);
+  // Counts for matrix legend — ALWAYS calculate from backend's full dataset counts, never from filtered data
+  const segmentCounts = useMemo(() => {
+    const counts = matrix.segment_counts ?? qs;
+    return {
+      dw: counts?.demand_winners ?? counts?.['Demand Winners'] ?? 0,
+      hg: counts?.hidden_gems ?? counts?.['Hidden Gems'] ?? 0,
+      fk: counts?.friction_keywords ?? counts?.['Friction Keywords'] ?? 0,
+      lp: counts?.low_priority ?? counts?.['Low Priority'] ?? 0,
+      monitor: counts?.monitor ?? counts?.['Monitor'] ?? 0,
+    };
+  }, [matrix, qs]);
+
+  const dw = segmentCounts.dw;
+  const hg = segmentCounts.hg;
+  const fk = segmentCounts.fk;
+  const lp = segmentCounts.lp;
+  const monitor = segmentCounts.monitor;
 
   return (
     <div className="pb-16 max-w-[1400px] mx-auto px-6">
@@ -506,12 +535,12 @@ function IntentEfficiencyInner() {
                 <p className="text-sm font-bold font-mono leading-none">{totalKeywords.toLocaleString()}</p>
               </div>
             </button>
-            {activeFilter !== 'all' && (
+            {Object.keys(activeFilters).length > 0 && (
               <div className="flex items-center gap-2">
                 <span className="text-xs font-bold bg-primary/10 text-primary px-3 py-1.5 rounded-md uppercase tracking-wider border border-primary/20">
-                  Filter: {quadrantLabel(activeFilter)}
+                  Filtered View
                 </span>
-                <button onClick={() => setActiveFilter('all')} className="text-xs font-bold text-muted-foreground hover:text-foreground">
+                <button onClick={() => clearAll()} className="text-xs font-bold text-muted-foreground hover:text-foreground">
                   Clear
                 </button>
               </div>
@@ -573,12 +602,12 @@ function IntentEfficiencyInner() {
               <div className="text-center p-6 max-w-md">
                 <AlertCircle className="w-10 h-10 text-amber-500 mx-auto mb-3" />
                 <p className="text-sm font-semibold text-foreground mb-2">
-                  {activeFilter === 'all' 
+                  {Object.keys(activeFilters).length === 0 
                     ? 'No scatter plot data available' 
-                    : `No ${quadrantLabel(activeFilter)} keywords with valid chart data`}
+                    : `No ${activeFilters.segment ? quadrantLabel(activeFilters.segment) : 'filtered'} keywords with valid chart data`}
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  {activeFilter === 'all'
+                  {Object.keys(activeFilters).length === 0
                     ? 'Keywords are missing demand_percentile or efficiency_score values required for the chart.'
                     : 'This segment has keywords but they lack valid x/y coordinate data for plotting.'}
                 </p>
@@ -624,15 +653,11 @@ function IntentEfficiencyInner() {
                 key={seg.key}
                 className={cn(
                   'text-left p-2.5 rounded-xl border transition-colors',
-                  activeFilter === seg.key
+                  activeFilters.segment === quadrantLabel(seg.key)
                     ? 'border-primary/50 bg-primary/5'
                     : 'border-border/50 hover:border-primary/30 hover:shadow-md'
                 )}
-                onClick={() => {
-                  // Toggle filter only — do not auto-show evidence
-                  const newFilter = activeFilter === seg.key ? 'all' : seg.key as any;
-                  setActiveFilter(newFilter);
-                }}
+                onClick={() => { const targetSegment = quadrantLabel(seg.key); if (activeFilters.segment === targetSegment) { clearFilter('segment'); } else { setFilter('segment', targetSegment); } }}
                 onDoubleClick={() => {
                   // Double-click to show evidence for this segment
                   const targetSegment = 
@@ -714,9 +739,11 @@ function IntentEfficiencyInner() {
         <CardHeader>
           <CardTitle className="text-base">All Keyword Conversion Records</CardTitle>
           <CardDescription>
-            {activeFilter === 'all'
-              ? `All analyzed keywords with demand percentile, revenue efficiency, and segment classification.`
-              : `Filtered view: ${quadrantLabel(activeFilter)} · ${filteredKeywordRows.length.toLocaleString()} keywords · click a row for full evidence`}
+            {Object.keys(activeFilters).length === 0
+              ? rows.length === totalKeywords 
+                ? `All ${totalKeywords.toLocaleString()} analyzed keywords with demand percentile, revenue efficiency, and segment classification.`
+                : `Showing ${rows.length.toLocaleString()} sampled keywords from ${totalKeywords.toLocaleString()} analyzed keywords. Click a row for full evidence.`
+              : `Filtered view: ${activeFilters.segment ? quadrantLabel(activeFilters.segment) : 'filtered'} • ${filteredKeywordRows.length.toLocaleString()} keywords • click a row for full evidence`}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -724,7 +751,7 @@ function IntentEfficiencyInner() {
             columns={keywordColumns}
             data={filteredKeywordRows}
             pageSize={10}
-            onRowClick={row => setSelectedEvidence(keywordRowEvidence(row, benchmarkRps1k))}
+            onRowClick={row => setSelectedEvidence(keywordRowEvidence(row, benchmarkRps1k, { active_filters: activeFilters, filtered_row_count: filteredKeywordRows.length, total_row_count: rows.length }))}
           />
         </CardContent>
       </Card>
@@ -748,12 +775,12 @@ function IntentEfficiencyInner() {
             columns={frictionColumns}
             data={frictionRowsSorted}
             pageSize={10}
-            onRowClick={row => setSelectedEvidence(keywordRowEvidence(row, benchmarkRps1k))}
+            onRowClick={row => setSelectedEvidence(keywordRowEvidence(row, benchmarkRps1k, { active_filters: activeFilters, filtered_row_count: filteredKeywordRows.length, total_row_count: rows.length }))}
           />
         </CardContent>
       </Card>
 
-      <EvidenceModal isOpen={!!selectedEvidence} onClose={() => setSelectedEvidence(null)} evidence={selectedEvidence} />
+      <EvidenceDrawer isOpen={!!selectedEvidence} onClose={() => setSelectedEvidence(null)} evidence={selectedEvidence} />
     </div>
   );
 }

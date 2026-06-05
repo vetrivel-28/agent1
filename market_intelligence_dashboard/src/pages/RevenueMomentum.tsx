@@ -7,7 +7,9 @@ import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { Drawer } from '../components/ui/Drawer';
 import { Modal } from '../components/ui/Modal';
-import { EvidenceModal, type EvidenceData } from '../components/ui/EvidenceModal';
+import { EvidenceDrawer, type EvidenceData } from '../components/ui/EvidenceDrawer';
+import { useDatasetFilters, type FilterConfig } from '../hooks/useDatasetFilters';
+import { FilterBar } from '../components/filters/FilterBar';
 import { isEngineOk, getEngineErrorMessage } from '../utils/analysisStatus';
 import { formatCurrency } from '../utils/cn';
 import { AlertCircle, Download, Info } from 'lucide-react';
@@ -207,7 +209,7 @@ function toEvidenceData(be: BackendEvidence | null | undefined, displayValue: an
 }
 
 // Convert ledger row evidence to comprehensive EvidenceData with momentum breakdown
-function ledgerRowEvidence(row: LedgerRow, momentumCutoff: number, totalRevenue: number): EvidenceData | null {
+function ledgerRowEvidence(row: LedgerRow, momentumCutoff: number, totalRevenue: number, filterContext?: any): EvidenceData | null {
   const be = row.evidence;
   
   // Build comprehensive calculation steps
@@ -393,8 +395,23 @@ export default function RevenueMomentum() {
       premium_brands: { count: 0, items: [] },
       niche_players: { count: 0, items: [] },
     },
-    momentum_ledger: [],
-  };
+    momentum_ledger: [],    };
+
+  const filterConfigs: FilterConfig<LedgerRow>[] = [
+    { id: 'brand', label: 'Brand', type: 'search', getValue: r => r.brand },
+    { id: 'revenue', label: 'Revenue', type: 'range', getValue: r => Number(r.parent_revenue) || 0 },
+    { id: 'score', label: 'Momentum Score', type: 'range', getValue: r => Number(r.momentum_score) || 0 },
+    { id: 'signal', label: 'Signal Type', type: 'select', getValue: r => r.momentum_score && r.momentum_score >= 75 ? 'High Momentum' : 'Stagnant / Declining' },
+  ];
+
+  const {
+    filteredData,
+    activeFilters,
+    setFilter,
+    clearFilter,
+    clearAll,
+    filterOptions
+  } = useDatasetFilters<LedgerRow>(rm.momentum_ledger || [], filterConfigs);
 
   const groupCards = useMemo(
     () =>
@@ -438,7 +455,7 @@ export default function RevenueMomentum() {
     { header: 'Market Share %', accessorKey: 'revenue_share', cell: (r) => `${Number(r.revenue_share || 0).toFixed(2)}%` },
     { header: 'Market Power', accessorKey: 'market_power_score', cell: (r) => <span className="font-mono text-muted-foreground">{Number(r.market_power_score || 0).toFixed(2)}</span> },
     { header: 'Revenue Tier', accessorKey: 'revenue_tier', cell: (r) => <Badge variant="outline">{r.revenue_tier || 'C'}</Badge> },
-    { header: 'Momentum Score', accessorKey: 'momentum_score', cell: (r) => <ScoreBar score={Number(r.momentum_score || 0)} onClick={(e) => { e.stopPropagation(); setSelectedEvidence(ledgerRowEvidence(r, momentumCutoff, rm.total_market_revenue || 0)); }} /> },
+    { header: 'Momentum Score', accessorKey: 'momentum_score', cell: (r) => <ScoreBar score={Number(r.momentum_score || 0)} onClick={(e) => { e.stopPropagation(); setSelectedEvidence(ledgerRowEvidence(r, momentumCutoff, rm.total_market_revenue || 0, { active_filters: activeFilters, filtered_row_count: filteredData.length, total_row_count: rm.momentum_ledger?.length || 0 })); }} /> },
     { header: 'Growth Driver', accessorKey: 'primary_engine', cell: (r) => <Badge variant="outline">{r.primary_engine || 'N/A'}</Badge> },
     { header: 'Classification', accessorKey: 'classification', cell: (r) => <Badge variant="outline">{r.classification}</Badge> },
   ];
@@ -447,7 +464,7 @@ export default function RevenueMomentum() {
     { header: '#', accessorKey: 'row_number', cell: (r) => <span className="font-mono text-muted-foreground">{r.row_number ?? '-'}</span> },
     { header: 'Ticker / Brand', accessorKey: 'brand', cell: (r) => <span className="font-bold text-foreground uppercase tracking-wide">{r.brand}</span> },
     { header: 'Market Share %', accessorKey: 'revenue_share', cell: (r) => <span className="font-mono">{Number(r.revenue_share || 0).toFixed(2)}%</span> },
-    { header: 'Momentum', accessorKey: 'momentum_score', cell: (r) => <ScoreBar score={Number(r.momentum_score || 0)} onClick={(e) => { e?.stopPropagation(); setSelectedEvidence(ledgerRowEvidence(r, momentumCutoff, rm.total_market_revenue || 0)); }} /> },
+    { header: 'Momentum', accessorKey: 'momentum_score', cell: (r) => <ScoreBar score={Number(r.momentum_score || 0)} onClick={(e) => { e?.stopPropagation(); setSelectedEvidence(ledgerRowEvidence(r, momentumCutoff, rm.total_market_revenue || 0, { active_filters: activeFilters, filtered_row_count: filteredData.length, total_row_count: rm.momentum_ledger?.length || 0 })); }} /> },
     { header: 'Power / Tier', accessorKey: 'market_power_score', cell: (r) => <span className="font-mono">{Number(r.market_power_score || 0).toFixed(0)} / {r.revenue_tier || 'C'}</span> },
     { header: 'Growth Driver', accessorKey: 'primary_engine', cell: (r) => <Badge variant="outline">{r.primary_engine || 'N/A'}</Badge> },
     { header: 'Classification', accessorKey: 'classification', cell: (r) => <Badge variant="outline">{r.classification}</Badge> },
@@ -821,7 +838,7 @@ export default function RevenueMomentum() {
               data={rm.momentum_ledger.slice().sort((a, b) => Number(b.revenue_share || 0) - Number(a.revenue_share || 0) || Number(b.momentum_score || 0) - Number(a.momentum_score || 0))}
               pageSize={15}
               rowKey={(row, i) => `${row.brand}-${row.row_number ?? i}`}
-              onRowClick={(row) => setSelectedEvidence(ledgerRowEvidence(row, momentumCutoff, rm.total_market_revenue || 0))}
+              onRowClick={(row) => setSelectedEvidence(ledgerRowEvidence(row, momentumCutoff, rm.total_market_revenue || 0, { active_filters: activeFilters, filtered_row_count: filteredData.length, total_row_count: rm.momentum_ledger?.length || 0 }))}
             />
           </CardContent>
         </Card>
@@ -898,7 +915,7 @@ export default function RevenueMomentum() {
               data={selectedGroup.items.slice().sort((a, b) => Number(b.revenue_share || 0) - Number(a.revenue_share || 0) || Number(b.momentum_score || 0) - Number(a.momentum_score || 0))}
               pageSize={20}
               rowKey={(row, i) => `${row.brand}-${row.row_number ?? i}`}
-              onRowClick={(row) => setSelectedEvidence(ledgerRowEvidence(row, momentumCutoff, rm.total_market_revenue || 0))}
+              onRowClick={(row) => setSelectedEvidence(ledgerRowEvidence(row, momentumCutoff, rm.total_market_revenue || 0, { active_filters: activeFilters, filtered_row_count: filteredData.length, total_row_count: rm.momentum_ledger?.length || 0 }))}
             />
           </div>
         )}
@@ -911,7 +928,7 @@ export default function RevenueMomentum() {
         explanation={drillDownConfig?.explanation || ''} 
         items={drillDownConfig?.items || []} 
       />
-      <EvidenceModal isOpen={!!selectedEvidence} onClose={() => setSelectedEvidence(null)} evidence={selectedEvidence} />
+      <EvidenceDrawer isOpen={!!selectedEvidence} onClose={() => setSelectedEvidence(null)} evidence={selectedEvidence} />
     </div>
   );
 }
