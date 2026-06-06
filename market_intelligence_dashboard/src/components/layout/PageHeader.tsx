@@ -6,7 +6,7 @@ import { ShieldCheck } from 'lucide-react';
 interface PageHeaderProps {
   badge: string;
   title: string;
-  description: string;
+  description?: string;
   kpiSummary?: React.ReactNode;
 }
 
@@ -31,9 +31,11 @@ export function PageHeader({ badge, title, description, kpiSummary }: PageHeader
 
       <div className="space-y-2 max-w-4xl">
         <h1 className="text-page-title">{title}</h1>
-        <p className="text-body text-muted-foreground max-w-3xl leading-relaxed">
-          {description}
-        </p>
+        {description && (
+          <p className="text-body text-muted-foreground max-w-3xl leading-relaxed">
+            {description}
+          </p>
+        )}
       </div>
 
       {kpiSummary && (

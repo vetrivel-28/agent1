@@ -17,6 +17,10 @@ from .consumer_population import ConsumerPopulationEngine
 from .psychographic_clusters import PsychographicClusterEngine
 from .adoption_simulation import AdoptionSimulationEngine
 from .resistance_analysis import ResistanceAnalysisEngine
+from .scenario_engine import ScenarioTestingEngine
+from .stress_test_engine import MarketStressTestEngine
+from .stability_risk_engine import SegmentStabilityEngine, MarketRiskEngine
+from .confidence_engine import SimulationConfidenceEngine
 
 __all__ = [
     "MarketDNAEngine",
@@ -24,4 +28,9 @@ __all__ = [
     "PsychographicClusterEngine",
     "AdoptionSimulationEngine",
     "ResistanceAnalysisEngine",
+    "ScenarioTestingEngine",
+    "MarketStressTestEngine",
+    "SegmentStabilityEngine",
+    "MarketRiskEngine",
+    "SimulationConfidenceEngine",
 ]

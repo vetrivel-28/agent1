@@ -8,30 +8,51 @@ import { formatNumber } from '../utils/cn';
 import { Link } from 'react-router-dom';
 import {
   Zap, Database, ArrowRight, AlertTriangle, Lightbulb,
-  Info, Key, Package, DollarSign, Users, TrendingUp, BarChart3, Target
+  Info, Key, Package, DollarSign, Users,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { isEngineOk, getEngineErrorMessage } from '../utils/analysisStatus';
 
 import { DashboardSkeleton } from '../components/ui/Skeletons';
 import { RecommendedActions } from '../components/intelligence/RecommendedActions';
-import { MetricExplainer } from '../components/ui/MetricExplainer';
 import { EvidenceDrawer, type EvidenceData } from '../components/ui/EvidenceDrawer';
+import { DataScopeIndicator } from '../components/ui/DataScopeIndicator';
+import { RevenueAtRisk } from '../components/intelligence/RevenueAtRisk';
 
-// Unified System Components
 import { PageHeader } from '../components/layout/PageHeader';
 import { PageSection } from '../components/layout/PageSection';
 import { KPICard } from '../components/ui/KPICard';
-import { DataCoverageBanner } from '../components/ui/DataCoverageBanner';
-import { TrendComparison } from '../components/intelligence/TrendComparison';
-import { RevenueAtRisk } from '../components/intelligence/RevenueAtRisk';
-import { formatGenericLabel } from '../utils/formatters';
 import { scopeQueryKeys } from '../hooks/useCategoryScope';
 
+interface MarketInsight {
+  title: string;
+  description?: string;
+  business_summary?: string;
+  suggested_action?: string;
+  why_recommended?: string;
+  usefulness_score?: number;
+  confidence?: number;
+  evidence?: EvidenceData;
+}
 
-function InsightCard({ insight, onOpenEvidence }: { insight: any, onOpenEvidence: (evidence: any) => void }) {
+function InsightCard({
+  insight,
+  onOpenEvidence,
+}: {
+  insight: MarketInsight;
+  onOpenEvidence: (evidence: EvidenceData) => void;
+}) {
+  const summary = insight.description || insight.business_summary || '';
+  const action = insight.suggested_action || insight.why_recommended || '';
+  const confidencePct = insight.confidence != null
+    ? Math.round(Number(insight.confidence) * 10)
+    : insight.evidence?.confidence_score;
+
   return (
-    <div className="p-4 bg-card border border-border/40 rounded-xl hover-card-anim cursor-pointer group" onClick={() => onOpenEvidence(insight.evidence)}>
+    <div
+      className="p-4 bg-card border border-border/40 rounded-xl hover-card-anim cursor-pointer group"
+      onClick={() => insight.evidence && onOpenEvidence(insight.evidence)}
+    >
       <div className="flex items-start gap-3">
         <Lightbulb className="w-4 h-4 text-primary shrink-0 mt-0.5" />
         <div className="flex-1">
@@ -39,14 +60,29 @@ function InsightCard({ insight, onOpenEvidence }: { insight: any, onOpenEvidence
             {insight.title}
             <ArrowRight className="w-3 h-3 opacity-0 -translate-x-2 group-hover:opacity-100 group-hover:translate-x-0 transition-all" />
           </h4>
-          <p className="text-sm font-medium mt-1">{insight.description}</p>
-          <div className="flex items-center gap-1.5 mt-2.5">
-            <div className="flex-1 h-1 bg-muted rounded-full overflow-hidden max-w-[100px]">
-              <div className="h-full bg-blue-500/50" style={{ width: `${insight.usefulness_score}%` }} />
-            </div>
-            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
-              Score: {insight.usefulness_score}/100
-            </span>
+          {summary && <p className="text-sm font-medium mt-1">{summary}</p>}
+          {action && (
+            <p className="text-xs text-muted-foreground mt-2">
+              <span className="font-semibold text-foreground/80">Why: </span>
+              {action}
+            </p>
+          )}
+          <div className="flex items-center gap-3 mt-2.5 flex-wrap">
+            {insight.usefulness_score != null && (
+              <div className="flex items-center gap-1.5">
+                <div className="flex-1 h-1 bg-muted rounded-full overflow-hidden w-[100px]">
+                  <div className="h-full bg-blue-500/50" style={{ width: `${insight.usefulness_score}%` }} />
+                </div>
+                <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
+                  Score: {insight.usefulness_score}/100
+                </span>
+              </div>
+            )}
+            {confidencePct != null && (
+              <Badge variant="outline" className="text-[10px]">
+                Confidence: {confidencePct}%
+              </Badge>
+            )}
           </div>
         </div>
       </div>
@@ -70,14 +106,9 @@ export default function DashboardOverview() {
     staleTime: 5 * 60 * 1000,
   });
 
-  const { data: statusResp } = useQuery({
-    queryKey: ['status'],
-    queryFn: api.getStatus,
-  });
+  const hasBlackbox = statusData?.data?.datasets?.blackbox;
 
-  const hasBlackbox = statusResp?.data?.datasets?.blackbox;
-
-  if (!hasBlackbox && !isLoading && statusResp) {
+  if (!hasBlackbox && !isLoading && statusData) {
     return (
       <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}
         className="flex flex-col items-center justify-center min-h-[70vh] text-center max-w-lg mx-auto space-y-8">
@@ -110,20 +141,20 @@ export default function DashboardOverview() {
   }
 
   let errorMsg = getEngineErrorMessage(reportResp, 'Failed to generate market report.');
-  let errorTitle = "Analysis Unavailable";
-  
+  let errorTitle = 'Analysis Unavailable';
+
   if (isError && error instanceof Error) {
     if (error.message.includes('404')) {
-      errorTitle = "Endpoint Not Found";
-      errorMsg = "The requested API endpoint does not exist (404).";
+      errorTitle = 'Endpoint Not Found';
+      errorMsg = 'The requested API endpoint does not exist (404).';
     } else if (error.message.includes('500')) {
-      errorTitle = "Server Error";
-      errorMsg = "The backend server encountered an internal error (500).";
+      errorTitle = 'Server Error';
+      errorMsg = 'The backend server encountered an internal error (500).';
     } else if (error.message.includes('Network Error')) {
-      errorTitle = "Network Failure";
-      errorMsg = "Failed to connect to the backend server. Please check your network connection.";
+      errorTitle = 'Network Failure';
+      errorMsg = 'Failed to connect to the backend server. Please check your network connection.';
     } else {
-      errorTitle = "API Error";
+      errorTitle = 'API Error';
       errorMsg = error.message;
     }
   }
@@ -153,28 +184,31 @@ export default function DashboardOverview() {
 
   const results = reportResp?.data?.results || {};
   const snapshot = results.market_snapshot || {};
-  const insights = results.key_insights || [];
+  const insights: MarketInsight[] = results.key_insights || [];
   const opportunities = results.opportunity_summary || [];
-  const risks = results.market_risks || [];
-  const priceCluster = results.primary_price_cluster || {};
   const audit = results.data_audit || {};
+  const dataScope = results.data_scope || {};
+  const keywordScope = dataScope.keyword_intelligence;
+  const productScope = dataScope.product_intelligence;
+  const revenueVuln = results.revenue_vulnerability || {};
+  const scopeMeta = results.scope || {};
 
-  const concentrationLvl = snapshot.hhi_score && parseFloat(snapshot.hhi_score) > 2500 ? 'High' : 'Moderate';
-  const topOpp = opportunities && opportunities.length > 0 ? opportunities[0].title : 'None Detected';
-  
-  // Calculate narrative
-  const narrative = `This market exhibits ${concentrationLvl.toLowerCase()} concentration with ${snapshot.market_leader || 'multiple brands'} controlling a significant portion of the ${snapshot.total_revenue || '$0'} total revenue. Demand remains strong across ${snapshot.total_keywords || 0} keywords, identifying ${opportunities.length} immediate strategic expansion opportunities.`;
+  const compositeScore = results.report_metadata?.final_market_score;
+  const confidenceBadge = compositeScore != null
+    ? `Market score: ${compositeScore}/100`
+    : 'Dataset-driven analysis';
 
-  // Safe parse numeric value for revenue at risk component
   let parsedRev = 0;
   if (typeof snapshot.total_revenue === 'string') {
-    parsedRev = parseFloat(snapshot.total_revenue.replace(/[^0-9.-]+/g,"")) || 0;
+    parsedRev = parseFloat(snapshot.total_revenue.replace(/[^0-9.-]+/g, '')) || 0;
   } else if (typeof snapshot.total_revenue === 'number') {
     parsedRev = snapshot.total_revenue;
   }
-  
-  // Clean parsedRev up if it parsed as e.g. 5.1 (if it was $5.1M), assume it's scaled. We'll use a placeholder magnitude for the vulnerability.
   const scaledRev = parsedRev < 1000 ? parsedRev * 1000000 : parsedRev;
+
+  const vulnPct = Number(revenueVuln.dependency_percentage) || 0;
+  const vulnReason = revenueVuln.reason as string | undefined;
+  const vulnEvidence = revenueVuln.evidence as EvidenceData | undefined;
 
   return (
     <>
@@ -185,85 +219,86 @@ export default function DashboardOverview() {
       />
 
       <div className="pb-16 max-w-[1400px] mx-auto px-6 print-only">
-        
-        <PageHeader 
+
+        <PageHeader
           badge="Market Report"
           title="Market Intelligence Overview"
-          description="A comprehensive executive briefing answering core market sizing, concentration, demand hotspot, and pricing questions. Driven exclusively by verified dataset evidence."
+          description="Executive briefing with keyword-wide demand signals and category-scoped product competitive metrics. Each section states its data universe."
           kpiSummary={
             <div className="flex gap-2 flex-wrap mt-2">
-              <Badge variant="outline" className="text-[10px] bg-background">Confidence: 92%</Badge>
-              <Badge variant="outline" className="text-[10px] bg-background">Datasets: 2 Verified</Badge>
+              <Badge variant="outline" className="text-[10px] bg-background">{confidenceBadge}</Badge>
+              {keywordScope?.row_count > 0 && productScope?.row_count > 0 && (
+                <Badge variant="outline" className="text-[10px] bg-background">
+                  Keywords + products scoped separately
+                </Badge>
+              )}
             </div>
           }
         />
 
-        <DataCoverageBanner coveragePercent={statusResp?.data?.metadata?.keyword_classification ? 100 : 65} metricName="market keywords mapped to thematic segments" />
-
-        <TrendComparison 
-          currentKeywords={audit.keywords_analyzed || 0} 
-          currentProducts={audit.products_analyzed || 0} 
-          currentBrands={audit.brands_analyzed || 0} 
-        />
-
         <PageSection title="1. Executive KPI Summary">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+            <DataScopeIndicator scope={keywordScope} variant="keyword" />
+            <DataScopeIndicator scope={productScope} variant="product" />
+          </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
             <KPICard
               label="Total Revenue"
               value={snapshot.total_revenue || 'N/A'}
-              implication="Total monthly revenue captured by the analyzed products."
+              implication="Total monthly revenue from category-scoped products."
               icon={DollarSign}
               confidence={96}
               onClick={() => setEvidence(snapshot.evidence_objects?.total_revenue || {
                 title: 'Evidence Unavailable',
                 displayed_value: snapshot.total_revenue,
-                business_summary: 'Missing detailed evidence.',
-                source_datasets: [], source_columns: [], source_row_count: 0, formula: null
+                business_summary: productScope?.description || 'Missing detailed evidence.',
+                source_datasets: [], source_columns: [], source_row_count: 0, formula: null,
               })}
             />
             <KPICard
               label="Total Products"
               value={snapshot.total_products || 'N/A'}
-              implication="Active ASINs participating in this market category."
+              implication="Active ASINs in the selected product scope."
               icon={Package}
               confidence={99}
               onClick={() => setEvidence(snapshot.evidence_objects?.total_products || {
                 title: 'Evidence Unavailable',
                 displayed_value: snapshot.total_products,
-                business_summary: 'Missing detailed evidence.',
-                source_datasets: [], source_columns: [], source_row_count: 0, formula: null
+                business_summary: productScope?.description || 'Missing detailed evidence.',
+                source_datasets: [], source_columns: [], source_row_count: 0, formula: null,
               })}
             />
             <KPICard
               label="Total Brands"
               value={snapshot.total_brands || 'N/A'}
-              implication="Unique brand entities competing for market share."
+              implication="Unique brands in the selected product scope."
               icon={Users}
               confidence={99}
               onClick={() => setEvidence(snapshot.evidence_objects?.total_brands || {
                 title: 'Evidence Unavailable',
                 displayed_value: snapshot.total_brands,
-                business_summary: 'Missing detailed evidence.',
-                source_datasets: [], source_columns: [], source_row_count: 0, formula: null
+                business_summary: productScope?.description || 'Missing detailed evidence.',
+                source_datasets: [], source_columns: [], source_row_count: 0, formula: null,
               })}
             />
             <KPICard
               label="Demand Keywords"
               value={snapshot.total_keywords || 'N/A'}
-              implication="Unique search queries indicating customer intent."
+              implication="Full Magnet keyword universe (not category-filtered)."
               icon={Key}
               confidence={85}
               onClick={() => setEvidence(snapshot.evidence_objects?.total_keywords || {
                 title: 'Evidence Unavailable',
                 displayed_value: snapshot.total_keywords,
-                business_summary: 'Missing detailed evidence.',
-                source_datasets: [], source_columns: [], source_row_count: 0, formula: null
+                business_summary: keywordScope?.description || 'Missing detailed evidence.',
+                source_datasets: [], source_columns: [], source_row_count: 0, formula: null,
               })}
             />
           </div>
         </PageSection>
 
-        <PageSection title="2. Market Concentration & Dominance">
+        <PageSection title="2. Market Structure (Product Intelligence)">
+          <DataScopeIndicator scope={productScope} variant="product" />
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <KPICard
               label="Top 3 Brand Share"
@@ -275,23 +310,23 @@ export default function DashboardOverview() {
               onClick={() => setEvidence(snapshot.evidence_objects?.top_3_share || {
                 title: 'Evidence Unavailable',
                 displayed_value: snapshot.top_3_share,
-                business_summary: 'Missing detailed evidence.',
-                source_datasets: [], source_columns: [], source_row_count: 0, formula: null
+                business_summary: productScope?.description || 'Missing detailed evidence.',
+                source_datasets: [], source_columns: [], source_row_count: 0, formula: null,
               })}
             />
             <KPICard
               label="Market Leader"
               value={snapshot.market_leader || 'N/A'}
               implication={[
-                snapshot.market_leader_share ? `Controls ${snapshot.market_leader_share} of market.` : '',
+                snapshot.market_leader_share ? `Controls ${snapshot.market_leader_share} of scoped market.` : '',
                 snapshot.market_leader_revenue ? `Revenue: ${snapshot.market_leader_revenue}` : '',
               ].filter(Boolean).join(' ')}
               confidence={93}
               onClick={() => setEvidence(snapshot.evidence_objects?.market_leader || {
                 title: 'Evidence Unavailable',
                 displayed_value: snapshot.market_leader,
-                business_summary: 'Missing detailed evidence.',
-                source_datasets: [], source_columns: [], source_row_count: 0, formula: null
+                business_summary: productScope?.description || 'Missing detailed evidence.',
+                source_datasets: [], source_columns: [], source_row_count: 0, formula: null,
               })}
             />
             <KPICard
@@ -304,39 +339,63 @@ export default function DashboardOverview() {
               onClick={() => setEvidence(snapshot.evidence_objects?.hhi_score || {
                 title: 'Evidence Unavailable',
                 displayed_value: snapshot.hhi_score,
-                business_summary: 'Missing detailed evidence.',
-                source_datasets: [], source_columns: [], source_row_count: 0, formula: null
+                business_summary: productScope?.description || 'Missing detailed evidence.',
+                source_datasets: [], source_columns: [], source_row_count: 0, formula: null,
               })}
             />
           </div>
         </PageSection>
 
         <PageSection title="3. Revenue Vulnerability Risk">
-           {scaledRev > 0 ? (
-             <RevenueAtRisk 
-               totalRevenue={scaledRev} 
-               dependencyPercentage={68} 
-               reason="68% of category revenue is highly dependent on just the top 2 keyword clusters, creating significant structural vulnerability to search trend shifts." 
-             />
-           ) : (
-             <Card className="border-border/30 bg-muted/30">
-                <CardContent className="p-6 text-center text-muted-foreground text-sm">
-                  Insufficient revenue data for vulnerability assessment.
-                </CardContent>
-              </Card>
-           )}
+          <DataScopeIndicator
+            scope={{
+              description: 'Keyword demand concentration applied to scoped product revenue',
+              filtering: `${keywordScope?.filtering || ''} · ${productScope?.filtering || ''}`,
+            }}
+            variant="neutral"
+          />
+          {scaledRev > 0 && vulnPct >= 15 && vulnReason ? (
+            <div
+              className="cursor-pointer"
+              onClick={() => vulnEvidence && setEvidence(vulnEvidence)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => e.key === 'Enter' && vulnEvidence && setEvidence(vulnEvidence)}
+            >
+              <RevenueAtRisk
+                totalRevenue={scaledRev}
+                dependencyPercentage={vulnPct}
+                reason={vulnReason}
+              />
+            </div>
+          ) : (
+            <Card className="border-border/30 bg-muted/30">
+              <CardContent className="p-6 text-center text-muted-foreground text-sm">
+                {scaledRev > 0
+                  ? 'Keyword demand is sufficiently distributed — no elevated revenue vulnerability detected for the current scope.'
+                  : 'Insufficient revenue data for vulnerability assessment.'}
+              </CardContent>
+            </Card>
+          )}
         </PageSection>
 
         <PageSection title="4. Key Market Insights">
+          <DataScopeIndicator
+            scope={{
+              description: 'Insights derived from calculated engine outputs (product scope + global keyword demand)',
+              filtering: 'Each insight includes evidence with source metrics and formulas',
+            }}
+            variant="neutral"
+          />
           <div className="space-y-3">
-            {insights && insights.length > 0 ? (
-              insights.map((insight: any, idx: number) => (
+            {insights.length > 0 ? (
+              insights.map((insight, idx) => (
                 <InsightCard key={idx} insight={insight} onOpenEvidence={setEvidence} />
               ))
             ) : (
               <Card className="border-border/30 bg-muted/30">
                 <CardContent className="p-6 text-center text-muted-foreground text-sm">
-                  No validated market insights available yet. Upload complete Keyword and Product datasets to generate insights.
+                  No validated market insights yet. Run analysis engines after uploading Keyword and Product datasets.
                 </CardContent>
               </Card>
             )}
@@ -344,27 +403,33 @@ export default function DashboardOverview() {
         </PageSection>
 
         <PageSection title="5. Priority Business Actions">
+          <DataScopeIndicator scope={productScope} variant="product" />
           <RecommendedActions opportunities={opportunities || []} onOpenEvidence={setEvidence} />
           {(!opportunities || opportunities.length === 0) && (
-            <Card className="border-border/30 bg-muted/30">
+            <Card className="border-border/30 bg-muted/30 mt-4">
               <CardContent className="p-6 text-center text-muted-foreground text-sm">
-                No actionable opportunities identified from datasets.
+                No actionable opportunities identified from the current product scope and engine outputs.
               </CardContent>
             </Card>
           )}
         </PageSection>
 
-        {/* DATA AUDIT FOOTER */}
         <div className="pt-8 mt-8 border-t border-border/40 pb-16">
           <div className="flex flex-wrap gap-x-8 gap-y-4 items-center justify-center text-sm text-muted-foreground font-mono">
             <div className="flex items-center gap-2">
               <Info className="w-4 h-4" /> Data Audit:
             </div>
-            <div>{formatNumber(audit.products_analyzed || 0)} Products</div>
+            <div title={audit.product_scope}>{formatNumber(audit.products_analyzed || 0)} Products (scoped)</div>
             <div>•</div>
             <div>{formatNumber(audit.brands_analyzed || 0)} Brands</div>
             <div>•</div>
-            <div>{formatNumber(audit.keywords_analyzed || 0)} Keywords</div>
+            <div title={audit.keyword_scope}>{formatNumber(audit.keywords_analyzed || 0)} Keywords (full universe)</div>
+            {scopeMeta.mode === 'selected' && scopeMeta.selected_categories?.length > 0 && (
+              <>
+                <div>•</div>
+                <div className="text-primary">Category: {scopeMeta.selected_categories.join(', ')}</div>
+              </>
+            )}
           </div>
         </div>
 

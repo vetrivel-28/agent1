@@ -387,138 +387,32 @@ class DatasetRegistry:
         scope: Dict[str, Any],
         blackbox_df: Optional[pd.DataFrame] = None,
     ) -> Tuple[Optional[pd.DataFrame], Dict[str, Any]]:
-        import re
-        from collections import Counter
+        """
+        Return the full Magnet keyword dataset. Category selection does NOT filter keywords.
 
+        Product scope (blackbox) is applied separately via get_scoped_blackbox_df.
+        The blackbox_df argument is accepted for API compatibility but ignored for filtering.
+        """
+        _ = blackbox_df  # unused — keywords remain category-independent
         magnet_df = self._magnet
         if magnet_df is None or magnet_df.empty:
             return None, {}
 
         orig_len = len(magnet_df)
-        mode = scope.get("mode", "all")
-        selected = scope.get("selected_categories", [])
-
-        default_meta = {
+        selected = scope.get("selected_categories") or []
+        return magnet_df.copy(), {
             "mode": "keyword_wide",
             "matchedKeywordCount": orig_len,
             "totalKeywordCount": orig_len,
             "excludedKeywordCount": 0,
             "mappingConfidence": 100.0,
             "selectedCategories": selected,
-            "mappingMethod": "Full Magnet dataset (all categories)",
+            "mappingMethod": "Full Magnet dataset (no category restrictions)",
             "topScopedPhrases": [],
             "topMatchedKeywords": [],
             "scope_key": "all",
+            "category_filter_applied": False,
         }
-
-        if mode == "all" or not selected or blackbox_df is None or blackbox_df.empty:
-            return magnet_df.copy(), default_meta
-
-        title_col = find_column(blackbox_df, ["Title", "Product Title", "Item Name"])
-        if not title_col:
-            empty = magnet_df.iloc[0:0].copy()
-            return empty, {
-                **default_meta,
-                "mode": "category_mapped",
-                "matchedKeywordCount": 0,
-                "excludedKeywordCount": orig_len,
-                "mappingConfidence": 0.0,
-                "mappingMethod": "No product titles in scoped BlackBox",
-                "scope_key": "|".join(selected) + "_kw",
-            }
-
-        full_df = self._original_blackbox
-        cat_col = scope.get("category_column", "")
-        stop_words = {
-            "for", "and", "the", "with", "in", "of", "a", "an", "to", "on", "at", "by",
-            "from", "or", "as", "is", "it", "be", "are", "was", "were", "has", "have",
-            "women", "womens", "men", "mens", "large", "small", "new", "best", "top",
-            "good", "great", "thin", "thick", "pack", "set", "lot", "sale", "buy",
-            "size", "color", "black", "white", "red", "blue", "green", "inch", "cm",
-        }
-
-        def _tokenize(text: str) -> list[str]:
-            return [
-                w for w in re.sub(r"[^a-z0-9]+", " ", str(text).lower()).split()
-                if len(w) > 2 and w not in stop_words and not w.isnumeric()
-            ]
-
-        active_tokens: set[str] = set()
-        active_bigrams: set[str] = set()
-        active_counts: Counter = Counter()
-        for title in blackbox_df[title_col].dropna():
-            words = _tokenize(str(title))
-            for w in words:
-                active_tokens.add(w)
-                active_counts[w] += 1
-            for i in range(len(words) - 1):
-                active_bigrams.add(f"{words[i]} {words[i + 1]}")
-
-        excluded_tokens: set[str] = set()
-        if full_df is not None and not full_df.empty and cat_col and cat_col in full_df.columns:
-            cat_s = full_df[cat_col].fillna("Uncategorized").astype(str).str.strip()
-            excluded_titles = full_df[~cat_s.isin(selected)][title_col].dropna() if title_col in full_df.columns else []
-            for title in excluded_titles:
-                excluded_tokens.update(_tokenize(str(title)))
-
-        if not active_tokens:
-            empty = magnet_df.iloc[0:0].copy()
-            return empty, {
-                **default_meta,
-                "mode": "category_mapped",
-                "matchedKeywordCount": 0,
-                "excludedKeywordCount": orig_len,
-                "mappingConfidence": 0.0,
-                "mappingMethod": "No extractable phrases from scoped product titles",
-                "scope_key": "|".join(selected) + "_kw",
-            }
-
-        kw_col = find_column(magnet_df, ["Keyword Phrase", "Keyword", "Search Term"])
-        if not kw_col:
-            return magnet_df.copy(), default_meta
-
-        def _keyword_matches(kw: Any) -> bool:
-            if pd.isna(kw):
-                return False
-            kw_norm = re.sub(r"[^a-z0-9]+", " ", str(kw).lower()).strip()
-            if not kw_norm:
-                return False
-            if any(bg in kw_norm for bg in active_bigrams):
-                return True
-            words = kw_norm.split()
-            active_hits = sum(1 for w in words if w in active_tokens)
-            excluded_hits = sum(1 for w in words if w in excluded_tokens)
-            if active_hits >= 2:
-                return True
-            if active_hits >= 1 and excluded_hits == 0:
-                return True
-            if active_hits >= 1 and active_hits > excluded_hits:
-                return True
-            return False
-
-        mask = magnet_df[kw_col].apply(_keyword_matches)
-        filtered_df = magnet_df[mask].copy()
-        match_count = len(filtered_df)
-
-        top_matched = (
-            filtered_df[kw_col].dropna().astype(str).head(10).tolist()
-            if match_count > 0 else []
-        )
-        conf = round(min(100.0, (match_count / max(1, orig_len)) * 100.0), 1) if match_count else 0.0
-
-        meta = {
-            "mode": "category_mapped",
-            "matchedKeywordCount": match_count,
-            "totalKeywordCount": orig_len,
-            "excludedKeywordCount": orig_len - match_count,
-            "mappingConfidence": conf,
-            "selectedCategories": selected,
-            "mappingMethod": "Token + bigram overlap with scoped product titles",
-            "topScopedPhrases": [k for k, _ in active_counts.most_common(8)],
-            "topMatchedKeywords": top_matched,
-            "scope_key": "|".join(selected) + "_kw",
-        }
-        return filtered_df, meta
 
 
     def get_keyword_classification(self) -> Optional[pd.DataFrame]:

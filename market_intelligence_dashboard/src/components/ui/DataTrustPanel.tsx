@@ -12,8 +12,8 @@ export function DataTrustPanel() {
     queryFn: api.getStatus,
   });
 
-  // Hide on the upload page
-  if (location.pathname === '/upload' || location.pathname === '/') return null;
+  // Hide on the upload page and consumer adoption simulator
+  if (location.pathname === '/upload' || location.pathname === '/' || location.pathname === '/consumer-adoption') return null;
   if (!statusResp?.data?.metadata) return null;
 
   const metadata = statusResp.data.metadata;

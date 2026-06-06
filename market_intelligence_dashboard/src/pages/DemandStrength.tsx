@@ -325,7 +325,6 @@ export default function DemandStrength() {
   // Safe data extraction - runs unconditionally, handles undefined gracefully
   const results = data?.data?.results || {};
   const keywordScope = data?.data?.keyword_scope;
-  const scopeLimitedMessage = results.scope_limited_message as string | undefined;
   const largestDemand = results.largest_demand_segment as MetricWithEvidence | undefined;
   const recommendedEntry = results.recommended_entry as MetricWithEvidence | undefined;
   const undervalued = results.most_undervalued_theme as MetricWithEvidence | undefined;
@@ -468,15 +467,6 @@ export default function DemandStrength() {
         <p className="text-[10px] font-mono text-muted-foreground mb-4 -mt-6">
           Active session: {sessionId}
         </p>
-      )}
-
-      {scopeLimitedMessage && (
-        <Card className="border-l-4 border-warning bg-warning/5 mb-6">
-          <CardContent className="p-4 text-sm text-warning flex items-start gap-3">
-            <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5" />
-            <span>{scopeLimitedMessage}</span>
-          </CardContent>
-        </Card>
       )}
 
       {/* Data quality panel */}

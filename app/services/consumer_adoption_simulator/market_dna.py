@@ -269,7 +269,7 @@ class MarketDNAEngine:
             "total_lost_revenue", "recoverable_revenue"
         ])
         raw["revenue_capture_rate"] = self._get(siei_r, [
-            "category_health", {}
+            "category_health",
         ])
         # Flatten revenue capture rate from nested object if needed
         if isinstance(raw["revenue_capture_rate"], dict):
@@ -290,6 +290,9 @@ class MarketDNAEngine:
         hhi_r = (hhi_result or {}).get("results", {})
         raw["hhi_score"] = self._get(hhi_r, ["hhi_score"])
         market_structure = hhi_r.get("market_structure", {})
+        # Guard: market_structure must be a dict for _get to work
+        if not isinstance(market_structure, dict):
+            market_structure = {}
         raw["market_concentration_type"] = self._get(market_structure, [
             "concentration_type", "structure_type"
         ])
@@ -313,10 +316,14 @@ class MarketDNAEngine:
         # ── Pricing ───────────────────────────────────────────────────────────
         price_r = (price_result or {}).get("results", {})
         mps = price_r.get("market_price_structure", {})
+        if not isinstance(mps, dict):
+            mps = {}
         raw["market_price_floor"] = mps.get("price_floor")
         raw["market_price_ceiling"] = mps.get("price_ceiling")
         raw["price_spread"] = mps.get("price_spread")
         sweet = price_r.get("market_sweet_spot", {})
+        if not isinstance(sweet, dict):
+            sweet = {}
         raw["sweet_spot_price"] = sweet.get("range_label")
         # Derive a numeric midpoint from sweet spot range_label if possible
         mid = self._parse_price_midpoint(sweet.get("range_label", ""))
@@ -390,9 +397,19 @@ class MarketDNAEngine:
 
     @staticmethod
     def _get(obj: Dict[str, Any], keys: List[str]) -> Optional[Any]:
-        """Return first non-None value from a list of candidate keys."""
+        """Return first non-None value from a list of candidate string keys.
+
+        Defensive: silently skips any key that is not a str/int (e.g. accidental
+        dict or list literals passed as fallback placeholders).
+        """
         for k in keys:
-            v = obj.get(k)
+            # Guard: only hashable scalar keys are valid dict lookup keys
+            if not isinstance(k, (str, int, float, bool)):
+                continue
+            try:
+                v = obj.get(k)
+            except TypeError:
+                continue
             if v is not None and v != "" and v != [] and v != {}:
                 return v
         return None

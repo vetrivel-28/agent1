@@ -122,9 +122,26 @@ def run_all_engines(top_n: int = DEFAULT_TOP_N) -> Dict[str, Any]:
     engines["finance"] = run_finance_intelligence(magnet_df, blackbox_df, demand_score=demand_score)
     analysis_cache.set_engine("finance", engines["finance"], cache_key)
 
+    from app.utils.scope_resolver import attach_scope_to_result
+    for name, result in engines.items():
+        page_map = {
+            "demand": "demand_strength",
+            "siei": "inbound_efficiency",
+            "hhi": "market_structure",
+            "demand_velocity": "demand_velocity",
+            "whitespace": "whitespace",
+            "finance": "finance_intelligence",
+        }
+        if isinstance(result, dict):
+            attach_scope_to_result(result, scope_meta, kw_meta, page_map.get(name))
+
+    prefixed_engines = {f"{name}_{cache_key}": v for name, v in engines.items()}
     snapshot = {
         "top_n": top_n,
-        "engines": engines,
+        "engines": prefixed_engines,
+        "cache_key": cache_key,
+        "scope_meta": scope_meta,
+        "kw_meta": kw_meta,
     }
     analysis_cache.set_snapshot(snapshot)
     logger.info("Full analysis run complete: %s engines", len(engines))

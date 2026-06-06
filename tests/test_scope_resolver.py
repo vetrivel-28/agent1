@@ -1,7 +1,7 @@
 import pandas as pd
 
 from app.services.dataset_registry import DatasetRegistry
-from app.utils.scope_resolver import enrich_scope_dict, filter_kc_to_magnet, compute_cache_key
+from app.utils.scope_resolver import enrich_scope_dict, filter_kc_to_magnet, compute_cache_key, build_data_scope
 
 
 def test_enrich_scope_dict_all_categories():
@@ -33,7 +33,8 @@ def test_filter_kc_to_magnet():
     assert len(filtered) == 2
 
 
-def test_scoped_magnet_filters_by_product_titles():
+def test_scoped_magnet_remains_full_universe_when_category_selected():
+    """Keywords must not be filtered by selected product category."""
     registry = DatasetRegistry()
     blackbox = pd.DataFrame({
         "Category": ["Sports & Outdoors", "Kitchen & Dining"],
@@ -57,11 +58,34 @@ def test_scoped_magnet_filters_by_product_titles():
     registry.set_category(["Sports & Outdoors"])
 
     scope = enrich_scope_dict(registry.get_category_scope())
-    scoped_bb, _ = registry.get_scoped_blackbox_df(scope)
+    scoped_bb, bb_meta = registry.get_scoped_blackbox_df(scope)
     scoped_magnet, kw_meta = registry.get_scoped_magnet_df(scope, scoped_bb)
 
+    assert len(scoped_bb) == 1
+    assert bb_meta["active_rows"] == 1
+    assert len(scoped_magnet) == len(magnet)
+    assert kw_meta["mode"] == "keyword_wide"
+    assert kw_meta["matchedKeywordCount"] == kw_meta["totalKeywordCount"] == 4
     keywords = set(scoped_magnet["Keyword Phrase"].astype(str).str.lower())
-    assert "pool table cloth" in keywords or "billiard felt" in keywords
-    assert kw_meta["mode"] == "category_mapped"
-    assert kw_meta["matchedKeywordCount"] < kw_meta["totalKeywordCount"]
-    assert "kitchen tablecloth" not in keywords
+    assert "kitchen tablecloth" in keywords
+
+
+def test_build_data_scope_labels():
+    scope_meta = {
+        "mode": "selected",
+        "selected_categories": ["Sports & Outdoors"],
+        "active_rows": 120,
+        "total_rows": 500,
+    }
+    kw_meta = {"totalKeywordCount": 11243, "mode": "keyword_wide"}
+    ds = build_data_scope(scope_meta, kw_meta)
+    assert "11,243" in ds["keyword_intelligence"]["description"]
+    assert "120" in ds["product_intelligence"]["description"]
+    assert "No category" in ds["keyword_intelligence"]["filtering"]
+
+
+def test_page_scope_registry_demand_is_keyword_global():
+    from app.utils.page_scope_registry import get_page_scope
+    spec = get_page_scope("demand_strength")
+    assert spec["keyword_scope"] == "global"
+    assert spec["category_dependency"] is False

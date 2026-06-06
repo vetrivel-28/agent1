@@ -200,10 +200,10 @@ export function Sidebar() {
         <NavGroup name="Pricing Intelligence" icon={Tags} items={pricingIntelligenceItems} />
 
         <div className="space-y-1 pt-2">
+          <NavItemLink item={{ name: 'Consumer Adoption Simulator', href: '/consumer-adoption', icon: Users }} />
           {bottomStandalone.map((item) => (
             <NavItemLink key={item.name} item={item} />
           ))}
-          <NavItemLink item={{ name: 'Consumer Adoption Simulator', href: '/consumer-adoption', icon: Users }} />
         </div>
       </nav>
       <div className="p-4 border-t">

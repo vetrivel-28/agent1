@@ -8,6 +8,7 @@ interface Opportunity {
   title?: string;
   type?: string;
   evidence?: string;
+  why_recommended?: string;
   action_title?: string;
   priority?: string;
   difficulty?: string;
@@ -75,7 +76,14 @@ export function RecommendedActions({ opportunities, onOpenEvidence }: Recommende
                         {actionText}
                         <ArrowRight className="w-4 h-4 text-muted-foreground opacity-0 -translate-x-2 group-hover:opacity-100 group-hover:translate-x-0 transition-all" />
                       </h4>
-                      <p className="text-sm text-muted-foreground mt-1">{opp.evidence}</p>
+                      {(opp.why_recommended || opp.evidence) && (
+                        <p className="text-sm text-muted-foreground mt-1">
+                          {opp.why_recommended && (
+                            <span><span className="font-semibold text-foreground/80">Why: </span>{opp.why_recommended}</span>
+                          )}
+                          {!opp.why_recommended && opp.evidence}
+                        </p>
+                      )}
                     </div>
                   </div>
 

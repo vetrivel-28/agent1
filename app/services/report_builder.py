@@ -298,6 +298,8 @@ def build_report(
     blackbox_df: Any = None,
     magnet_df: Any = None,
     top_n: int = 10,
+    scope_meta: Optional[Dict[str, Any]] = None,
+    kw_meta: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Aggregate all engine results into a market intelligence report.
@@ -655,11 +657,16 @@ def build_report(
         datasets_loaded.append('blackbox')
     if magnet_df is not None and not getattr(magnet_df, 'empty', True):
         datasets_loaded.append('magnet')
+    keyword_row_count = len(magnet_df) if magnet_df is not None else 0
+    product_row_count = len(blackbox_df) if blackbox_df is not None else 0
     dataset_row_counts = {
-        "keyword_rows": len(magnet_df) if magnet_df is not None else 0,
-        "product_rows": len(blackbox_df) if blackbox_df is not None else 0,
+        "keyword_rows": keyword_row_count,
+        "product_rows": product_row_count,
         "brand_count": total_brands,
     }
+
+    from app.utils.scope_resolver import build_data_scope
+    data_scope = build_data_scope(scope_meta or {}, kw_meta or {})
 
     # -----------------------------------------------------------------------
     # Intelligence Modules mapping
@@ -683,7 +690,8 @@ def build_report(
         "total_revenue": f"${total_market_revenue:,.0f}" if total_market_revenue > 0 else "N/A",
         "total_products": total_products,
         "total_brands": total_brands,
-        "total_keywords": len(magnet_df) if magnet_df is not None else 0,
+        "total_keywords": keyword_row_count,
+        "data_scope_label": data_scope["keyword_intelligence"]["description"],
         "top_3_share": f"{top_3_share:.1f}%" if top_3_share else "N/A",
         "hhi_score": f"{hhi_score:.0f}" if hhi_score else "N/A",
         "median_price": f"${median_price:.2f}" if median_price > 0 else "N/A",
@@ -750,20 +758,24 @@ def build_report(
             },
             "total_keywords": {
                 "title": "Demand Keywords — Evidence",
-                "displayed_value": len(magnet_df) if magnet_df is not None else 0,
-                "business_summary": "Keyword phrases driving demand.",
+                "displayed_value": keyword_row_count,
+                "business_summary": (
+                    "Full keyword universe from Magnet — not restricted by selected product category."
+                ),
                 "source_datasets": ["Magnet Keywords"],
                 "source_columns": ["Keyword Phrase", "Search Volume"],
                 "dataset_session_id": "",
                 "counts": {
-                    "Total Rows Processed": len(magnet_df) if magnet_df is not None else 0,
-                    "Valid Keyword Rows": len(magnet_df) if magnet_df is not None else 0
+                    "Total Keyword Rows": keyword_row_count,
+                    "Category Filter Applied": "No",
+                    "Product Rows (scoped)": product_row_count,
                 },
-                "formula": "Total Keywords = COUNT(rows)",
+                "formula": "Total Keywords = COUNT(all Magnet rows)",
                 "calculation_steps": [
-                    "1. Count rows in Magnet dataset.",
-                    f"2. Result: {len(magnet_df) if magnet_df is not None else 0} phrases."
-                ]
+                    "1. Load entire Magnet keyword dataset.",
+                    "2. Do not apply category or subcategory filters.",
+                    f"3. Result: {keyword_row_count:,} keyword phrases.",
+                ],
             },
             "hhi_score": {
                 "title": "HHI Concentration — Evidence",
@@ -1051,7 +1063,60 @@ def build_report(
         
     raw_insights.sort(key=lambda x: x["usefulness_score"], reverse=True)
     key_insights = raw_insights[:5]
-    
+    for insight in key_insights:
+        insight["description"] = insight.get("business_summary", "")
+        insight["why_recommended"] = insight.get("suggested_action", "")
+        conf = insight.get("confidence", 8)
+        ev = insight.get("evidence")
+        if isinstance(ev, dict):
+            ev["confidence_score"] = round(float(conf) * 10, 1)
+
+    # -----------------------------------------------------------------------
+    # Revenue vulnerability (keyword demand concentration → product revenue exposure)
+    # -----------------------------------------------------------------------
+    revenue_vulnerability: Dict[str, Any] = {}
+    if magnet_df is not None and not getattr(magnet_df, "empty", True) and total_market_revenue > 0:
+        sv_col = _find_column(magnet_df, ["Search Volume", "search volume", "SV"])
+        if sv_col:
+            sv_series = _to_numeric_series(magnet_df[sv_col])
+            total_sv = float(sv_series.sum())
+            if total_sv > 0:
+                hotspot_sv = float(hotspot_volume or 0)
+                dependency_pct = round(min(100.0, (hotspot_sv / total_sv) * 100.0), 1)
+                if dependency_pct >= 15:
+                    cluster_label = hotspot_name if hotspot_name != "N/A" else "top demand cluster"
+                    vuln_reason = (
+                        f"{dependency_pct:.1f}% of total keyword search volume is concentrated in "
+                        f"the '{cluster_label}' cluster. A shift in this demand cluster can affect "
+                        f"category revenue captured by scoped products."
+                    )
+                    revenue_vulnerability = {
+                        "dependency_percentage": dependency_pct,
+                        "at_risk_revenue": round(total_market_revenue * (dependency_pct / 100.0), 2),
+                        "reason": vuln_reason,
+                        "evidence": {
+                            "title": "Revenue Vulnerability Evidence",
+                            "displayed_value": f"{dependency_pct:.1f}%",
+                            "business_summary": vuln_reason,
+                            "source_datasets": ["Magnet Keywords", "BlackBox Products"],
+                            "source_columns": ["Search Volume", "Revenue"],
+                            "confidence_score": 82,
+                            "counts": {
+                                "Total Keyword Search Volume": f"{total_sv:,.0f}",
+                                "Hotspot Cluster Volume": f"{hotspot_sv:,.0f}",
+                                "Scoped Product Revenue": f"${total_market_revenue:,.0f}",
+                                "Products in Scope": product_row_count,
+                            },
+                            "formula": "At-Risk Revenue ≈ Total Scoped Revenue × (Hotspot SV / Total SV)",
+                            "calculation_steps": [
+                                f"1. Sum search volume across {keyword_row_count:,} keywords.",
+                                f"2. Largest demand cluster '{cluster_label}' = {hotspot_sv:,.0f} SV.",
+                                f"3. Concentration = {dependency_pct:.1f}% of keyword demand.",
+                                f"4. Applied to ${total_market_revenue:,.0f} scoped product revenue.",
+                            ],
+                        },
+                    }
+
     # -----------------------------------------------------------------------
     # Entry Strategy Section
     # -----------------------------------------------------------------------
@@ -1090,6 +1155,10 @@ def build_report(
             "type": "Optimize Pricing",
             "title": best_price,
             "action_title": f"Validate margin strategy for {best_price} price band",
+            "why_recommended": (
+                f"The {best_price} band drives {revenue_band_share:.1f}% of scoped product revenue "
+                f"(${best_price_revenue:,.0f}); priority score {priority_val} from revenue share and demand signals."
+            ),
             "priority": "High" if priority_val > 70 else "Medium",
             "difficulty": "Easy" if diff_val < 40 else "Medium",
             "priority_score": priority_val,
@@ -1135,6 +1204,10 @@ def build_report(
             "type": "Benchmark Listing",
             "title": prod_title,
             "action_title": f"Benchmark against verified top-performing product: {prod_title}",
+            "why_recommended": (
+                f"Top BSR efficiency ({eff_score}/100) in scoped products "
+                f"with ${prod_rev:,.0f} revenue — replicate listing structure and conversion drivers."
+            ),
             "priority": "Medium",
             "difficulty": "Easy",
             "priority_score": priority_val,
@@ -1242,8 +1315,12 @@ def build_report(
         "data_audit": {
             "products_analyzed": total_products,
             "brands_analyzed": total_brands,
-            "keywords_analyzed": len(magnet_df) if magnet_df is not None else 0
+            "keywords_analyzed": keyword_row_count,
+            "product_scope": data_scope["product_intelligence"]["description"],
+            "keyword_scope": data_scope["keyword_intelligence"]["description"],
         },
+        "data_scope": data_scope,
+        "revenue_vulnerability": revenue_vulnerability,
         "overview_verification": {
             "revenue_total_parent_level": total_market_revenue,
             "product_count": total_products,

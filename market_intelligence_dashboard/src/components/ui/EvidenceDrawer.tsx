@@ -25,6 +25,12 @@ export interface EvidenceData {
   };
   classification_reason?: string;
   confidence_note?: string;
+  confidence_score?: number;
+  source_page?: string;
+  data_scope?: {
+    keyword_intelligence?: { description?: string; filtering?: string };
+    product_intelligence?: { description?: string; filtering?: string };
+  };
   data_quality_notes?: string[];
   llm_used?: boolean;
   /** Left panel: plain-English explanation */
@@ -132,9 +138,19 @@ export function EvidenceDrawer({ evidence, isOpen, onClose }: EvidenceDrawerProp
             <h2 className="text-section-title text-foreground">
               {evidence.title || 'Evidence Detail'}
             </h2>
-            <div className="flex items-center gap-2 mt-1.5 text-xs font-medium text-muted-foreground">
+            <div className="flex items-center gap-2 mt-1.5 text-xs font-medium text-muted-foreground flex-wrap">
               <Database className="w-3.5 h-3.5" />
               <span>Evidence Audit Trail</span>
+              {evidence.source_page && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted border border-border/50">
+                  {evidence.source_page}
+                </span>
+              )}
+              {evidence.confidence_score != null && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-700 dark:text-blue-400">
+                  Confidence: {evidence.confidence_score}%
+                </span>
+              )}
             </div>
           </div>
           <button
@@ -167,13 +183,29 @@ export function EvidenceDrawer({ evidence, isOpen, onClose }: EvidenceDrawerProp
               </div>
               
               {/* Scope Proof Block */}
-              {(cScope || evidence.keyword_scope) && (
+              {(cScope || evidence.keyword_scope || evidence.data_scope) && (
                 <div className="p-4 bg-muted/30 rounded-xl border border-border/50 text-sm">
                   <h4 className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-3 flex items-center gap-2">
                     <Database className="w-3.5 h-3.5" /> Calculation Scope
                   </h4>
                   
                   {/* Category Scope */}
+                  {evidence.data_scope && (
+                    <div className="space-y-2 mb-4 pb-4 border-b border-border/50">
+                      {evidence.data_scope.keyword_intelligence?.description && (
+                        <div className="text-xs">
+                          <span className="text-muted-foreground block">Keywords</span>
+                          <span className="font-medium">{evidence.data_scope.keyword_intelligence.description}</span>
+                        </div>
+                      )}
+                      {evidence.data_scope.product_intelligence?.description && (
+                        <div className="text-xs">
+                          <span className="text-muted-foreground block">Products</span>
+                          <span className="font-medium">{evidence.data_scope.product_intelligence.description}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
                   {cScope && (
                     <div className="space-y-2 mb-4 pb-4 border-b border-border/50">
                       <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Category Scope</p>
@@ -207,21 +239,30 @@ export function EvidenceDrawer({ evidence, isOpen, onClose }: EvidenceDrawerProp
                   )}
 
                   {/* Keyword Scope */}
-                  {evidence.keyword_scope && evidence.keyword_scope.mode === 'category_mapped' && (
+                  {evidence.keyword_scope && (
                     <div className="space-y-2">
                       <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Keyword Scope</p>
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">Total Magnet Keywords</span>
                         <span className="font-mono text-muted-foreground">{evidence.keyword_scope.totalKeywordCount?.toLocaleString() ?? 0}</span>
                       </div>
-                      <div className="flex justify-between">
-                        <span className="text-foreground font-medium">Category-Mapped Keywords</span>
-                        <span className="font-mono font-bold text-emerald-500">{evidence.keyword_scope.matchedKeywordCount?.toLocaleString() ?? 0}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground text-xs">Excluded Keywords</span>
-                        <span className="font-mono text-xs text-muted-foreground">{evidence.keyword_scope.excludedKeywordCount?.toLocaleString() ?? 0}</span>
-                      </div>
+                      {evidence.keyword_scope.mode === 'category_mapped' ? (
+                        <>
+                          <div className="flex justify-between">
+                            <span className="text-foreground font-medium">Category-Mapped Keywords</span>
+                            <span className="font-mono font-bold text-emerald-500">{evidence.keyword_scope.matchedKeywordCount?.toLocaleString() ?? 0}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground text-xs">Excluded Keywords</span>
+                            <span className="font-mono text-xs text-muted-foreground">{evidence.keyword_scope.excludedKeywordCount?.toLocaleString() ?? 0}</span>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="flex justify-between">
+                          <span className="text-foreground font-medium">Active Keywords</span>
+                          <span className="font-mono font-bold text-emerald-500">{evidence.keyword_scope.matchedKeywordCount?.toLocaleString() ?? evidence.keyword_scope.totalKeywordCount?.toLocaleString() ?? 0}</span>
+                        </div>
+                      )}
                       <div className="flex justify-between">
                         <span className="text-muted-foreground text-xs">Mapping Confidence</span>
                         <span className="font-mono text-xs text-muted-foreground">{evidence.keyword_scope.mappingConfidence?.toFixed(1) ?? 0}%</span>

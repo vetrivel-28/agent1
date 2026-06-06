@@ -74,24 +74,93 @@ def filter_kc_to_magnet(
     return filtered
 
 
+def build_data_scope(scope_meta: Dict[str, Any], kw_meta: Dict[str, Any]) -> Dict[str, Any]:
+    """Transparent labels for keyword-wide vs category-scoped product analysis."""
+    kw_total = int(kw_meta.get("totalKeywordCount") or kw_meta.get("matchedKeywordCount") or 0)
+    prod_active = int(scope_meta.get("active_rows") or scope_meta.get("blackbox_rows_active") or 0)
+    prod_total = int(scope_meta.get("total_rows") or scope_meta.get("blackbox_rows_total") or 0)
+    mode = scope_meta.get("mode", "all")
+    selected = scope_meta.get("selected_categories") or []
+
+    if mode == "selected" and selected:
+        cat_label = ", ".join(selected[:3])
+        if len(selected) > 3:
+            cat_label += f" (+{len(selected) - 3} more)"
+        product_filter = f"Category filter: {cat_label}"
+        product_description = (
+            f"Using {prod_active:,} products from selected categor"
+            f"{'ies' if len(selected) != 1 else 'y'} ({prod_total:,} total in dataset)"
+        )
+    else:
+        product_filter = "No category filter (full product dataset)"
+        product_description = f"Using {prod_active:,} products from entire product dataset"
+
+    return {
+        "keyword_intelligence": {
+            "universe": "keyword",
+            "row_count": kw_total,
+            "filtering": "No category or subcategory restrictions",
+            "description": (
+                f"Using {kw_total:,} keywords from entire keyword dataset"
+                if kw_total else "Keyword dataset not loaded"
+            ),
+        },
+        "product_intelligence": {
+            "universe": "product",
+            "row_count": prod_active,
+            "total_rows": prod_total,
+            "filtering": product_filter,
+            "description": product_description,
+        },
+    }
+
+
 def attach_scope_to_result(
     result: Dict[str, Any],
     scope_meta: Dict[str, Any],
     kw_meta: Dict[str, Any],
+    page_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     result["scope"] = scope_meta
     result["keyword_scope"] = kw_meta
-    total = kw_meta.get("totalKeywordCount") or 0
-    matched = kw_meta.get("matchedKeywordCount") or 0
-    if kw_meta.get("mode") == "category_mapped" and total > 0 and matched < total:
-        msg = (
-            f"Analysis limited for selected category — only {matched:,} of {total:,} "
-            f"Magnet keywords matched scoped products."
-        )
-        results = result.setdefault("results", {})
-        if isinstance(results, dict):
-            results["scope_limited_message"] = msg
+    data_scope = build_data_scope(scope_meta, kw_meta)
+    results = result.setdefault("results", {})
+    if isinstance(results, dict):
+        results["data_scope"] = data_scope
+    if page_id:
+        from app.utils.page_scope_registry import get_page_scope
+        spec = get_page_scope(page_id)
+        if spec:
+            result["page_scope"] = {
+                "page_id": page_id,
+                "page": spec.get("page"),
+                "route": spec.get("route"),
+                "keyword_scope": spec.get("keyword_scope"),
+                "product_scope": spec.get("product_scope"),
+                "category_dependency": spec.get("category_dependency"),
+                "subcategory_dependency": spec.get("subcategory_dependency"),
+                "methodology": spec.get("methodology"),
+            }
     return result
+
+
+def enrich_evidence(
+    evidence: Optional[Dict[str, Any]],
+    *,
+    source_page: str,
+    scope_meta: Dict[str, Any],
+    kw_meta: Dict[str, Any],
+    confidence_score: Optional[float] = None,
+) -> Optional[Dict[str, Any]]:
+    """Attach traceability fields required by evidence drawers."""
+    if not evidence or not isinstance(evidence, dict):
+        return evidence
+    out = dict(evidence)
+    out["source_page"] = source_page
+    out["data_scope"] = build_data_scope(scope_meta, kw_meta)
+    if confidence_score is not None and out.get("confidence_score") is None:
+        out["confidence_score"] = confidence_score
+    return out
 
 
 def resolve_analysis_datasets(registry, scope_payload: Dict[str, Any]) -> Tuple[
@@ -105,6 +174,9 @@ def resolve_analysis_datasets(registry, scope_payload: Dict[str, Any]) -> Tuple[
     scope_dict = enrich_scope_dict(scope_payload)
     blackbox_df, scope_meta = registry.get_scoped_blackbox_df(scope_dict)
     magnet_df, kw_meta = registry.get_scoped_magnet_df(scope_dict, blackbox_df)
-    kc_df = filter_kc_to_magnet(registry.get_keyword_classification(), magnet_df)
+    full_magnet = registry.get_magnet()
+    # Fix: use is_empty_dataframe to safely check DataFrame status
+    magnet_for_kc = full_magnet if full_magnet is not None and not full_magnet.empty else magnet_df
+    kc_df = filter_kc_to_magnet(registry.get_keyword_classification(), magnet_for_kc)
     cache_key = compute_cache_key(scope_meta, kw_meta)
     return blackbox_df, magnet_df, kc_df, scope_meta, kw_meta, cache_key

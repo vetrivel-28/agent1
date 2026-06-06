@@ -66,8 +66,8 @@ function App() {
               <Route path="product-intelligence" element={<ProductIntelligence />} />
               <Route path="price-elasticity" element={<PriceElasticity />} />
               <Route path="finance-intelligence" element={<FinanceIntelligence />} />
-              <Route path="market-report" element={<MarketReport />} />
               <Route path="consumer-adoption" element={<ConsumerAdoptionSimulator />} />
+              <Route path="market-report" element={<MarketReport />} />
             </Route>
           </Routes>
         </Suspense>

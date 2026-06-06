@@ -418,6 +418,24 @@ def remove_dataset(dataset_type: str):
 
 
 # =========================================================================
+# Data scope registry (single source of truth for UI + audit)
+# =========================================================================
+
+@router.get(
+    "/page-data-scope",
+    response_model=StandardResponse,
+    summary="Page data scope registry",
+    description="Returns the canonical keyword/product scope declaration for each dashboard page.",
+)
+def page_data_scope():
+    from app.utils.page_scope_registry import PAGE_SCOPE_REGISTRY
+    return format_response({
+        "status": "success",
+        "pages": PAGE_SCOPE_REGISTRY,
+    })
+
+
+# =========================================================================
 # Analysis Engines
 # =========================================================================
 
@@ -450,7 +468,7 @@ def demand_strength(scope: CategoryScopePayload, top_n: int = 10):
     if cached:
         return format_response(cached)
     result = demand_engine.run(magnet_df, blackbox_df, top_n=top_n, keyword_classification_df=kc_df)
-    attach_scope_to_result(result, scope_meta, kw_meta)
+    attach_scope_to_result(result, scope_meta, kw_meta, "demand_strength")
     analysis_cache.set_engine("demand", result, cache_key)
     logger.info(
         f"Demand Strength complete — status={result['status']}, "
@@ -596,7 +614,7 @@ def demand_velocity(scope: CategoryScopePayload, top_n: int = 10):
     if cached:
         return format_response(cached)
     result = demand_velocity_engine.run(magnet_df, blackbox_df, top_n=top_n)
-    attach_scope_to_result(result, scope_meta, kw_meta)
+    attach_scope_to_result(result, scope_meta, kw_meta, "demand_velocity")
     analysis_cache.set_engine("demand_velocity", result, cache_key)
     return format_response(result)
 
@@ -623,7 +641,7 @@ def search_intent_efficiency(scope: CategoryScopePayload, top_n: int = 10):
     if cached:
         return format_response(cached)
     result = siei_engine.run(magnet_df, keyword_classification_df=kc_df, top_n=top_n)
-    attach_scope_to_result(result, scope_meta, kw_meta)
+    attach_scope_to_result(result, scope_meta, kw_meta, "inbound_efficiency")
     analysis_cache.set_engine("siei", result, cache_key)
     return format_response(result)
 
@@ -691,7 +709,7 @@ def whitespace_opportunities(scope: CategoryScopePayload, top_n: int = 15):
         blackbox_df if not is_empty_dataframe(blackbox_df) else None,
         top_n=top_n,
     )
-    attach_scope_to_result(result, scope_meta, kw_meta)
+    attach_scope_to_result(result, scope_meta, kw_meta, "whitespace")
     analysis_cache.set_engine("whitespace", result, cache_key)
     logger.info(
         f"Whitespace Opportunity complete — status={result['status']}, "
@@ -708,11 +726,11 @@ def whitespace_opportunities(scope: CategoryScopePayload, top_n: int = 15):
         "Duplicates are removed and the same segment classification logic as the chart is used."
     ),
 )
-def revenue_opportunity_segment_keywords(segment_name: str):
+def revenue_opportunity_segment_keywords(segment_name: str, scope_key: str = "all"):
     logger.info(f"Revenue Opportunity keywords requested for segment={segment_name}")
 
     # ── Primary path: read from the cached whitespace run (exact same segments) ──
-    cached_ws = analysis_cache.get_engine("whitespace")
+    cached_ws = analysis_cache.get_engine("whitespace", scope_key)
     if cached_ws and cached_ws.get("status") == "success":
         entry_segments = cached_ws.get("results", {}).get("entry_segments", [])
         # Exact match first, then case-insensitive fallback
@@ -1013,16 +1031,16 @@ def processing_status():
 def product_intelligence(scope: CategoryScopePayload, top_n: int = 5, price_tolerance_pct: float = 17.5):
     logger.info(f"Product Intelligence requested (top_n={top_n})")
 
-    blackbox_df, scope_meta = registry.get_scoped_blackbox_df(scope.dict() if hasattr(scope, 'dict') else scope)
-    kc_df = registry.get_keyword_classification()
+    from app.utils.scope_resolver import attach_scope_to_result, build_data_scope
+    blackbox_df, _magnet, kc_df, scope_meta, kw_meta, cache_key = _resolve_context(scope)
 
     if is_empty_dataframe(blackbox_df):
         return _datasets_not_loaded("Product Intelligence", "blackbox")
 
-    direct_cached = analysis_cache.get_engine("direct_competitors")
-    substitute_cached = analysis_cache.get_engine("substitute")
-    complement_cached = analysis_cache.get_engine("complement")
-    bundle_cached = analysis_cache.get_engine("bundle")
+    direct_cached = analysis_cache.get_engine("direct_competitors", cache_key)
+    substitute_cached = analysis_cache.get_engine("substitute", cache_key)
+    complement_cached = analysis_cache.get_engine("complement", cache_key)
+    bundle_cached = analysis_cache.get_engine("bundle", cache_key)
 
     direct_result = direct_cached or direct_competitor_engine.run(
         None,
@@ -1069,6 +1087,13 @@ def product_intelligence(scope: CategoryScopePayload, top_n: int = 5, price_tole
             "substitutes": substitute_result.get("results", {}),
             "complements": complement_result.get("results", {}),
             "bundle_opportunities": bundle_result.get("results", {}),
+            "data_scope": build_data_scope(scope_meta, kw_meta),
+        },
+        "page_scope": {
+            "page_id": "product_intelligence",
+            "keyword_scope": "global",
+            "product_scope": "filtered",
+            "category_dependency": True,
         },
         "engine_outputs": {
             "direct_competitors": direct_result,
@@ -1120,7 +1145,7 @@ def finance_intelligence(scope: CategoryScopePayload, top_n: int = 10):
         if demand_res.get("status") == "success":
             demand_score = demand_res.get("results", {}).get("overall_demand_score")
     result = run_finance_intelligence(magnet_df, blackbox_df, demand_score=demand_score)
-    attach_scope_to_result(result, scope_meta, kw_meta)
+    attach_scope_to_result(result, scope_meta, kw_meta, "finance_intelligence")
     analysis_cache.set_engine("finance", result, cache_key)
     logger.info(
         f"Finance Intelligence complete — status={result['status']}, "
@@ -1146,16 +1171,27 @@ def _build_market_report(scope: CategoryScopePayload, top_n: int = 10):
     """Build report from category-scoped datasets and scoped engine cache."""
     from app.utils.scope_resolver import attach_scope_to_result
 
-    logger.info(f"Building scoped market report (top_n={top_n})")
-    blackbox_df, magnet_df, kc_df, scope_meta, kw_meta, cache_key = _resolve_context(scope)
+    logger.info(f"[MARKET REPORT] Building scoped market report (top_n={top_n})")
+    
+    try:
+        blackbox_df, magnet_df, kc_df, scope_meta, kw_meta, cache_key = _resolve_context(scope)
+    except Exception as e:
+        logger.exception(f"[MARKET REPORT] Failed to resolve context: {str(e)}")
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to resolve analysis context: {str(e)}",
+        )
 
     if is_empty_dataframe(blackbox_df):
+        logger.warning("[MARKET REPORT] BlackBox dataset not loaded")
         return _datasets_not_loaded("Market Report", "blackbox")
 
     logger.info(
-        "Scoped datasets: blackbox=%s, magnet=%s, cache_key=%s",
+        "[MARKET REPORT] Datasets loaded: blackbox=%d rows, magnet=%d rows, kc=%d rows, cache_key=%s",
         len(blackbox_df) if blackbox_df is not None else 0,
         len(magnet_df) if magnet_df is not None else 0,
+        len(kc_df) if kc_df is not None else 0,
         cache_key,
     )
 
@@ -1238,6 +1274,7 @@ def _build_market_report(scope: CategoryScopePayload, top_n: int = 10):
         return engines.get(key) or {}
 
     try:
+        logger.info("[MARKET REPORT] Building report from engine outputs...")
         report = build_report(
             demand_result=_eng("demand"),
             sales_result=_eng("sales_momentum"),
@@ -1256,14 +1293,17 @@ def _build_market_report(scope: CategoryScopePayload, top_n: int = 10):
             blackbox_df=blackbox_df,
             magnet_df=magnet_df,
             top_n=top_n,
+            scope_meta=scope_meta,
+            kw_meta=kw_meta,
         )
         if report.get("results") is not None:
             report["results"]["engine_outputs"] = engines
             report["results"]["scope"] = scope_meta
             report["results"]["keyword_scope"] = kw_meta
+        logger.info("[MARKET REPORT] Report generation completed successfully")
         return format_response(report)
     except Exception as e:
-        logger.exception(f"Market report generation failed: {str(e)}")
+        logger.exception(f"[MARKET REPORT] Report generation failed: {str(e)}")
         from fastapi import HTTPException
         raise HTTPException(
             status_code=500,
@@ -1309,10 +1349,13 @@ def market_report(scope: CategoryScopePayload, top_n: int = 10):
     ),
 )
 def overview_verification(top_n: int = 10):
-    blackbox_df = registry.get_blackbox()
-    magnet_df = registry.get_magnet()
+    from app.utils.scope_resolver import scope_from_registry
+    scope_dict = scope_from_registry(registry.get_category_scope())
+    blackbox_df, magnet_df, _kc, scope_meta, kw_meta, cache_key = _resolve_context(
+        CategoryScopePayload(**scope_dict)
+    )
     if is_empty_dataframe(blackbox_df) or is_empty_dataframe(magnet_df):
-        return _datasets_not_loaded("Overview Verification", "blackbox and magnet")
+        return _datasets_not_loaded("Overview Verification", "scoped blackbox and magnet")
 
     parent_revenue_col = _find_column(blackbox_df, ["Parent Level Revenue", "Revenue"])
     brand_col = _find_column(blackbox_df, ["Brand", "Brand Name"])
@@ -1478,9 +1521,11 @@ def _datasets_not_loaded(metric_name: str, required: str) -> dict:
 def consumer_adoption_simulator(scope: CategoryScopePayload, population_size: int = 1000):
     logger.info("Consumer Adoption Simulator requested (population=%d)", population_size)
 
-    # ── Collect cached engine results ─────────────────────────────────────────
+    from app.utils.scope_resolver import build_data_scope
+    _bb, _mag, _kc, scope_meta, kw_meta, cache_key = _resolve_context(scope)
+
     def _cached(key: str):
-        return analysis_cache.get_engine(key, scope.scope_key) or analysis_cache.get_engine(key)
+        return analysis_cache.get_engine(key, cache_key)
 
     demand_result          = _cached("demand")
     demand_velocity_result = _cached("demand_velocity")
@@ -1509,6 +1554,11 @@ def consumer_adoption_simulator(scope: CategoryScopePayload, population_size: in
             PsychographicClusterEngine,
             AdoptionSimulationEngine,
             ResistanceAnalysisEngine,
+            ScenarioTestingEngine,
+            MarketStressTestEngine,
+            SegmentStabilityEngine,
+            MarketRiskEngine,
+            SimulationConfidenceEngine,
         )
 
         # 1. Build MarketDNA
@@ -1539,61 +1589,29 @@ def consumer_adoption_simulator(scope: CategoryScopePayload, population_size: in
         resistance_engine = ResistanceAnalysisEngine()
         resistance_results = resistance_engine.analyse(clusters, dna)
 
-        # 6. Build insight context and generate insights
-        from app.services.consumer_adoption_simulator.insight_engine import (
-            InsightContextBuilder,
-            SimulationInsightEngine,
-        )
-        population_summary_dict = {
-            "total_consumers":            len(consumers),
-            "num_psychographic_segments": len(clusters),
-            "avg_purchase_intent":        round(sum(a.purchase_intent for a in adoption_results) / max(len(adoption_results), 1), 2),
-            "avg_conversion_probability": round(sum(a.conversion_probability for a in adoption_results) / max(len(adoption_results), 1), 4),
-            "avg_trust_score":            round(sum(a.trust_score for a in adoption_results) / max(len(adoption_results), 1), 2),
-            "avg_emotional_resonance":    round(sum(a.emotional_resonance for a in adoption_results) / max(len(adoption_results), 1), 2),
-            "avg_resistance_index":       round(sum(r.resistance_index for r in resistance_results) / max(len(resistance_results), 1), 2),
-            "dominant_channel":           "Amazon",
-        }
-        # Merge enriched segments for context builder
-        resistance_by_id_tmp = {r.cluster_id: r.to_dict() for r in resistance_results}
-        segments_for_insight = []
-        for cl in clusters:
-            ar_match = next((a for a in adoption_results if a.cluster_id == cl.cluster_id), None)
-            if ar_match:
-                seg = ar_match.to_dict()
-                seg["resistance"] = resistance_by_id_tmp.get(cl.cluster_id, {})
-                seg["motivations"] = cl.motivations
-                seg["objections"]  = cl.objections
-                seg["dominant_traits"] = cl.dominant_traits
-                seg["primary_theme"]   = cl.primary_theme
-                segments_for_insight.append(seg)
-
-        ctx_builder  = InsightContextBuilder()
-        insight_ctx  = ctx_builder.build(
-            market_dna=dna.to_dict(),
-            population_summary=population_summary_dict,
-            psychographic_segments=segments_for_insight,
-        )
-        insight_engine = SimulationInsightEngine()
-        insight_output = insight_engine.generate(insight_ctx)
-
-        # ── Build response ─────────────────────────────────────────────────────
-        # Merge adoption + resistance by cluster_id for convenience
+        # 6. Build enriched segments (needed for both response and insight context)
         resistance_by_id = {r.cluster_id: r.to_dict() for r in resistance_results}
+        cluster_meta_by_id = {cl.cluster_id: cl for cl in clusters}
 
         enriched_segments = []
         for ar in adoption_results:
             enriched = ar.to_dict()
             enriched["resistance"] = resistance_by_id.get(ar.cluster_id, {})
+            cl = cluster_meta_by_id.get(ar.cluster_id)
+            if cl:
+                enriched["motivations"]    = cl.motivations
+                enriched["objections"]     = cl.objections
+                enriched["dominant_traits"]= cl.dominant_traits
+                enriched["primary_theme"]  = cl.primary_theme
             enriched_segments.append(enriched)
 
-        # Population-level summary statistics
-        total_pop = len(consumers)
-        avg_intent        = round(sum(a.purchase_intent        for a in adoption_results) / max(len(adoption_results), 1), 2)
-        avg_conversion    = round(sum(a.conversion_probability for a in adoption_results) / max(len(adoption_results), 1), 4)
-        avg_trust         = round(sum(a.trust_score            for a in adoption_results) / max(len(adoption_results), 1), 2)
-        avg_resistance    = round(sum(r.resistance_index       for r in resistance_results) / max(len(resistance_results), 1), 2)
-        avg_resonance     = round(sum(a.emotional_resonance    for a in adoption_results) / max(len(adoption_results), 1), 2)
+        # Population-level summary statistics (used in both response and insight context)
+        total_pop      = len(consumers)
+        avg_intent     = round(sum(a.purchase_intent        for a in adoption_results) / max(len(adoption_results), 1), 2)
+        avg_conversion = round(sum(a.conversion_probability for a in adoption_results) / max(len(adoption_results), 1), 4)
+        avg_trust      = round(sum(a.trust_score            for a in adoption_results) / max(len(adoption_results), 1), 2)
+        avg_resistance = round(sum(r.resistance_index       for r in resistance_results) / max(len(resistance_results), 1), 2)
+        avg_resonance  = round(sum(a.emotional_resonance    for a in adoption_results) / max(len(adoption_results), 1), 2)
 
         channel_votes: dict = {}
         for a in adoption_results:
@@ -1609,6 +1627,71 @@ def consumer_adoption_simulator(scope: CategoryScopePayload, population_size: in
             a.to_dict() for a in adoption_results if a.purchase_intent >= 65
         ][:5]
 
+        # 7. Generate AI insights from enriched simulation data
+        from app.services.consumer_adoption_simulator.insight_engine import (
+            InsightContextBuilder,
+            SimulationInsightEngine,
+        )
+        population_summary_dict = {
+            "total_consumers":            total_pop,
+            "num_psychographic_segments": len(clusters),
+            "avg_purchase_intent":        avg_intent,
+            "avg_conversion_probability": avg_conversion,
+            "avg_trust_score":            avg_trust,
+            "avg_emotional_resonance":    avg_resonance,
+            "avg_resistance_index":       avg_resistance,
+            "dominant_channel":           dominant_channel,
+            "channel_distribution":       channel_votes,
+        }
+        ctx_builder  = InsightContextBuilder()
+        insight_ctx  = ctx_builder.build(
+            market_dna=dna.to_dict(),
+            population_summary=population_summary_dict,
+            psychographic_segments=enriched_segments,
+        )
+        insight_engine_obj = SimulationInsightEngine()
+        insight_output = insight_engine_obj.generate(insight_ctx)
+
+        # 8. Calculate simulation confidence scores
+        confidence_engine = SimulationConfidenceEngine()
+        confidence_output = confidence_engine.calculate(
+            dna_dict=dna.to_dict(),
+            population_summary=population_summary_dict,
+            enriched_segments=enriched_segments,
+            data_completeness=dna.data_completeness,
+        )
+
+        # 9. Run scenario testing
+        scenario_engine = ScenarioTestingEngine()
+        scenario_output = scenario_engine.run(
+            dna_dict=dna.to_dict(),
+            enriched_segments=enriched_segments,
+            population_summary=population_summary_dict,
+        )
+
+        # 10. Run market stress testing
+        stress_test_engine = MarketStressTestEngine()
+        stress_test_output = stress_test_engine.run(
+            dna_dict=dna.to_dict(),
+            population_summary=population_summary_dict,
+            enriched_segments=enriched_segments,
+        )
+
+        # 11. Analyze segment stability
+        stability_engine = SegmentStabilityEngine()
+        stability_output = stability_engine.analyse(
+            enriched_segments=enriched_segments,
+            dna_dict=dna.to_dict(),
+        )
+
+        # 12. Calculate market risk
+        risk_engine = MarketRiskEngine()
+        risk_output = risk_engine.calculate(
+            dna_dict=dna.to_dict(),
+            population_summary=population_summary_dict,
+            enriched_segments=enriched_segments,
+        )
+
         return format_response({
             "status": "success",
             "metric_name": "Consumer Adoption Simulator",
@@ -1620,22 +1703,52 @@ def consumer_adoption_simulator(scope: CategoryScopePayload, population_size: in
             ),
             "results": {
                 "population_summary": {
-                    "total_consumers":          total_pop,
+                    "total_consumers":            total_pop,
                     "num_psychographic_segments": len(clusters),
-                    "avg_purchase_intent":       avg_intent,
+                    "avg_purchase_intent":        avg_intent,
                     "avg_conversion_probability": avg_conversion,
-                    "avg_trust_score":           avg_trust,
-                    "avg_emotional_resonance":   avg_resonance,
-                    "avg_resistance_index":      avg_resistance,
-                    "dominant_channel":          dominant_channel,
-                    "channel_distribution":      channel_votes,
+                    "avg_trust_score":            avg_trust,
+                    "avg_emotional_resonance":    avg_resonance,
+                    "avg_resistance_index":       avg_resistance,
+                    "dominant_channel":           dominant_channel,
+                    "channel_distribution":       channel_votes,
                 },
-                "market_dna": dna.to_dict(),
-                "psychographic_segments":   enriched_segments,
-                "high_intent_segments":     high_intent_segments,
-                "critical_resistance_segments": critical_barriers,
-                "data_completeness":        dna.data_completeness,
-                "completeness_score":       dna.completeness_score,
+                "market_dna":                  dna.to_dict(),
+                "psychographic_segments":      enriched_segments,
+                "high_intent_segments":        high_intent_segments,
+                "critical_resistance_segments":critical_barriers,
+                "data_completeness":           dna.data_completeness,
+                "completeness_score":          dna.completeness_score,
+                # ── AI Insight Layer ──────────────────────────────────────────
+                "insights":            insight_output.get("insights", {}),
+                "executive_narrative": insight_output.get("executive_narrative", {}),
+                "action_plan":         insight_output.get("action_plan", []),
+                "key_opportunities":   insight_output.get("key_opportunities", []),
+                "key_risks":           insight_output.get("key_risks", []),
+                # ── Confidence & Validation ───────────────────────────────────
+                "simulation_confidence": confidence_output,
+                # ── Scenario Testing ──────────────────────────────────────────
+                "scenario_testing":    scenario_output,
+                # ── Market Stress Testing ─────────────────────────────────────
+                "stress_testing":      stress_test_output,
+                # ── Segment Stability ─────────────────────────────────────────
+                "segment_stability":   stability_output,
+                # ── Market Risk Assessment ────────────────────────────────────
+                "market_risk":         risk_output,
+                "data_scope":          build_data_scope(scope_meta, kw_meta),
+                "scope":               scope_meta,
+                "engine_cache_key":    cache_key,
+            },
+            "page_scope": {
+                "page_id": "consumer_adoption",
+                "keyword_scope": "global",
+                "product_scope": "filtered",
+                "category_dependency": True,
+                "methodology": (
+                    "Simulation inputs from category-scoped engine cache: "
+                    "demand/SIEI/demand_velocity use global Magnet; "
+                    "HHI/revenue_momentum/BSR/price use scoped BlackBox."
+                ),
             },
         })
 
