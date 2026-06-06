@@ -423,18 +423,62 @@ function IntentEfficiencyInner() {
 
   const displayScatter = useMemo(() => {
     if (Object.keys(activeFilters).length === 0) return scatterRaw;
-    const allowed = new Set(filteredKeywordRows.map(r => r.keyword));
-    return scatterRaw.filter(pt => allowed.has(pt.keyword));
-  }, [scatterRaw, filteredKeywordRows, activeFilters]);
+
+    // Segment filter: filter scatter points directly by their segment field.
+    // Do NOT go via filteredKeywordRows — scatter points are a sampled subset
+    // of all keyword rows and most keyword names won't be in the scatter sample,
+    // causing the chart to appear empty even when the category has data.
+    if (activeFilters.segment) {
+      const targetSegment = activeFilters.segment as string;
+      const bySegment = scatterRaw.filter(pt => pt.segment === targetSegment);
+      // If there are no scatter points for this segment (can happen when the
+      // backend sample missed this category), fall back to re-classifying all
+      // scatter points using the thresholds so the user still sees something.
+      if (bySegment.length > 0) return bySegment;
+      // Fallback: classify scatter points locally using the same thresholds
+      return scatterRaw.filter(pt => {
+        const dem = pt.demand_percentile;
+        const eff = pt.efficiency_score;
+        const hiD = segmentThresholds.highDemand;
+        const loD = segmentThresholds.lowDemand;
+        const hiE = segmentThresholds.highEff;
+        const loE = segmentThresholds.lowEff;
+        switch (targetSegment) {
+          case 'Demand Winner':    return dem >= hiD && eff >= hiE;
+          case 'Hidden Gem':       return dem < hiD  && eff >= hiE;
+          case 'Friction Keyword': return dem >= hiD && eff < loE;
+          case 'Low Priority':     return dem < loD  && eff < loE;
+          default:                 return false;
+        }
+      });
+    }
+
+    // Keyword text search: filter by keyword name match
+    if (activeFilters.keyword) {
+      const allowed = new Set(filteredKeywordRows.map((r: any) => r.keyword));
+      return scatterRaw.filter(pt => allowed.has(pt.keyword));
+    }
+
+    return scatterRaw;
+  }, [scatterRaw, filteredKeywordRows, activeFilters, segmentThresholds]);
 
   const frictionRowsSorted = useMemo(() => {
     let baseFriction = friction;
-    if (Object.keys(activeFilters).length > 0) {
-      const allowed = new Set(filteredKeywordRows.map(r => r.keyword));
+    if (activeFilters.segment) {
+      // Segment filter: friction table should always show friction keywords
+      // regardless of segment selection (they are already all Friction Keyword
+      // segment by definition). Only hide if a non-friction segment is selected.
+      if (activeFilters.segment !== 'Friction Keyword') {
+        baseFriction = []; // non-friction segment selected — friction table irrelevant
+      }
+      // if segment === 'Friction Keyword', show all friction rows unfiltered
+    } else if (activeFilters.keyword) {
+      // Text search: filter friction rows by keyword name match
+      const allowed = new Set(filteredKeywordRows.map((r: any) => r.keyword));
       baseFriction = friction.filter(f => allowed.has(f.keyword));
     }
     return [...baseFriction].sort((a, b) =>
-      Number(b.estimated_revenue_leakage ?? b.recoverable_revenue ?? 0) - 
+      Number(b.estimated_revenue_leakage ?? b.recoverable_revenue ?? 0) -
       Number(a.estimated_revenue_leakage ?? a.recoverable_revenue ?? 0)
     );
   }, [friction, filteredKeywordRows, activeFilters]);
@@ -674,7 +718,7 @@ function IntentEfficiencyInner() {
                 onClick={(e) => { if (e?.payload) setSelectedEvidence(keywordRowEvidence(e.payload, benchmarkRps1k)); }}
               >
                 {displayScatter.map((pt, i) => (
-                  <Cell key={i} fill={quadrantDotColor(pt.segment)} fillOpacity={0.8} className="cursor-pointer" />
+                  <Cell key={`${pt.keyword || 'kw'}-${pt.demand_percentile || 0}-${i}`} fill={quadrantDotColor(pt.segment)} fillOpacity={0.8} className="cursor-pointer" />
                 ))}
               </Scatter>
             </ScatterChart>
@@ -688,9 +732,9 @@ function IntentEfficiencyInner() {
               { key: 'hidden',  label: 'Hidden Gem', count: hg, color: SEGMENT_COLORS['Hidden Gem'], rule: `Demand < ${segmentThresholds.highDemand.toFixed(0)}  AND  Efficiency ≥ ${segmentThresholds.highEff.toFixed(0)}` },
               { key: 'friction',label: 'Friction Keyword', count: fk, color: SEGMENT_COLORS['Friction Keyword'], rule: `Demand ≥ ${segmentThresholds.highDemand.toFixed(0)}  AND  Efficiency < ${segmentThresholds.lowEff.toFixed(0)}` },
               { key: 'low',     label: 'Low Priority', count: lp, color: SEGMENT_COLORS['Low Priority'], rule: `Demand < ${segmentThresholds.lowDemand.toFixed(0)}  AND  Efficiency < ${segmentThresholds.lowEff.toFixed(0)}` },
-            ].map(seg => (
+            ].map((seg, segIdx) => (
               <button
-                key={seg.key}
+                key={`${seg.key}-${segIdx}`}
                 className={cn(
                   'text-left p-2.5 rounded-xl border transition-colors',
                   activeFilters.segment === quadrantLabel(seg.key)

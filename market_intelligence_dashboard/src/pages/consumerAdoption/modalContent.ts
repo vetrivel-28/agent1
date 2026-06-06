@@ -337,7 +337,12 @@ export function buildRevenueLiftModal(
   const recov = dna?.recoverable_revenue ?? 0;
   const avgConv = activeSegs.reduce((s, seg) => s + seg.conversion_probability, 0) / Math.max(activeSegs.length, 1);
   const current = recov * avgConv;
-  const potential = current * 1.4;
+
+  // Uplift factor is based on average resistance across segments:
+  // higher avg resistance = larger gap between current and potential adoption
+  const avgResistance = activeSegs.reduce((s, seg) => s + (seg.resistance?.resistance_index ?? 0), 0) / Math.max(activeSegs.length, 1);
+  const upliftFactor = 1.0 + Math.min(avgResistance / 100.0, 0.8); // 1.0–1.8× based on resistance
+  const potential = current * upliftFactor;
   const lift = potential - current;
 
   const topGainers = [...activeSegs]
@@ -347,6 +352,14 @@ export function buildRevenueLiftModal(
       return liftB - liftA;
     })
     .slice(0, 5);
+
+  // Find the dominant barrier across top gainers
+  const barrierCounts: Record<string, number> = {};
+  topGainers.forEach(seg => {
+    const b = seg.resistance?.primary_barrier ?? '—';
+    barrierCounts[b] = (barrierCounts[b] ?? 0) + 1;
+  });
+  const topBarrier = Object.entries(barrierCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'Habit Lock-In';
 
   return {
     title: 'Revenue Lift Opportunity',
@@ -364,10 +377,21 @@ export function buildRevenueLiftModal(
         type: 'formula',
         body: [
           'Revenue Lift = Potential Revenue − Current Predicted Revenue',
-          'Potential Revenue = Recoverable Revenue × Avg Conversion × Uplift Factor (1.4×)',
-          `Current Revenue = ${fmtCurrency(recov)} × ${(avgConv * 100).toFixed(1)}% = ${fmtCurrency(current)}`,
-          `Potential Revenue = ${fmtCurrency(current)} × 1.4 = ${fmtCurrency(potential)}`,
-          `→ Revenue Lift = ${fmtCurrency(potential)} − ${fmtCurrency(current)} = ${value}`,
+          `Uplift Factor = 1.0 + (avg resistance / 100) = ${upliftFactor.toFixed(2)}× (higher resistance = more room to improve)`,
+          `Current Revenue = Recoverable Revenue × Avg Conversion = ${fmtCurrency(recov)} × ${(avgConv * 100).toFixed(1)}% = ${fmtCurrency(current)}`,
+          `Potential Revenue = Current × Uplift Factor = ${fmtCurrency(current)} × ${upliftFactor.toFixed(2)} = ${fmtCurrency(potential)}`,
+          `→ Revenue Lift = ${fmtCurrency(potential)} − ${fmtCurrency(current)} = ${fmtCurrency(lift)}`,
+        ],
+      },
+      {
+        heading: 'Inputs used',
+        type: 'table',
+        body: [
+          signal('Recoverable revenue (from revenue engine)', recov > 0 ? fmtCurrency(recov) : null),
+          signal('Average conversion probability', fmtPct(avgConv * 100)),
+          signal('Average segment resistance index', avgResistance.toFixed(1)),
+          signal('Uplift factor (resistance-derived)', `${upliftFactor.toFixed(2)}×`),
+          signal('Dominant barrier in high-lift segments', topBarrier),
         ],
       },
       {
@@ -379,18 +403,9 @@ export function buildRevenueLiftModal(
         }),
       },
       {
-        heading: 'Main barriers reducing lift',
-        type: 'normal',
-        body: [
-          'High resistance index segments have the largest gap between current and potential adoption.',
-          'Trust barriers, price resistance, and habit lock-in are the most common blockers across segments.',
-          'Resolving even one primary barrier per high-opportunity segment can materially increase conversion.',
-        ],
-      },
-      {
         heading: 'Business action',
         type: 'insight',
-        body: `Start with the segments showing the largest adoption gap. For each, identify their primary barrier from the Resistance Testing Dashboard and design a specific intervention — whether a price anchor, review campaign, or education content. Each segment addressed closes part of this opportunity.`,
+        body: `The dominant barrier across top-lift segments is "${topBarrier}". Start there — resolving this single barrier unlocks the largest portion of this opportunity. Work down the list segment by segment rather than trying to fix everything at once.`,
       },
     ],
   };
@@ -824,9 +839,15 @@ export function buildCompetitiveScenarioModal(scenario: CompetitiveScenario): In
 }
 
 export function buildSentimentScenarioModal(scenario: SentimentScenario): InsightModalData {
+  const leverLines = (scenario.chosen_levers ?? []).map((lv, i) => {
+    const label = lv.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    const reason = scenario.selection_reasoning?.[i] ?? '';
+    return reason ? `${label}: ${reason}` : label;
+  });
+
   return {
     title: scenario.scenario,
-    subtitle: 'Impact of improving consumer review sentiment',
+    subtitle: 'Dataset-driven improvement combination for this product',
     sections: [
       {
         heading: 'What this scenario models',
@@ -840,21 +861,26 @@ export function buildSentimentScenarioModal(scenario: SentimentScenario): Insigh
           signal('Adoption lift', `+${scenario.adoption_lift?.toFixed(1)} pts`),
           signal('Conversion lift', `+${scenario.conv_lift_pct?.toFixed(1)}%`),
           signal('Retention lift', `+${scenario.retention_lift_pct?.toFixed(1)}%`),
+          signal('New intent', `${scenario.new_intent?.toFixed(1)}/100`),
+          signal('New conversion', `${scenario.new_conversion?.toFixed(1)}%`),
         ],
       },
+      ...(leverLines.length > 0 ? [{
+        heading: 'Selected improvement levers (why these were chosen)',
+        type: 'normal' as const,
+        body: leverLines,
+      }] : []),
       {
-        heading: 'Why sentiment changes the forecast',
-        type: 'normal',
-        body: [
-          'Trust score is the most direct driver of adoption in risk-averse and feature-researcher segments.',
-          'Improving review quality reduces the trust barrier — the most common resistance driver across segments.',
-          'Higher retention follows from trust: consumers who believe in the product come back.',
-        ],
+        heading: 'Most impacted segments',
+        type: 'table',
+        body: (scenario.most_impacted_segments ?? []).slice(0, 5).map(s =>
+          `${s.segment} — sensitivity score: ${(s.sensitivity_score ?? s.risk_aversion ?? 0).toFixed(2)}`,
+        ),
       },
       {
         heading: 'Business action',
         type: 'insight',
-        body: 'Invest in post-purchase review generation, respond to negative reviews publicly, and add detailed Q&A content. These actions directly improve the sentiment signals that feed this model.',
+        body: `These improvements are prioritised for your specific dataset. Focus execution budget on the top 1–2 levers — they account for most of the expected adoption lift. The third lever provides diminishing returns and can be addressed in a second phase.`,
       },
     ],
   };

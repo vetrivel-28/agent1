@@ -97,10 +97,18 @@ export interface SimulationConfidence {
   formula?: string;
 }
 
+export interface SegmentFilter {
+  id: string;
+  label: string;
+  description: string;
+  segment_names: string[];
+}
+
 export interface ScenarioTesting {
   pricing_scenarios: PricingScenario[];
-  competitive_scenarios: CompetitiveScenario[];
+  competitive_scenarios: CompetitiveScenario[];  // always [] now (removed)
   sentiment_scenario: SentimentScenario | null;
+  segment_filters?: SegmentFilter[];
 }
 
 export interface PricingScenario {
@@ -134,7 +142,13 @@ export interface SentimentScenario {
   adoption_lift: number;
   conv_lift_pct: number;
   retention_lift_pct: number;
-  most_impacted_segments?: Array<{ segment: string; risk_aversion: number }>;
+  new_intent?: number;
+  new_conversion?: number;
+  chosen_levers?: string[];
+  lever_reasons?: string[];
+  selection_reasoning?: string[];
+  most_impacted_segments?: Array<{ segment: string; risk_aversion: number; sensitivity_score?: number }>;
+  evidence?: Record<string, unknown>;
 }
 
 export interface StressCase {

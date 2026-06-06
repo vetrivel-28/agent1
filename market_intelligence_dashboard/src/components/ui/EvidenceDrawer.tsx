@@ -88,8 +88,8 @@ function CountsGrid({ counts }: { counts: Record<string, string | number> }) {
   if (entries.length === 0) return null;
   return (
     <div className="grid grid-cols-2 gap-2 mt-2">
-      {entries.map(([k, v]) => (
-        <div key={k} className="p-2 rounded-md border border-border/40 bg-muted/20">
+      {entries.map(([k, v], ci) => (
+        <div key={`count-${k}-${ci}`} className="p-2 rounded-md border border-border/40 bg-muted/20">
           <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{k.replace(/_/g, ' ')}</p>
           <p className="text-sm font-semibold font-mono mt-0.5">
             {typeof v === 'number' ? v.toLocaleString() : String(v)}
@@ -170,7 +170,9 @@ export function EvidenceDrawer({ evidence, isOpen, onClose }: EvidenceDrawerProp
               <div className="p-6 bg-card rounded-xl border border-border/50 shadow-sm relative overflow-hidden">
                 <div className="absolute top-0 left-0 w-1 h-full bg-primary" />
                 <p className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1 font-bold">Displayed Value</p>
-                <p className="text-3xl font-bold text-foreground tracking-tight">{evidence.displayed_value}</p>
+                <p className="text-3xl font-bold text-foreground tracking-tight">
+                  {evidence.displayed_value != null ? String(evidence.displayed_value) : '—'}
+                </p>
                 
                 {evidence.confidence_note && (
                   <div className="mt-4 pt-4 border-t border-border/40">
@@ -337,8 +339,8 @@ export function EvidenceDrawer({ evidence, isOpen, onClose }: EvidenceDrawerProp
                   <div>
                     <p className="text-xs text-muted-foreground mb-1.5 font-medium">Datasets</p>
                     <div className="flex flex-wrap gap-1.5">
-                      {evidence.source_datasets.length > 0 
-                        ? evidence.source_datasets.map((d, i) => <Chip key={i} label={d} />)
+                      {(evidence.source_datasets ?? []).length > 0 
+                        ? (evidence.source_datasets ?? []).map((d, i) => <Chip key={`dataset-${i}`} label={typeof d === 'string' ? d : String(d)} />)
                         : <span className="text-xs text-foreground/50">N/A</span>}
                     </div>
                   </div>
@@ -353,14 +355,14 @@ export function EvidenceDrawer({ evidence, isOpen, onClose }: EvidenceDrawerProp
                   <div className="grid grid-cols-2 gap-4 pt-2 border-t border-border/40">
                     <div>
                       <p className="text-xs text-muted-foreground mb-1 font-medium">Rows Processed</p>
-                      <p className="text-sm font-semibold">{evidence.source_row_count.toLocaleString()}</p>
+                      <p className="text-sm font-semibold">{(evidence.source_row_count ?? 0).toLocaleString()}</p>
                     </div>
-                    {evidence.source_columns.length > 0 && (
+                    {(evidence.source_columns ?? []).length > 0 && (
                       <div>
                         <p className="text-xs text-muted-foreground mb-1.5 font-medium">Columns Used</p>
                         <div className="flex flex-wrap gap-1">
-                          {evidence.source_columns.slice(0, 3).map((c, i) => <Chip key={i} label={c} />)}
-                          {evidence.source_columns.length > 3 && <Chip label={`+${evidence.source_columns.length - 3}`} />}
+                          {(evidence.source_columns ?? []).slice(0, 3).map((c, i) => <Chip key={`col-${i}`} label={typeof c === 'string' ? c : String(c)} />)}
+                          {(evidence.source_columns ?? []).length > 3 && <Chip label={`+${(evidence.source_columns ?? []).length - 3}`} />}
                         </div>
                       </div>
                     )}
@@ -406,8 +408,8 @@ export function EvidenceDrawer({ evidence, isOpen, onClose }: EvidenceDrawerProp
                     <div className="pt-2 border-t border-border/40 mt-2">
                       <p className="text-xs text-muted-foreground mb-1.5 font-medium">Active Filters</p>
                       <div className="flex flex-wrap gap-1">
-                        {Object.entries(evidence.active_filters).map(([k, v]) => (
-                          <Chip key={k} label={`${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`} />
+                        {Object.entries(evidence.active_filters).map(([k, v], fi) => (
+                          <Chip key={`filter-${k}-${fi}`} label={`${k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`} />
                         ))}
                       </div>
                     </div>
@@ -431,10 +433,10 @@ export function EvidenceDrawer({ evidence, isOpen, onClose }: EvidenceDrawerProp
                       </div>
                     )}
                     
-                    {evidence.calculation_steps && evidence.calculation_steps.length > 0 && (
+                    {(evidence.calculation_steps ?? []).length > 0 && (
                       <ol className="list-decimal list-inside space-y-1.5 text-xs text-foreground/80 font-mono mt-3">
-                        {evidence.calculation_steps.map((step, i) => (
-                          <li key={i}>{step}</li>
+                        {(evidence.calculation_steps ?? []).map((step, i) => (
+                          <li key={`step-${i}`}>{typeof step === 'string' ? step : String(step)}</li>
                         ))}
                       </ol>
                     )}
@@ -442,13 +444,13 @@ export function EvidenceDrawer({ evidence, isOpen, onClose }: EvidenceDrawerProp
                 </Section>
               )}
 
-              {evidence.missing_fields && evidence.missing_fields.length > 0 && (
+              {(evidence.missing_fields ?? []).length > 0 && (
                 <Section title="Data Exclusion / Missing">
                   <ul className="text-xs text-danger/80 space-y-1 bg-danger/5 border border-danger/20 p-3 rounded-lg">
-                    {evidence.missing_fields.map((f, i) => (
-                      <li key={i} className="flex items-center gap-2">
+                    {(evidence.missing_fields ?? []).map((f, i) => (
+                      <li key={`missing-${i}`} className="flex items-center gap-2">
                         <span className="w-1 h-1 rounded-full bg-danger"></span> 
-                        {f}
+                        {typeof f === 'string' ? f : String(f)}
                       </li>
                     ))}
                   </ul>
@@ -465,21 +467,27 @@ export function EvidenceDrawer({ evidence, isOpen, onClose }: EvidenceDrawerProp
                   <table className="w-full text-xs">
                     <thead>
                       <tr className="bg-muted/50 border-b border-border/50">
-                        {topRecordKeys.map((k) => (
-                          <th key={k} className="px-4 py-2.5 text-left font-bold text-muted-foreground uppercase tracking-wider text-[10px] whitespace-nowrap">
+                        {topRecordKeys.map((k, ki) => (
+                          <th key={`th-${k}-${ki}`} className="px-4 py-2.5 text-left font-bold text-muted-foreground uppercase tracking-wider text-[10px] whitespace-nowrap">
                             {k.replace(/_/g, ' ')}
                           </th>
                         ))}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border/30">
-                      {evidence.top_records!.map((row, i) => (
-                        <tr key={i} className="bg-card hover:bg-muted/30 transition-colors">
-                          {topRecordKeys.map((k) => (
-                            <td key={k} className="px-4 py-2 text-foreground/90 font-mono">
-                              {String(row[k] ?? '—')}
-                            </td>
-                          ))}
+                      {evidence.top_records!.map((row, ri) => (
+                        <tr key={`tr-${ri}`} className="bg-card hover:bg-muted/30 transition-colors">
+                          {topRecordKeys.map((k, ki) => {
+                            const cellVal = row[k];
+                            const display = cellVal == null ? '—'
+                              : typeof cellVal === 'object' ? JSON.stringify(cellVal)
+                              : String(cellVal);
+                            return (
+                              <td key={`td-${k}-${ki}`} className="px-4 py-2 text-foreground/90 font-mono">
+                                {display}
+                              </td>
+                            );
+                          })}
                         </tr>
                       ))}
                     </tbody>
@@ -488,33 +496,39 @@ export function EvidenceDrawer({ evidence, isOpen, onClose }: EvidenceDrawerProp
               </Section>
             )}
 
-            {evidence.detail_tables?.map((tbl, ti) => (
-              <Section key={ti} title={tbl.title}>
+            {(evidence.detail_tables ?? []).map((tbl, ti) => (
+              <Section key={`detail-table-${ti}`} title={tbl.title}>
                 <div className="overflow-x-auto rounded-lg border border-border/50 shadow-sm">
                   <table className="w-full text-xs">
                     <thead>
                       <tr className="bg-muted/50 border-b border-border/50">
-                        {tbl.columns.map((c) => (
-                          <th key={c} className="px-4 py-2.5 text-left font-bold text-muted-foreground uppercase tracking-wider text-[10px] whitespace-nowrap">
+                        {(tbl.columns ?? []).map((c, ci) => (
+                          <th key={`dth-${ti}-${c}-${ci}`} className="px-4 py-2.5 text-left font-bold text-muted-foreground uppercase tracking-wider text-[10px] whitespace-nowrap">
                             {c}
                           </th>
                         ))}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border/30">
-                      {tbl.rows.map((row, i) => (
-                        <tr key={i} className="bg-card hover:bg-muted/30 transition-colors">
-                          {tbl.columns.map((c) => (
-                            <td key={c} className="px-4 py-2 text-foreground/90">
-                              {String(row[c] ?? '—')}
-                            </td>
-                          ))}
+                      {(tbl.rows ?? []).map((row, ri) => (
+                        <tr key={`dtr-${ti}-${ri}`} className="bg-card hover:bg-muted/30 transition-colors">
+                          {(tbl.columns ?? []).map((c, ci) => {
+                            const cellVal = row[c];
+                            const display = cellVal == null ? '—'
+                              : typeof cellVal === 'object' ? JSON.stringify(cellVal)
+                              : String(cellVal);
+                            return (
+                              <td key={`dtd-${ti}-${c}-${ci}`} className="px-4 py-2 text-foreground/90">
+                                {display}
+                              </td>
+                            );
+                          })}
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 </div>
-                {tbl.view_all_count != null && tbl.view_all_count > tbl.rows.length && (
+                {tbl.view_all_count != null && tbl.view_all_count > (tbl.rows ?? []).length && (
                   <p className="text-xs text-muted-foreground mt-2 flex items-center justify-end">
                     View all ({tbl.view_all_count} total) — expand in dataset export
                   </p>

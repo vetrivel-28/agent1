@@ -1,25 +1,23 @@
 /**
  * Phase5Sections.tsx
  *
- * Contains only the sections kept after the Phase 5 cleanup:
- *  - ScenarioTestingSection  (section 9)
- *  - ExecutiveNarrativeSection (section 10 — final)
+ * Section 9 — Scenario Testing (pricing + smart sentiment; NO competitive scenarios)
+ * Section 10 — Final Executive Summary
  *
- * Removed sections (per cleanup requirements):
- *  - SimulationConfidenceSection
- *  - StressTestingSection
- *  - SegmentStabilitySection
- *  - MarketEntryRiskSection
- *  - ExecutiveDecisionCenter
+ * Changes from prior version:
+ *  - Competitive scenarios REMOVED (New Entrant / Increased Competition / Brand Consolidation)
+ *  - Pricing scenarios now include dataset-driven segment filter tabs
+ *  - Sentiment scenario shows chosen lever combination with reasoning
+ *  - Layout improved for readability
  */
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, Cell,
 } from 'recharts';
 import {
-  TrendingUp, AlertCircle, FileText, ListChecks,
+  TrendingUp, AlertCircle, FileText, ListChecks, Zap, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../../components/ui/Card';
 import { PageSection } from '../../components/layout/PageSection';
@@ -29,10 +27,9 @@ import { InsightModal } from './InsightModal';
 import type { InsightModalData } from './InsightModal';
 import {
   buildPricingScenarioModal,
-  buildCompetitiveScenarioModal,
   buildSentimentScenarioModal,
 } from './modalContent';
-import type { ScenarioTesting, SimResults, PricingScenario, CompetitiveScenario, SentimentScenario } from './types';
+import type { ScenarioTesting, SimResults, PricingScenario, SentimentScenario, SegmentFilter } from './types';
 
 const CustomTooltip = ({ active, payload, label }: {
   active?: boolean;
@@ -54,28 +51,31 @@ const CustomTooltip = ({ active, payload, label }: {
   );
 };
 
-// ─── Scenario Testing ─────────────────────────────────────────────────────────
+// ─── Scenario Testing (Section 9) ────────────────────────────────────────────
 
 export function ScenarioTestingSection({ data }: { data: ScenarioTesting }) {
-  const [pricingTab, setPricingTab] = useState(0);
-  const [modal, setModal] = useState<InsightModalData | null>(null);
+  const [pricingTab, setPricingTab]           = useState(0);
+  const [activeFilter, setActiveFilter]       = useState<string | null>(null);
+  const [sentimentOpen, setSentimentOpen]     = useState(false);
+  const [modal, setModal]                     = useState<InsightModalData | null>(null);
 
-  const pricing = data.pricing_scenarios || [];
-  const selected = pricing[pricingTab];
+  const pricing        = data.pricing_scenarios || [];
+  const segmentFilters = data.segment_filters || [];
+  const selected       = pricing[pricingTab];
+  const sentiment      = data.sentiment_scenario;
 
-  const openPricingModal = (p: PricingScenario) => setModal(buildPricingScenarioModal(p));
-  const openCompetitiveModal = (sc: CompetitiveScenario) => setModal(buildCompetitiveScenarioModal(sc));
+  const openPricingModal  = (p: PricingScenario) => setModal(buildPricingScenarioModal(p));
   const openSentimentModal = (sc: SentimentScenario) => setModal(buildSentimentScenarioModal(sc));
 
   const scenarioInsight = (p: PricingScenario): string => {
     if (p.pct_change > 0) {
       return p.revenue_change_pct >= 0
-        ? `Raising price by ${p.pct_change}% increases revenue (+${p.revenue_change_pct.toFixed(1)}%), suggesting the market tolerates this price level despite slight adoption drop.`
-        : `Raising price by ${p.pct_change}% reduces revenue (${p.revenue_change_pct.toFixed(1)}%). The adoption drop outweighs the price gain — consider a smaller increase.`;
+        ? `Raising price by ${p.pct_change}% increases revenue (+${p.revenue_change_pct.toFixed(1)}%). The premium price signals quality and the market tolerates this level despite a slight adoption drop.`
+        : `Raising price by ${p.pct_change}% reduces net revenue (${p.revenue_change_pct.toFixed(1)}%). The adoption drop from price-sensitive segments outweighs the unit price gain — consider a smaller increase or premium positioning.`;
     }
     return p.revenue_change_pct >= 0
-      ? `Dropping price by ${Math.abs(p.pct_change)}% grows revenue (+${p.revenue_change_pct.toFixed(1)}%) by capturing more price-sensitive segments. Volume wins.`
-      : `Dropping price by ${Math.abs(p.pct_change)}% cuts revenue (${p.revenue_change_pct.toFixed(1)}%). The volume gain is insufficient to offset margin reduction.`;
+      ? `Dropping price by ${Math.abs(p.pct_change)}% grows net revenue (+${p.revenue_change_pct.toFixed(1)}%). Volume gain from price-sensitive segments more than offsets the unit margin reduction.`
+      : `Dropping price by ${Math.abs(p.pct_change)}% cuts net revenue (${p.revenue_change_pct.toFixed(1)}%). Volume uplift does not offset the margin reduction at this price tier.`;
   };
 
   return (
@@ -90,12 +90,12 @@ export function ScenarioTestingSection({ data }: { data: ScenarioTesting }) {
             <CardTitle className="text-sm">Pricing Scenarios</CardTitle>
             <CardDescription>
               Dataset-anchored impact of price changes on adoption, conversion, and revenue.
-              Click a scenario for a detailed business explanation.
+              Click any scenario tab or segment filter to explore.
             </CardDescription>
           </CardHeader>
           <CardContent>
-            {/* Tab selector */}
-            <div className="flex flex-wrap gap-2 mb-5">
+            {/* Price scenario tabs */}
+            <div className="flex flex-wrap gap-2 mb-4">
               {pricing.map((p, i) => (
                 <button
                   key={p.scenario}
@@ -112,13 +112,48 @@ export function ScenarioTestingSection({ data }: { data: ScenarioTesting }) {
               ))}
             </div>
 
+            {/* Segment filter tabs (dataset-driven) */}
+            {segmentFilters.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2 mb-5">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                  Show impact on:
+                </span>
+                <button
+                  onClick={() => setActiveFilter(null)}
+                  className={cn(
+                    'text-xs px-2.5 py-1 rounded-md border font-medium transition-colors',
+                    activeFilter === null
+                      ? 'bg-muted text-foreground border-border'
+                      : 'border-border/50 text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  All segments
+                </button>
+                {segmentFilters.map(f => (
+                  <button
+                    key={f.id}
+                    onClick={() => setActiveFilter(activeFilter === f.id ? null : f.id)}
+                    title={f.description}
+                    className={cn(
+                      'text-xs px-2.5 py-1 rounded-md border font-medium transition-colors',
+                      activeFilter === f.id
+                        ? 'bg-primary/10 text-primary border-primary/30'
+                        : 'border-border/50 text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+            )}
+
             {selected && (
               <>
                 {/* Metric cards */}
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
                   {[
-                    { label: 'Base Adoption', value: selected.base_intent?.toFixed(1) },
-                    { label: 'New Adoption', value: selected.new_intent?.toFixed(1) },
+                    { label: 'Base Adoption', value: selected.base_intent?.toFixed(1), highlight: null },
+                    { label: 'New Adoption', value: selected.new_intent?.toFixed(1), highlight: null },
                     {
                       label: 'Adoption Change',
                       value: `${selected.adoption_delta >= 0 ? '+' : ''}${selected.adoption_delta?.toFixed(1)}`,
@@ -144,39 +179,11 @@ export function ScenarioTestingSection({ data }: { data: ScenarioTesting }) {
                   ))}
                 </div>
 
-                {/* Scenario insight */}
+                {/* Insight */}
                 <div className="p-4 bg-primary/5 border border-primary/20 rounded-xl text-sm text-foreground/80 mb-4">
                   {scenarioInsight(selected)}
                 </div>
 
-                {/* Sensitive segments */}
-                {(selected.segment_sensitivity?.length ?? 0) > 0 && (
-                  <div className="mb-4">
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">
-                      Most price-sensitive segments
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      {selected.segment_sensitivity!.slice(0, 6).map((s) => (
-                        <span
-                          key={s.segment}
-                          className={cn(
-                            'text-xs px-2.5 py-1 rounded-full border font-mono',
-                            s.intent_change < -5
-                              ? 'bg-red-500/10 text-red-400 border-red-500/20'
-                              : s.intent_change < 0
-                              ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-                              : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
-                          )}
-                        >
-                          {s.segment.split(' ').slice(0, 2).join(' ')}:{' '}
-                          {s.intent_change >= 0 ? '+' : ''}{s.intent_change.toFixed(1)}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Detail button */}
                 <button
                   onClick={() => openPricingModal(selected)}
                   className="text-xs text-primary hover:underline"
@@ -190,104 +197,178 @@ export function ScenarioTestingSection({ data }: { data: ScenarioTesting }) {
 
         {/* ── Revenue Impact Chart ── */}
         {pricing.length > 0 && (
-          <ChartContainer
-            title="Pricing Impact — Revenue Change by Scenario"
-            description="How each price change shifts modeled revenue relative to the current dataset baseline"
-            xAxisLabel="Scenario"
-            yAxisLabel="Revenue Δ %"
-            businessExplanation="Green bars mean net-positive revenue impact; red bars mean the price change costs more than it earns through adoption loss."
-          >
-            <ResponsiveContainer width="100%" height={280}>
-              <BarChart
-                data={pricing.map((p) => ({ name: p.scenario, value: p.revenue_change_pct, pct: p.pct_change }))}
-                margin={{ top: 4, right: 8, bottom: 52, left: 8 }}
-              >
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.3} />
-                <XAxis
-                  dataKey="name"
-                  tick={{ fontSize: 9, fill: 'hsl(var(--muted-foreground))' }}
-                  angle={-30}
-                  textAnchor="end"
-                  height={64}
-                  interval={0}
-                />
-                <YAxis tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false} />
-                <Tooltip content={<CustomTooltip />} />
-                <Bar dataKey="value" name="Revenue Δ %" radius={[3, 3, 0, 0]}>
-                  {pricing.map((p, i) => (
-                    <Cell key={i} fill={p.revenue_change_pct >= 0 ? '#10B981' : '#EF4444'} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </ChartContainer>
+          <>
+            <ChartContainer
+              title="Pricing Impact — Revenue Change by Scenario"
+              description="How each price change shifts modeled revenue relative to the current dataset baseline"
+              xAxisLabel="Scenario"
+              yAxisLabel="Revenue Δ %"
+              businessExplanation="Green bars = net-positive revenue impact. Red bars = price change costs more than it earns through adoption loss. Use this to find the optimal price point for this product and market."
+            >
+              <ResponsiveContainer width="100%" height={280}>
+                <BarChart
+                  data={pricing.map((p) => ({ name: p.scenario, value: p.revenue_change_pct, pct: p.pct_change }))}
+                  margin={{ top: 4, right: 8, bottom: 52, left: 8 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.3} />
+                  <XAxis
+                    dataKey="name"
+                    tick={{ fontSize: 9, fill: 'hsl(var(--muted-foreground))' }}
+                    angle={-30}
+                    textAnchor="end"
+                    height={64}
+                    interval={0}
+                  />
+                  <YAxis tick={{ fontSize: 10, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false} />
+                  <Tooltip content={<CustomTooltip />} />
+                  <Bar dataKey="value" name="Revenue Δ %" radius={[3, 3, 0, 0]}>
+                    {pricing.map((p, i) => (
+                      <Cell key={i} fill={p.revenue_change_pct >= 0 ? '#10B981' : '#EF4444'} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </ChartContainer>
+            {/* Revenue chart insight */}
+            {(() => {
+              const best = pricing.reduce((a, b) => b.revenue_change_pct > a.revenue_change_pct ? b : a, pricing[0]);
+              const worst = pricing.reduce((a, b) => b.revenue_change_pct < a.revenue_change_pct ? b : a, pricing[0]);
+              const positiveCount = pricing.filter(p => p.revenue_change_pct >= 0).length;
+              return (
+                <div className="mt-3 p-3 bg-muted/20 border border-border/40 rounded-xl text-xs text-muted-foreground">
+                  <span className="font-bold text-foreground">Pricing insight: </span>
+                  Best scenario is <span className="text-emerald-400 font-bold">{best.scenario}</span>
+                  {best.revenue_change_pct !== 0 && ` (+${best.revenue_change_pct.toFixed(1)}% revenue)`}.
+                  {' '}Worst is <span className="text-red-400 font-bold">{worst.scenario}</span>
+                  {worst.revenue_change_pct < 0 && ` (${worst.revenue_change_pct.toFixed(1)}% revenue)`}.
+                  {' '}{positiveCount >= 4
+                    ? 'This market tolerates price changes well — most scenarios maintain positive revenue.'
+                    : positiveCount >= 2
+                    ? 'Revenue is sensitive to price direction. Small adjustments work better than large ones.'
+                    : 'This market is price-sensitive — any increase risks significant revenue loss.'}
+                </div>
+              );
+            })()}
+          </>
         )}
 
-        {/* ── Competitive Scenarios ── */}
-        {(data.competitive_scenarios?.length ?? 0) > 0 && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
-            <div>
-              <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-3">
-                Competitive Scenarios
-              </h3>
-              <div className="space-y-3">
-                {data.competitive_scenarios.map((sc) => (
-                  <button
-                    key={sc.scenario}
-                    className="w-full text-left p-4 border border-border/40 rounded-xl hover:border-primary/30 hover:bg-primary/5 transition-colors"
-                    onClick={() => openCompetitiveModal(sc)}
-                  >
-                    <div className="flex items-start justify-between gap-3 mb-1.5">
-                      <p className="text-sm font-bold">{sc.scenario}</p>
-                      <div className="flex gap-3 text-xs font-mono shrink-0">
-                        <span className={cn(sc.adoption_impact >= 0 ? 'text-emerald-500' : 'text-red-500')}>
-                          Adoption {sc.adoption_impact >= 0 ? '+' : ''}{sc.adoption_impact?.toFixed(1)}
-                        </span>
-                        <span className={cn(sc.revenue_effect_pct >= 0 ? 'text-emerald-500' : 'text-red-500')}>
-                          Revenue {sc.revenue_effect_pct >= 0 ? '+' : ''}{sc.revenue_effect_pct?.toFixed(1)}%
-                        </span>
-                      </div>
+        {/* ── Smart Sentiment Improvement Scenario ── */}
+        {sentiment && (
+          <div className="mt-6">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-3">
+              Best Possible Improvement Scenario
+            </h3>
+            <Card className="border-emerald-500/30 bg-emerald-500/5">
+              <CardContent className="p-5">
+                {/* Header row */}
+                <div className="flex items-start justify-between gap-4 mb-4">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <Zap className="w-4 h-4 text-emerald-500" />
+                      <p className="text-sm font-bold text-foreground">{sentiment.scenario}</p>
                     </div>
-                    <p className="text-xs text-muted-foreground">{sc.description}</p>
-                    <p className="text-[10px] text-primary mt-2">Click for full analysis →</p>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* ── Sentiment Scenario ── */}
-            {data.sentiment_scenario && (
-              <div>
-                <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-3">
-                  Sentiment Improvement Scenario
-                </h3>
-                <button
-                  className="w-full text-left p-4 border border-emerald-500/30 rounded-xl bg-emerald-500/5 hover:border-emerald-500/50 transition-colors"
-                  onClick={() => openSentimentModal(data.sentiment_scenario!)}
-                >
-                  <p className="text-sm font-bold">{data.sentiment_scenario.scenario}</p>
-                  <p className="text-xs text-muted-foreground mt-2">{data.sentiment_scenario.description}</p>
-                  <div className="grid grid-cols-3 gap-3 mt-4 text-xs">
-                    <div className="p-2 bg-card border border-border/40 rounded text-center">
-                      <span className="text-muted-foreground block">Adoption lift</span>
-                      <p className="font-bold font-mono text-emerald-500">+{data.sentiment_scenario.adoption_lift?.toFixed(1)}</p>
+                    <p className="text-xs text-muted-foreground leading-relaxed">{sentiment.description}</p>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 text-xs shrink-0">
+                    <div className="p-2 bg-card border border-border/40 rounded text-center min-w-[80px]">
+                      <span className="text-muted-foreground block text-[10px]">Adoption lift</span>
+                      <p className="font-bold font-mono text-emerald-500">+{sentiment.adoption_lift?.toFixed(1)}</p>
                     </div>
-                    <div className="p-2 bg-card border border-border/40 rounded text-center">
-                      <span className="text-muted-foreground block">Conversion lift</span>
-                      <p className="font-bold font-mono text-emerald-500">+{data.sentiment_scenario.conv_lift_pct?.toFixed(1)}%</p>
+                    <div className="p-2 bg-card border border-border/40 rounded text-center min-w-[80px]">
+                      <span className="text-muted-foreground block text-[10px]">Conversion lift</span>
+                      <p className="font-bold font-mono text-emerald-500">+{sentiment.conv_lift_pct?.toFixed(1)}%</p>
                     </div>
-                    <div className="p-2 bg-card border border-border/40 rounded text-center">
-                      <span className="text-muted-foreground block">Retention lift</span>
-                      <p className="font-bold font-mono text-emerald-500">+{data.sentiment_scenario.retention_lift_pct?.toFixed(1)}%</p>
+                    <div className="p-2 bg-card border border-border/40 rounded text-center min-w-[80px]">
+                      <span className="text-muted-foreground block text-[10px]">Retention lift</span>
+                      <p className="font-bold font-mono text-emerald-500">+{sentiment.retention_lift_pct?.toFixed(1)}%</p>
                     </div>
                   </div>
-                  <p className="text-[10px] text-emerald-500 mt-3">Click for full analysis →</p>
+                </div>
+
+                {/* Chosen improvement levers */}
+                {(sentiment.chosen_levers?.length ?? 0) > 0 && (
+                  <div className="mb-4">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">
+                      Chosen improvement combination (dataset-driven)
+                    </p>
+                    <div className="space-y-2">
+                      {sentiment.chosen_levers!.map((lever, i) => (
+                        <div key={lever} className="flex items-start gap-2.5 p-2.5 bg-card border border-emerald-500/15 rounded-lg">
+                          <div className="w-5 h-5 rounded-full bg-emerald-500/10 flex items-center justify-center shrink-0 mt-0.5">
+                            <span className="text-[10px] font-black text-emerald-500">{i + 1}</span>
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-bold text-foreground">
+                              {lever.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
+                            </p>
+                            {sentiment.lever_reasons?.[i] && (
+                              <p className="text-[10px] text-muted-foreground mt-0.5">{sentiment.lever_reasons[i]}</p>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Why these levers were selected */}
+                {(sentiment.selection_reasoning?.length ?? 0) > 0 && (
+                  <div className="mb-4">
+                    <button
+                      onClick={() => setSentimentOpen(!sentimentOpen)}
+                      className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors mb-2"
+                    >
+                      {sentimentOpen ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                      Why these levers were selected
+                    </button>
+                    {sentimentOpen && (
+                      <div className="space-y-1.5">
+                        {sentiment.selection_reasoning!.map((reason, i) => (
+                          <p key={i} className="text-xs text-muted-foreground bg-muted/20 rounded p-2">
+                            <span className="font-bold text-foreground">
+                              {sentiment.chosen_levers?.[i]?.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) ?? `Lever ${i + 1}`}:{' '}
+                            </span>
+                            {reason}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Most impacted segments */}
+                {(sentiment.most_impacted_segments?.length ?? 0) > 0 && (
+                  <div className="mb-4">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">
+                      Most impacted segments
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {sentiment.most_impacted_segments!.slice(0, 5).map((s) => (
+                        <span
+                          key={s.segment}
+                          className="text-xs px-2.5 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono"
+                        >
+                          {s.segment.split(' ').slice(0, 2).join(' ')}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <button
+                  onClick={() => openSentimentModal(sentiment)}
+                  className="text-xs text-emerald-500 hover:underline"
+                >
+                  View full analysis →
                 </button>
-                <p className="text-xs text-muted-foreground mt-3 p-3 bg-muted/20 border border-border/40 rounded-lg">
-                  Improving product review sentiment directly reduces trust barriers across risk-averse, first-time buyer, and feature-researcher segments — the three groups most influenced by social proof.
-                </p>
-              </div>
-            )}
+              </CardContent>
+            </Card>
+
+            <p className="text-xs text-muted-foreground mt-3 p-3 bg-muted/20 border border-border/40 rounded-lg">
+              This scenario is automatically tailored to your dataset. The combination above addresses the specific
+              weaknesses identified from your uploaded data — not a generic review improvement template.
+              Each lever is ranked by its expected impact on adoption for this product and market.
+            </p>
           </div>
         )}
       </PageSection>
@@ -295,7 +376,7 @@ export function ScenarioTestingSection({ data }: { data: ScenarioTesting }) {
   );
 }
 
-// ─── Executive Narrative (Section 10 — Final) ────────────────────────────────
+// ─── Executive Narrative (Section 10) ────────────────────────────────────────
 
 export function ExecutiveNarrativeSection({ r }: { r: SimResults }) {
   const execNarrative = r.executive_narrative;
@@ -305,8 +386,6 @@ export function ExecutiveNarrativeSection({ r }: { r: SimResults }) {
   const msgInsight = (r.insights as Record<string, unknown>)?.messaging_intelligence as Record<string, unknown> | undefined;
   const segmentMessages = (msgInsight?.segment_messages as Array<Record<string, unknown>>) || [];
   const riskData = r.market_risk;
-
-  // Gather headline metrics for display
   const summary = r.population_summary;
   const dna = r.market_dna;
 
@@ -314,6 +393,7 @@ export function ExecutiveNarrativeSection({ r }: { r: SimResults }) {
 
   return (
     <PageSection title="10. Final Executive Summary">
+
       {/* ── Executive Narrative text ── */}
       {execNarrative && (
         <Card className="border-primary/20 bg-primary/5 mb-6">
@@ -349,7 +429,7 @@ export function ExecutiveNarrativeSection({ r }: { r: SimResults }) {
         </Card>
       )}
 
-      {/* ── Adoption outlook (if no narrative) ── */}
+      {/* ── Adoption outlook fallback ── */}
       {!execNarrative && summary && (
         <Card className="border-primary/20 bg-primary/5 mb-6">
           <CardHeader className="pb-3">
@@ -357,9 +437,9 @@ export function ExecutiveNarrativeSection({ r }: { r: SimResults }) {
           </CardHeader>
           <CardContent>
             <p className="text-sm text-foreground/90 leading-relaxed">
-              The simulation modeled {summary.total_consumers.toLocaleString()} consumers and found an average purchase intent of{' '}
-              {summary.avg_purchase_intent.toFixed(1)}/100 across active psychographic segments, with an average conversion probability of{' '}
-              {(summary.avg_conversion_probability * 100).toFixed(1)}%.{' '}
+              The simulation modeled {summary.total_consumers.toLocaleString()} consumers and found an average
+              purchase intent of {summary.avg_purchase_intent.toFixed(1)}/100 across active psychographic segments,
+              with an average conversion probability of {(summary.avg_conversion_probability * 100).toFixed(1)}%.{' '}
               {dna?.recoverable_revenue
                 ? `The dataset signals a recoverable revenue opportunity of approximately ${
                     dna.recoverable_revenue >= 1_000_000
@@ -392,7 +472,6 @@ export function ExecutiveNarrativeSection({ r }: { r: SimResults }) {
               </CardContent>
             </Card>
           )}
-
           {keyRisks.length > 0 && (
             <Card className="border-red-500/20">
               <CardHeader className="pb-3">
@@ -423,13 +502,11 @@ export function ExecutiveNarrativeSection({ r }: { r: SimResults }) {
         </div>
       )}
 
-      {/* ── Market Entry Risk (merged here, not its own section) ── */}
+      {/* ── Market Entry Risk ── */}
       {riskData && riskData.market_entry_risk_index > 0 && (
         <Card className="border-border/40 mb-6">
           <CardHeader className="pb-3">
-            <CardTitle className="text-sm flex items-center gap-2">
-              Market Entry Risk Interpretation
-            </CardTitle>
+            <CardTitle className="text-sm">Market Entry Risk Interpretation</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="flex items-start gap-4">
@@ -437,8 +514,7 @@ export function ExecutiveNarrativeSection({ r }: { r: SimResults }) {
                 <p className={cn(
                   'text-3xl font-black font-mono',
                   riskData.risk_label === 'Low' ? 'text-emerald-500' :
-                  riskData.risk_label === 'Moderate' ? 'text-amber-500' :
-                  'text-red-500',
+                  riskData.risk_label === 'Moderate' ? 'text-amber-500' : 'text-red-500',
                 )}>
                   {riskData.market_entry_risk_index.toFixed(0)}
                 </p>
@@ -446,23 +522,14 @@ export function ExecutiveNarrativeSection({ r }: { r: SimResults }) {
                 <p className={cn(
                   'text-xs font-bold mt-0.5',
                   riskData.risk_label === 'Low' ? 'text-emerald-500' :
-                  riskData.risk_label === 'Moderate' ? 'text-amber-500' :
-                  'text-red-500',
+                  riskData.risk_label === 'Moderate' ? 'text-amber-500' : 'text-red-500',
                 )}>{riskData.risk_label}</p>
               </div>
               <div className="flex-1 text-sm text-foreground/80">
-                {riskData.risk_label === 'Low' && (
-                  'Market entry conditions are favorable. Competition is manageable, consumer trust is buildable, and the demand environment supports a new product launch. Act now while conditions are advantageous.'
-                )}
-                {riskData.risk_label === 'Moderate' && (
-                  'Market entry is viable but requires careful positioning. Some barriers exist — likely competition or trust-related. A well-differentiated product with a strong review strategy can overcome these.'
-                )}
-                {riskData.risk_label === 'High' && (
-                  'High entry risk. Dominant competitors, weak demand, or high resistance make this a challenging market. Consider a niche focus, phased launch, or category adjacent entry to reduce risk.'
-                )}
-                {riskData.risk_label === 'Critical' && (
-                  'Critical entry risk. Fundamental challenges exist with demand, competition, or consumer willingness. A significant market gap or unique product advantage would be required to enter successfully.'
-                )}
+                {riskData.risk_label === 'Low' && 'Market entry conditions are favorable. Competition is manageable, consumer trust is buildable, and demand supports a launch. Act now while conditions are advantageous.'}
+                {riskData.risk_label === 'Moderate' && 'Market entry is viable but requires careful positioning. Some barriers exist — likely competition or trust-related. A well-differentiated product with a strong review strategy can overcome these.'}
+                {riskData.risk_label === 'High' && 'High entry risk. Dominant competitors, weak demand, or high resistance make this challenging. Consider a niche focus, phased launch, or category-adjacent entry to reduce risk.'}
+                {riskData.risk_label === 'Critical' && 'Critical entry risk. Fundamental challenges exist with demand, competition, or consumer willingness. A significant market gap or unique product advantage would be required to succeed.'}
               </div>
             </div>
           </CardContent>
@@ -515,7 +582,6 @@ export function ExecutiveNarrativeSection({ r }: { r: SimResults }) {
         </Card>
       )}
 
-      {/* Fallback if nothing to show */}
       {!hasContent && (
         <Card className="border-border/40">
           <CardContent className="p-6 text-center text-sm text-muted-foreground">

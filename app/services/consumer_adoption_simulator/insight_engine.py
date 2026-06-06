@@ -704,15 +704,45 @@ class SimulationInsightEngine:
         }
 
     def _action_plan(self, insights) -> List[Dict[str, Any]]:
+        """
+        Return top 5 actions ranked by business impact.
+        Each action references a specific segment and expected effect.
+        Priority order: highest_opportunity > most_recoverable > launch_recommendation >
+                        competitive_threats > pricing_intelligence > retention_intelligence
+        """
         plan = []
         priority = 1
-        for key in ["highest_opportunity", "most_recoverable", "launch_recommendation",
-                    "competitive_threats", "retention_intelligence", "pricing_intelligence"]:
+
+        # Each entry: (insight_key, max_items_from_insight)
+        ordered = [
+            ("highest_opportunity",  1),
+            ("most_recoverable",     1),
+            ("launch_recommendation",1),
+            ("competitive_threats",  1),
+            ("pricing_intelligence", 1),
+        ]
+
+        for key, max_items in ordered:
+            if priority > 5:
+                break
             insight = insights.get(key, {})
-            for item in (insight.get("action_items") or [])[:2]:
-                plan.append({"priority": priority, "action": item, "category": key})
+            items = (insight.get("action_items") or [])[:max_items]
+            for item in items:
+                if priority > 5:
+                    break
+                # Enrich with segment context where available
+                seg_name = insight.get("segment_name", "")
+                category_label = key.replace("_", " ").title()
+                plan.append({
+                    "priority": priority,
+                    "action": item,
+                    "category": key,
+                    "target_segment": seg_name,
+                    "why": insight.get("summary", "")[:120] if insight.get("summary") else "",
+                })
                 priority += 1
-        return plan[:12]
+
+        return plan[:5]
 
     def _key_opportunities(self, insights) -> List[Dict[str, Any]]:
         opps = []

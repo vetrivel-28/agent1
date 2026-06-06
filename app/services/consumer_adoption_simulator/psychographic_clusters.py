@@ -149,12 +149,48 @@ class PsychographicClusterEngine:
             return []
 
         total = len(consumers)
-        # Assign each consumer to their best-fit fixed segment
+        # Assign each consumer to their best-fit fixed segment via dot-product affinity
         assignments: Dict[str, List[int]] = {name: [] for name in FIXED_SEGMENT_NAMES}
 
         for i, consumer in enumerate(consumers):
             best_segment = self._assign_to_segment(consumer)
             assignments[best_segment].append(i)
+
+        # ── Ensure all 20 segments have minimum population ────────────────────
+        # Step 1: Count how many segments currently have 0 consumers
+        MIN_POP_PER_SEGMENT = 10      # every segment gets at least 10 consumers (1% of 1000)
+        empty_segments = [n for n in FIXED_SEGMENT_NAMES if not assignments[n]]
+        donors_needed = len(empty_segments) * MIN_POP_PER_SEGMENT
+
+        if empty_segments and donors_needed > 0:
+            logger.info(
+                "Ensuring minimum population: %d empty segments need %d consumers total",
+                len(empty_segments), donors_needed,
+            )
+            # Step 2: Find the largest segments to take from
+            rng_fill = random.Random(total * 31337)
+            for empty_name in empty_segments:
+                # Donate MIN_POP_PER_SEGMENT consumers from the largest available segment
+                for _ in range(MIN_POP_PER_SEGMENT):
+                    # Always take from the current largest donor that has surplus
+                    eligible_donors = [
+                        n for n in FIXED_SEGMENT_NAMES 
+                        if len(assignments[n]) > MIN_POP_PER_SEGMENT + 5  # keep buffer
+                    ]
+                    if not eligible_donors:
+                        # Fallback: take from any segment with more than MIN_POP
+                        eligible_donors = [
+                            n for n in FIXED_SEGMENT_NAMES 
+                            if len(assignments[n]) > MIN_POP_PER_SEGMENT
+                        ]
+                    if not eligible_donors:
+                        logger.warning("Cannot donate more consumers - all segments at minimum")
+                        break
+                    
+                    donor_name = max(eligible_donors, key=lambda n: len(assignments[n]))
+                    # Move one consumer index from donor to empty segment
+                    idx = assignments[donor_name].pop()
+                    assignments[empty_name].append(idx)
 
         # Build cluster objects
         theme_names = [
@@ -166,10 +202,6 @@ class PsychographicClusterEngine:
         clusters: List[PsychographicCluster] = []
         for seg_idx, seg_name in enumerate(FIXED_SEGMENT_NAMES):
             member_idx = assignments[seg_name]
-            if not member_idx:
-                # Ensure every segment exists even if empty — assign minimum 1% baseline
-                member_idx = []
-
             member_consumers = [consumers[i] for i in member_idx]
             population = len(member_idx)
             percentage = round(population / total * 100, 2)
@@ -178,7 +210,7 @@ class PsychographicClusterEngine:
             if member_consumers:
                 centroid_dict = self._compute_centroid(member_consumers)
             else:
-                # Use affinity profile as centroid when no members assigned
+                # Fallback: this should rarely happen after the min-pop guarantee above
                 affinity = SEGMENT_TRAIT_AFFINITY.get(seg_name, {})
                 centroid_dict = {k: affinity.get(k, 0.5) for k in FEATURE_KEYS}
 
@@ -212,9 +244,10 @@ class PsychographicClusterEngine:
             ))
 
         clusters.sort(key=lambda c: c.population, reverse=True)
+        active_count = sum(1 for c in clusters if c.population > 0)
         logger.info(
-            "Assigned %d consumers to %d fixed psychographic segments",
-            total, len(clusters),
+            "Assigned %d consumers to %d fixed psychographic segments (%d active, %d with min-pop)",
+            total, len(clusters), active_count, len(empty_segments),
         )
         return clusters
 

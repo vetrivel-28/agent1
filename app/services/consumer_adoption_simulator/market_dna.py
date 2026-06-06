@@ -216,49 +216,70 @@ class MarketDNAEngine:
         revenue_momentum_result: Optional[Dict[str, Any]] = None,
         bsr_result: Optional[Dict[str, Any]] = None,
     ) -> MarketDNA:
-        """
-        Build the unified MarketDNA from all available engine results.
-        Each field is extracted with safe .get() access — missing inputs are
-        recorded in data_completeness but never crash the build.
-        """
         raw: Dict[str, Any] = {}
-        dc: Dict[str, bool] = {}  # data_completeness map
+        dc: Dict[str, bool] = {}
 
         # ── Demand ────────────────────────────────────────────────────────────
+        import math as _math
+
         demand_r = (demand_result or {}).get("results", {})
-        raw["demand_score"] = self._get(demand_r, ["overall_demand_score"])
-        raw["total_search_volume"] = self._get(demand_r, [
-            "total_search_volume", "total_market_search_volume"
+        # demand engine returns total_search_volume and demand_opportunity_database
+        # Derive demand_score from total_search_volume (log-normalized) +
+        # largest_demand_segment.score if available
+        raw_tsv = (
+            demand_r.get("total_search_volume")
+            or demand_r.get("total_market_search_volume")
+            or demand_r.get("keyword_search_volume_total")
+            or 0
+        )
+        raw_conc = demand_r.get("concentration_score")
+        conc_val = raw_conc.get("value") if isinstance(raw_conc, dict) else raw_conc
+
+        # Try multiple paths to find a demand score
+        explicit_score = self._get(demand_r, [
+            "overall_demand_score", "market_demand_score",
+            "total_demand_score", "demand_opportunity_score",
         ])
+
+        if explicit_score is not None:
+            raw["demand_score"] = float(explicit_score)
+        elif raw_tsv and raw_tsv > 0:
+            sv_score = min(60.0, (_math.log10(max(raw_tsv, 1)) / 7.0) * 60.0)
+            conc_bonus = min(20.0, float(conc_val or 0) / 5.0)
+            raw["demand_score"] = round(sv_score + conc_bonus, 1)
+        else:
+            # Derive from demand_opportunity_database if available
+            themes = demand_r.get("demand_opportunity_database") or []
+            if themes and isinstance(themes, list) and len(themes) > 0:
+                # Score from number of themes and their opportunity scores
+                avg_opp = sum(
+                    float(t.get("opportunity_score", 0)) for t in themes[:10]
+                ) / min(len(themes), 10)
+                raw["demand_score"] = round(min(80.0, avg_opp * 0.8 + len(themes) * 1.5), 1)
+            else:
+                raw["demand_score"] = None
+
+        raw["total_search_volume"] = raw_tsv or None
         raw["top_demand_themes"] = demand_r.get("demand_opportunity_database") or []
-        raw["demand_momentum"] = self._get(demand_r, ["market_direction", "demand_trend"])
+        raw["demand_momentum"] = self._get(demand_r, ["market_direction", "demand_trend", "category_direction"])
         dc["demand_score"] = raw["demand_score"] is not None
 
         # ── Demand Velocity ───────────────────────────────────────────────────
         vel_r = (demand_velocity_result or {}).get("results", {})
+        # demand_velocity_engine returns "velocity_score" and "market_phase"
         raw["demand_velocity"] = self._get(vel_r, [
-            "demand_velocity_score", "velocity_score", "overall_velocity"
+            "velocity_score", "demand_velocity_score", "overall_velocity"
         ])
         raw["demand_growth_rate"] = self._get(vel_r, ["growth_rate", "yoy_growth"])
-        raw["search_volume_trend"] = self._get(vel_r, [
-            "search_volume_trend", "search_trend_pct"
-        ])
-        raw["growth_trend"] = self._get(vel_r, [
-            "market_phase", "growth_phase", "trend_direction"
-        ])
-        raw["category_trajectory"] = self._get(vel_r, [
-            "category_trajectory", "market_phase"
-        ])
-        raw["market_momentum"] = self._get(vel_r, [
-            "market_direction", "momentum_label"
-        ])
+        raw["search_volume_trend"] = self._get(vel_r, ["search_volume_trend", "search_trend_pct"])
+        raw["growth_trend"] = self._get(vel_r, ["market_phase", "growth_phase", "trend_direction"])
+        raw["category_trajectory"] = self._get(vel_r, ["category_trajectory", "market_phase"])
+        raw["market_momentum"] = self._get(vel_r, ["market_direction", "momentum_label", "market_phase"])
         dc["demand_velocity"] = raw["demand_velocity"] is not None
 
         # ── SIEI / Inbound Efficiency ─────────────────────────────────────────
         siei_r = (siei_result or {}).get("results", {})
-        raw["revenue_per_search"] = self._get(siei_r, [
-            "revenue_per_1000_searches", "avg_revenue_per_1000_searches"
-        ])
+        # SIEI returns: average_efficiency, friction_count, total_lost_revenue
         raw["conversion_efficiency"] = self._get(siei_r, [
             "average_efficiency", "market_siei_score"
         ])
@@ -268,44 +289,35 @@ class MarketDNAEngine:
         raw["recoverable_revenue"] = self._get(siei_r, [
             "total_lost_revenue", "recoverable_revenue"
         ])
-        raw["revenue_capture_rate"] = self._get(siei_r, [
-            "category_health",
+        raw["revenue_per_search"] = self._get(siei_r, [
+            "revenue_per_1000_searches", "avg_revenue_per_1000_searches"
         ])
-        # Flatten revenue capture rate from nested object if needed
+        # revenue_capture_rate from category_health nested dict
+        raw["revenue_capture_rate"] = self._get(siei_r, ["category_health"])
         if isinstance(raw["revenue_capture_rate"], dict):
             rcc = raw["revenue_capture_rate"].get("demand_winner_ratio")
             raw["revenue_capture_rate"] = float(rcc.rstrip("%")) if isinstance(rcc, str) else rcc
 
         friction_rows = siei_r.get("friction_keywords") or siei_r.get("friction_rows") or []
         raw["top_friction_keywords"] = friction_rows[:10] if isinstance(friction_rows, list) else []
-
         high_intent = siei_r.get("demand_winners") or siei_r.get("high_intent_keywords_full") or []
         raw["high_revenue_keywords"] = high_intent[:10] if isinstance(high_intent, list) else []
-
-        low_eff = siei_r.get("friction_keywords") or []
-        raw["low_efficiency_keywords"] = low_eff[:10] if isinstance(low_eff, list) else []
+        raw["low_efficiency_keywords"] = (siei_r.get("friction_keywords") or [])[:10]
         dc["conversion_efficiency"] = raw["conversion_efficiency"] is not None
 
         # ── HHI / Market Concentration ────────────────────────────────────────
         hhi_r = (hhi_result or {}).get("results", {})
         raw["hhi_score"] = self._get(hhi_r, ["hhi_score"])
         market_structure = hhi_r.get("market_structure", {})
-        # Guard: market_structure must be a dict for _get to work
         if not isinstance(market_structure, dict):
             market_structure = {}
         raw["market_concentration_type"] = self._get(market_structure, [
             "concentration_type", "structure_type"
         ])
-        raw["total_market_revenue"] = self._get(market_structure, [
-            "total_market_revenue"
-        ])
-        raw["brand_dominance_top1"] = self._get(market_structure, [
-            "top_1_share", "top1_share"
-        ])
+        raw["total_market_revenue"] = self._get(market_structure, ["total_market_revenue"])
+        raw["brand_dominance_top1"] = self._get(market_structure, ["top_1_share", "top1_share"])
         brand_rankings = market_structure.get("brand_rankings") or []
         raw["top_brands"] = brand_rankings[:5] if isinstance(brand_rankings, list) else []
-
-        # Competitive saturation: HHI normalized to 0-100
         hhi_val = raw["hhi_score"]
         if hhi_val is not None:
             raw["competitive_saturation"] = round(min(float(hhi_val) / 100.0, 100.0), 2)
@@ -325,36 +337,105 @@ class MarketDNAEngine:
         if not isinstance(sweet, dict):
             sweet = {}
         raw["sweet_spot_price"] = sweet.get("range_label")
-        # Derive a numeric midpoint from sweet spot range_label if possible
         mid = self._parse_price_midpoint(sweet.get("range_label", ""))
         if mid is not None:
             raw["sweet_spot_price_midpoint"] = mid
         dc["price_floor"] = raw["market_price_floor"] is not None
 
         # ── Revenue Momentum ─────────────────────────────────────────────────
+        # revenue_momentum engine returns results["revenue_momentum"]["metrics"]
+        # There is NO top-level market_momentum_score — must dive into nested structure
         rm_r = (revenue_momentum_result or {}).get("results", {})
-        raw["opportunity_gap"] = self._get(rm_r, [
-            "opportunity_gap", "momentum_opportunity_gap"
-        ])
-        raw["revenue_density"] = self._get(rm_r, [
-            "market_momentum_score", "overall_momentum"
-        ])
-        raw["revenue_efficiency"] = self._get(rm_r, [
-            "revenue_efficiency_score"
-        ])
+        rm_nested = rm_r.get("revenue_momentum") or {}
+        if not isinstance(rm_nested, dict):
+            rm_nested = {}
+        rm_metrics = rm_nested.get("metrics") or {}
+        if not isinstance(rm_metrics, dict):
+            rm_metrics = {}
+
+        # opportunity_gap from nested opportunity_alerts
+        raw["opportunity_gap"] = self._get(rm_r, ["opportunity_gap", "momentum_opportunity_gap"])
+
+        # revenue_density: try multiple paths from revenue_momentum result
+        rm_classification = rm_nested.get("classification_summary") or {}
+        if not isinstance(rm_classification, dict):
+            rm_classification = {}
+
+        # Path 1: classification_summary nested fields
+        rd = self._get(rm_classification, ["market_mean_score", "median_momentum", "mean_momentum_score"])
+        # Path 2: top-level fields in revenue_momentum nested block
+        if rd is None:
+            rd = self._get(rm_nested, [
+                "market_mean_score", "median_score", "avg_momentum_score", "category_momentum_score"
+            ])
+        # Path 3: top-level in results
+        if rd is None:
+            rd = self._get(rm_r, [
+                "market_momentum_score", "overall_momentum", "avg_revenue_momentum",
+                "revenue_momentum_score", "category_revenue_score",
+            ])
+        # Path 4: derive from high_momentum_count / total if available
+        if rd is None:
+            high_count = rm_classification.get("high_momentum_count") or rm_nested.get("high_momentum_count")
+            total_count = rm_classification.get("total_products") or rm_nested.get("total_products") or rm_r.get("total_products")
+            if high_count is not None and total_count and float(total_count) > 0:
+                rd = round(float(high_count) / float(total_count) * 100.0, 1)
+        # Path 5: derive from revenue metrics
+        if rd is None:
+            total_rev = self._get(rm_r, ["total_market_revenue"]) or self._get(rm_nested, ["total_market_revenue"])
+            if total_rev and float(total_rev) > 0:
+                import math as _math2
+                rd = round(min(80.0, (_math2.log10(max(float(total_rev), 1)) / 8.0) * 80.0), 1)
+
+        raw["revenue_density"] = rd
+
+        # Also try total_market_revenue from nested block to fill market context
+        if not raw.get("total_market_revenue"):
+            raw["total_market_revenue"] = self._get(rm_nested, ["total_market_revenue"]) or \
+                                          self._get(rm_r, ["total_market_revenue"])
+
+        # revenue_efficiency from rm_metrics or top-level
+        raw["revenue_efficiency"] = (
+            self._get(rm_r, ["revenue_efficiency_score"])
+            or self._get(rm_metrics, ["revenue_efficiency_score"])
+        )
         dc["revenue_density"] = raw["revenue_density"] is not None
 
-        # ── Customer sentiment (from demand themes / BSR) ─────────────────────
-        # Extract sentiment proxies from demand themes
+        # ── BSR Efficiency (fallback signals) ─────────────────────────────────
+        bsr_r = (bsr_result or {}).get("results", {})
+        # BSR returns total_recoverable_revenue, median_efficiency
+        if not raw.get("recoverable_revenue"):
+            bsr_recoverable = self._get(bsr_r, ["total_recoverable_revenue"])
+            if bsr_recoverable:
+                raw["recoverable_revenue"] = bsr_recoverable
+                dc["conversion_efficiency"] = True
+        if not raw.get("conversion_efficiency"):
+            raw["conversion_efficiency"] = self._get(bsr_r, [
+                "median_efficiency", "market_efficiency_score", "average_category_efficiency"
+            ])
+            dc["conversion_efficiency"] = raw["conversion_efficiency"] is not None
+        if not raw.get("revenue_density"):
+            # BSR market_efficiency_score is a decent revenue density proxy
+            bsr_rd = self._get(bsr_r, [
+                "market_efficiency_score", "average_category_efficiency"
+            ])
+            if bsr_rd is not None:
+                raw["revenue_density"] = bsr_rd
+                dc["revenue_density"] = True
+        # If revenue_density still missing but conversion_efficiency is present, derive proxy
+        if not raw.get("revenue_density") and raw.get("conversion_efficiency"):
+            # conversion_efficiency is a reasonable proxy for revenue density
+            raw["revenue_density"] = round(float(raw["conversion_efficiency"]) * 0.85, 1)
+            dc["revenue_density"] = True
+
+        # ── Customer sentiment ────────────────────────────────────────────────
         themes = raw["top_demand_themes"]
         raw["review_themes"] = [
             {"theme": t.get("segment", t.get("display_segment", "")),
              "demand_share": t.get("demand_share", 0),
              "opportunity_score": t.get("opportunity_score", 0)}
-            for t in themes[:10]
-            if isinstance(t, dict)
+            for t in themes[:10] if isinstance(t, dict)
         ]
-        # Extract pain points from review / segment names heuristically
         pain_keywords = ["problem", "issue", "difficult", "fail", "poor", "broken", "missing"]
         desire_keywords = ["easy", "convenient", "premium", "quality", "durable", "fast", "reliable"]
         pain_points: List[str] = []
@@ -366,7 +447,6 @@ class MarketDNAEngine:
                     if p in kw_text.lower() and kw_text not in pain_points:
                         pain_points.append(kw_text)
         raw["top_pain_points"] = pain_points[:10]
-
         for kw_rec in raw["high_revenue_keywords"]:
             if isinstance(kw_rec, dict):
                 kw_text = kw_rec.get("keyword", "")
@@ -375,7 +455,7 @@ class MarketDNAEngine:
                         desired.append(kw_text)
         raw["top_desired_outcomes"] = desired[:10]
 
-        # Sentiment: proxy from review_efficiency in siei (higher = buyers satisfied)
+        # Sentiment proxy: conversion_efficiency is the best available signal
         avg_eff = raw.get("conversion_efficiency")
         if avg_eff is not None:
             raw["review_sentiment_score"] = round(float(avg_eff), 1)
@@ -384,12 +464,14 @@ class MarketDNAEngine:
         dc["review_sentiment"] = raw["review_sentiment_score"] is not None
 
         raw["data_completeness"] = dc
-
         logger.info(
-            "MarketDNA built — completeness=%.1f%% (%d/%d fields)",
+            "MarketDNA built — completeness=%.1f%% (%d/%d fields) | "
+            "demand_score=%.1f | revenue_density=%s | conversion_efficiency=%s",
             sum(dc.values()) / max(len(dc), 1) * 100,
-            sum(dc.values()),
-            len(dc),
+            sum(dc.values()), len(dc),
+            raw.get("demand_score") or 0,
+            raw.get("revenue_density"),
+            raw.get("conversion_efficiency"),
         )
         return MarketDNA(raw)
 
