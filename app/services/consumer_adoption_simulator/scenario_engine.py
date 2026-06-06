@@ -9,9 +9,14 @@ CHANGED:
   - Sentiment scenario now selects a dataset-driven improvement combination
   - Pricing scenarios now include segment-filter breakdowns (top 2-3 dataset-driven filters)
   - All multipliers anchored to dataset signals, no hardcoded values
+  - Added 2-3 dataset-driven interactive business levers for scenario testing
+  - Levers selected based on product/market signals (trust, price, demand, delivery)
 
 Scenarios kept:
   Pricing:    +10%, +20%, +30%, -10%, -20%, -30%
+  Additional levers: 2-3 dataset-driven (advertising push, discount/promotion,
+                     review trust, bundle strategy, delivery confidence,
+                     product education — selected per dataset)
   Sentiment:  Smart combination selected from dataset weakness signals
 """
 from __future__ import annotations
@@ -22,6 +27,66 @@ from typing import Any, Dict, List, Optional
 from app.utils.logger import get_logger
 
 logger = get_logger("scenario_testing_engine")
+
+
+# Lever definitions: each lever has adoption_boost, conv_boost at intensity levels.
+# All values are relative multipliers — anchored to dataset signal weights.
+LEVER_DEFINITIONS = {
+    "marketing_push": {
+        "label": "Marketing / Advertising Push",
+        "description": "Increase ad spend and organic visibility to reach more potential buyers.",
+        "options": [
+            {"id": "none",     "label": "No Change",        "adoption_factor": 0.0,  "conv_factor": 0.0},
+            {"id": "moderate", "label": "+15% Ad Spend",    "adoption_factor": 0.08, "conv_factor": 0.04},
+            {"id": "high",     "label": "+30% Ad Spend",    "adoption_factor": 0.16, "conv_factor": 0.07},
+        ],
+    },
+    "discount_promotion": {
+        "label": "Discount / Promotional Offer",
+        "description": "Apply coupon or limited-time discount to lower effective price barrier.",
+        "options": [
+            {"id": "none",     "label": "No Promotion",     "adoption_factor": 0.0,  "conv_factor": 0.0},
+            {"id": "moderate", "label": "10% Coupon",       "adoption_factor": 0.10, "conv_factor": 0.06},
+            {"id": "high",     "label": "20% Coupon",       "adoption_factor": 0.18, "conv_factor": 0.10},
+        ],
+    },
+    "review_trust": {
+        "label": "Review Sentiment / Trust Improvement",
+        "description": "Improve average star rating and review volume to reduce trust barrier.",
+        "options": [
+            {"id": "none",     "label": "No Change",            "adoption_factor": 0.0,  "conv_factor": 0.0},
+            {"id": "moderate", "label": "+0.3 Star Rating",     "adoption_factor": 0.09, "conv_factor": 0.05},
+            {"id": "high",     "label": "+0.5 Star Rating",     "adoption_factor": 0.18, "conv_factor": 0.09},
+        ],
+    },
+    "bundle_strategy": {
+        "label": "Bundle / Value Strategy",
+        "description": "Create bundle or value pack to increase perceived value without direct price cut.",
+        "options": [
+            {"id": "none",     "label": "No Bundle",            "adoption_factor": 0.0,  "conv_factor": 0.0},
+            {"id": "moderate", "label": "Complementary Bundle", "adoption_factor": 0.10, "conv_factor": 0.06},
+            {"id": "high",     "label": "Value Pack + Savings", "adoption_factor": 0.17, "conv_factor": 0.09},
+        ],
+    },
+    "delivery_confidence": {
+        "label": "Delivery / Return Confidence",
+        "description": "Improve return policy and delivery guarantees to reduce purchase risk.",
+        "options": [
+            {"id": "none",     "label": "Current Policy",       "adoption_factor": 0.0,  "conv_factor": 0.0},
+            {"id": "moderate", "label": "Free Returns + 30d",   "adoption_factor": 0.08, "conv_factor": 0.05},
+            {"id": "high",     "label": "Premium Guarantee",    "adoption_factor": 0.14, "conv_factor": 0.08},
+        ],
+    },
+    "product_education": {
+        "label": "Product Education / Value Clarity",
+        "description": "Add comparison guides, FAQs, how-to content to reduce buyer confusion.",
+        "options": [
+            {"id": "none",     "label": "Current Content",      "adoption_factor": 0.0,  "conv_factor": 0.0},
+            {"id": "moderate", "label": "FAQ + How-To Guide",   "adoption_factor": 0.07, "conv_factor": 0.04},
+            {"id": "high",     "label": "Video + Comparison",   "adoption_factor": 0.13, "conv_factor": 0.07},
+        ],
+    },
+}
 
 
 class ScenarioTestingEngine:
@@ -35,12 +100,18 @@ class ScenarioTestingEngine:
         pricing_results  = self._pricing_scenarios(dna_dict, enriched_segments, population_summary)
         segment_filters  = self._build_segment_filters(dna_dict, enriched_segments)
         sentiment_result = self._smart_sentiment_scenario(dna_dict, enriched_segments, population_summary)
+        additional_levers = self._select_additional_levers(dna_dict, enriched_segments)
+        lever_scenario_grid = self._build_lever_scenario_grid(
+            dna_dict, enriched_segments, population_summary, additional_levers
+        )
 
         return {
             "pricing_scenarios":     pricing_results,
             "segment_filters":       segment_filters,
             "competitive_scenarios": [],    # REMOVED — kept as empty list for API shape compat
             "sentiment_scenario":    sentiment_result,
+            "additional_levers":     additional_levers,
+            "lever_scenario_grid":   lever_scenario_grid,
         }
 
     # ── Pricing scenarios ────────────────────────────────────────────────────
@@ -453,6 +524,200 @@ class ScenarioTestingEngine:
                 "lever_scores":              {k: round(v, 3) for k, v in sorted_levers},
             },
         }
+
+    # ── Dataset-driven lever selection ─────────────────────────────────────────
+
+    def _select_additional_levers(
+        self,
+        dna: Dict[str, Any],
+        segs: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """
+        Select the 2-3 most relevant interactive business levers for this dataset.
+        Returns full lever definitions including options and selection reasoning.
+
+        Selection logic:
+          - If review sentiment or trust is weak → review_trust, product_education
+          - If price resistance or budget sensitivity is high → discount_promotion, bundle_strategy
+          - If demand is strong but conversion is weak → marketing_push, product_education
+          - If returns/trust/delivery friction exists → delivery_confidence
+        """
+        eff         = dna.get("conversion_efficiency") or 50.0
+        friction_kw = dna.get("friction_keyword_count") or 0
+        hhi         = dna.get("hhi_score") or 2500.0
+        velocity    = dna.get("demand_velocity") or 50.0
+        demand_s    = dna.get("demand_score") or 50.0
+
+        avg_risk    = self._avg_trait(segs, "risk_aversion", 0.4)
+        avg_price_s = self._avg_trait(segs, "budget_sensitivity", 0.5)
+        avg_premium = self._avg_trait(segs, "premium_willingness", 0.4)
+        avg_trend   = self._avg_trait(segs, "trend_focused", 0.3)
+        avg_conv    = self._avg_trait(segs, "convenience_focused", 0.5)
+
+        # Score each lever
+        lever_scores: Dict[str, float] = {
+            "marketing_push":       avg_trend * 0.4 + (velocity / 100.0) * 0.35 + avg_conv * 0.15 + (demand_s / 100.0) * 0.1,
+            "discount_promotion":   avg_price_s * 0.55 + (1.0 - eff / 100.0) * 0.25 + (1.0 - avg_premium) * 0.2,
+            "review_trust":         avg_risk * 0.50 + (1.0 - eff / 100.0) * 0.30 + min(friction_kw / 300.0, 1.0) * 0.2,
+            "bundle_strategy":      avg_premium * 0.40 + (1.0 - avg_price_s) * 0.25 + avg_conv * 0.20 + avg_price_s * 0.15,
+            "delivery_confidence":  min(hhi / 10000.0, 1.0) * 0.40 + avg_risk * 0.40 + (1.0 - eff / 100.0) * 0.20,
+            "product_education":    avg_risk * 0.35 + (1.0 - eff / 100.0) * 0.30 + min(friction_kw / 200.0, 1.0) * 0.35,
+        }
+
+        sorted_levers = sorted(lever_scores.items(), key=lambda x: x[1], reverse=True)
+        chosen_ids = [lid for lid, _ in sorted_levers[:3]]
+
+        # Build reasoning for each chosen lever
+        reasoning_map: Dict[str, str] = {
+            "marketing_push": (
+                f"Demand velocity is {velocity:.0f}/100 and trend-sensitive segments have avg_trend={avg_trend:.2f}. "
+                "Visibility gain has strong adoption impact here."
+            ),
+            "discount_promotion": (
+                f"Budget sensitivity avg={avg_price_s:.2f} signals price-conscious segments. "
+                "A limited-time discount or coupon directly reduces their primary barrier."
+            ),
+            "review_trust": (
+                f"Risk-averse segment share is high (avg_risk={avg_risk:.2f}) and "
+                f"efficiency={eff:.0f}/100. Trust barriers dominate conversion resistance."
+            ),
+            "bundle_strategy": (
+                f"Premium willingness avg={avg_premium:.2f} — value-bundling raises perceived worth "
+                "without requiring a direct price reduction. Ideal for Gift Buyers and Value Maximizers."
+            ),
+            "delivery_confidence": (
+                f"Market concentration HHI={hhi:.0f} creates unfamiliar-brand risk. "
+                "Return guarantees reduce first-purchase hesitation significantly."
+            ),
+            "product_education": (
+                f"Friction keywords ({friction_kw}) and risk-averse segments (avg={avg_risk:.2f}) "
+                "indicate buyers need more information before committing."
+            ),
+        }
+
+        levers_out = []
+        for lid in chosen_ids:
+            defn = LEVER_DEFINITIONS.get(lid)
+            if not defn:
+                continue
+            levers_out.append({
+                "id":          lid,
+                "label":       defn["label"],
+                "description": defn["description"],
+                "options":     defn["options"],
+                "score":       round(lever_scores[lid], 3),
+                "reason":      reasoning_map.get(lid, "Selected based on dataset signals."),
+            })
+
+        return levers_out
+
+    def _build_lever_scenario_grid(
+        self,
+        dna: Dict[str, Any],
+        segs: List[Dict[str, Any]],
+        population_summary: Dict[str, Any],
+        additional_levers: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """
+        Pre-compute the result for each combination of price scenario × each lever intensity option.
+        Returns a flat list of {price_scenario, lever_id, lever_option_id, ...metrics}.
+        Used by the frontend to show live updates when selectors change.
+        """
+        base_intent = population_summary.get("avg_purchase_intent", 50.0)
+        base_conv   = population_summary.get("avg_conversion_probability", 0.3)
+        base_rev    = dna.get("recoverable_revenue") or 0.0
+
+        avg_price_s = self._avg_trait(segs, "budget_sensitivity", 0.5)
+        avg_premium = self._avg_trait(segs, "premium_willingness", 0.4)
+        efficiency_n = (dna.get("conversion_efficiency") or 50.0) / 100.0
+        price_ceil  = dna.get("market_price_ceiling") or 50.0
+        price_floor = dna.get("market_price_floor") or 5.0
+        price_mid   = (price_ceil + price_floor) / 2.0
+        premium_factor = min(price_mid / 80.0, 1.0)
+
+        # Sensitivity of levers to current market signals
+        # (higher sensitivity = larger adoption impact from that lever type)
+        avg_risk  = self._avg_trait(segs, "risk_aversion", 0.4)
+        avg_trend = self._avg_trait(segs, "trend_focused", 0.3)
+        avg_conv_f = self._avg_trait(segs, "convenience_focused", 0.5)
+        velocity   = dna.get("demand_velocity") or 50.0
+        hhi        = dna.get("hhi_score") or 2500.0
+        friction   = dna.get("friction_keyword_count") or 0
+
+        # Signal sensitivity multipliers per lever type
+        lever_sensitivity: Dict[str, float] = {
+            "marketing_push":       (avg_trend * 0.5 + (velocity / 100.0) * 0.3 + avg_conv_f * 0.2),
+            "discount_promotion":   (avg_price_s * 0.6 + (1.0 - efficiency_n) * 0.4),
+            "review_trust":         (avg_risk * 0.6 + min(friction / 300.0, 1.0) * 0.4),
+            "bundle_strategy":      (self._avg_trait(segs, "premium_willingness", 0.4) * 0.5 + avg_price_s * 0.3 + avg_conv_f * 0.2),
+            "delivery_confidence":  (min(hhi / 10000.0, 1.0) * 0.5 + avg_risk * 0.5),
+            "product_education":    (avg_risk * 0.5 + min(friction / 200.0, 1.0) * 0.5),
+        }
+
+        grid = []
+        price_changes = [10, 20, 30, -10, -20, -30]
+
+        for pct_change in price_changes:
+            abs_pct = abs(pct_change)
+            # Compute price scenario base (same as _pricing_scenarios)
+            if pct_change > 0:
+                eff_sens = avg_price_s * (1.0 - avg_premium * 0.4) * (1.0 - premium_factor * 0.3)
+                price_adoption_delta = -(pct_change / 100.0) * eff_sens * 75
+                price_conv_delta = -(pct_change / 100.0) * avg_price_s * 0.28
+                price_rev_multiplier = (1.0 + pct_change / 100.0) * (1.0 + price_adoption_delta / 100.0)
+            else:
+                eff_sens = avg_price_s * (1.0 - efficiency_n * 0.2)
+                price_adoption_delta = (abs_pct / 100.0) * eff_sens * 48
+                price_conv_delta = (abs_pct / 100.0) * avg_price_s * 0.22
+                price_rev_multiplier = (1.0 + pct_change / 100.0) * (1.0 + price_adoption_delta / 200.0)
+
+            scenario_label = f"Price {'+' if pct_change > 0 else ''}{pct_change}%"
+
+            # For each lever, compute combined result (price + lever)
+            for lever in additional_levers:
+                lid = lever["id"]
+                sensitivity = lever_sensitivity.get(lid, 0.3)
+                for opt in lever.get("options", []):
+                    af = opt["adoption_factor"]  # base factor for this option
+                    cf = opt["conv_factor"]
+                    # Scale by signal sensitivity: more responsive market = bigger lever impact
+                    scaled_adoption_lift = af * sensitivity * 60  # max ~30pts at full sensitivity
+                    scaled_conv_lift = cf * sensitivity * 0.35
+
+                    combined_intent = round(min(100, max(0,
+                        base_intent + price_adoption_delta + scaled_adoption_lift
+                    )), 2)
+                    combined_conv = round(min(0.99, max(0.01,
+                        base_conv + price_conv_delta + scaled_conv_lift
+                    )), 4)
+
+                    # Revenue: price × price_rev_multiplier × lever conv uplift
+                    lever_rev_factor = combined_conv / max(base_conv, 0.01)
+                    combined_rev = round(
+                        base_rev * max(0.0, price_rev_multiplier) * lever_rev_factor, 2
+                    ) if base_rev > 0 else 0.0
+                    rev_change_pct = round(
+                        (combined_rev / max(base_rev, 1) - 1.0) * 100, 1
+                    ) if base_rev > 0 else 0.0
+
+                    grid.append({
+                        "price_scenario":   scenario_label,
+                        "price_pct":        pct_change,
+                        "lever_id":         lid,
+                        "lever_option_id":  opt["id"],
+                        "lever_option_label": opt["label"],
+                        "base_adoption":    round(base_intent, 2),
+                        "new_adoption":     combined_intent,
+                        "adoption_change":  round(combined_intent - base_intent, 2),
+                        "base_conversion":  round(base_conv * 100, 2),
+                        "new_conversion":   round(combined_conv * 100, 2),
+                        "conv_change":      round((combined_conv - base_conv) * 100, 2),
+                        "base_revenue":     round(base_rev, 2),
+                        "new_revenue":      combined_rev,
+                        "revenue_change_pct": rev_change_pct,
+                    })
+
+        return grid
 
     # ── helpers ───────────────────────────────────────────────────────────────
 

@@ -1,8 +1,11 @@
 import axios from 'axios';
 import { enrichCategoryScope, type CategoryScopePayload } from '../hooks/useCategoryScope';
 
+// In dev, Vite proxies /api → http://localhost:8000, so a relative baseURL works.
+// In production (built assets served from same origin), this also works.
+// This avoids CORS preflight issues entirely.
 export const apiClient = axios.create({
-  baseURL: 'http://localhost:8000/api/v1',
+  baseURL: '/api/v1',
   headers: {
     'Content-Type': 'application/json',
   },

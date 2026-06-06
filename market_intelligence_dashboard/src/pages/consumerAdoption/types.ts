@@ -97,6 +97,39 @@ export interface SimulationConfidence {
   formula?: string;
 }
 
+export interface LeverOption {
+  id: string;
+  label: string;
+  adoption_factor: number;
+  conv_factor: number;
+}
+
+export interface AdditionalLever {
+  id: string;
+  label: string;
+  description: string;
+  options: LeverOption[];
+  score: number;
+  reason: string;
+}
+
+export interface LeverScenarioResult {
+  price_scenario: string;
+  price_pct: number;
+  lever_id: string;
+  lever_option_id: string;
+  lever_option_label: string;
+  base_adoption: number;
+  new_adoption: number;
+  adoption_change: number;
+  base_conversion: number;
+  new_conversion: number;
+  conv_change: number;
+  base_revenue: number;
+  new_revenue: number;
+  revenue_change_pct: number;
+}
+
 export interface SegmentFilter {
   id: string;
   label: string;
@@ -109,6 +142,8 @@ export interface ScenarioTesting {
   competitive_scenarios: CompetitiveScenario[];  // always [] now (removed)
   sentiment_scenario: SentimentScenario | null;
   segment_filters?: SegmentFilter[];
+  additional_levers?: AdditionalLever[];
+  lever_scenario_grid?: LeverScenarioResult[];
 }
 
 export interface PricingScenario {
@@ -149,6 +184,14 @@ export interface SentimentScenario {
   selection_reasoning?: string[];
   most_impacted_segments?: Array<{ segment: string; risk_aversion: number; sensitivity_score?: number }>;
   evidence?: Record<string, unknown>;
+}
+
+export interface ActionPlanItem {
+  priority: number;
+  action: string;
+  category: string;
+  target_segment?: string;
+  why?: string;
 }
 
 export interface StressCase {
@@ -215,7 +258,7 @@ export interface SimResults {
   completeness_score: number;
   insights?: Record<string, unknown>;
   executive_narrative?: { narrative: string; headline_metrics: Record<string, unknown> };
-  action_plan?: Array<{ priority: number; action: string; category: string }>;
+  action_plan?: Array<ActionPlanItem>;
   key_opportunities?: Array<{ title: string; detail: string; type: string }>;
   key_risks?: Array<{ title: string; detail: string; severity: string }>;
   simulation_confidence?: SimulationConfidence;

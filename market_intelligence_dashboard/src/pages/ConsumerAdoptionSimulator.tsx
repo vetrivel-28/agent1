@@ -719,15 +719,70 @@ export default function ConsumerAdoptionSimulator() {
                 </RadarChart>
               </ResponsiveContainer>
             </ChartContainer>
-            {/* Insight below chart */}
+            {/* Stronger trait insight */}
             {traitRadarData.length > 0 && (() => {
-              const top = [...traitRadarData].sort((a, b) => b.value - a.value).slice(0, 3);
+              const sorted = [...traitRadarData].sort((a, b) => b.value - a.value);
+              const top3 = sorted.slice(0, 3);
+              const bottom2 = sorted.slice(-2);
+              // Segments most responsible for top traits
+              const topTraitKeys = top3.map(t =>
+                Object.keys(TRAIT_LABELS).find(k => TRAIT_LABELS[k] === t.subject) ?? ''
+              );
+              const topSegsByTrait = activeSegs
+                .filter(s => topTraitKeys.some(k => ((s.dominant_traits as any)?.[k] ?? 0) > 0.55))
+                .sort((a, b) => {
+                  const aScore = topTraitKeys.reduce((sum, k) => sum + ((a.dominant_traits as any)?.[k] ?? 0), 0);
+                  const bScore = topTraitKeys.reduce((sum, k) => sum + ((b.dominant_traits as any)?.[k] ?? 0), 0);
+                  return bScore - aScore;
+                })
+                .slice(0, 3);
+
+              // Messaging implication
+              const topNames = top3.map(t => t.subject);
+              const hasQuality = topNames.includes('Quality');
+              const hasBudget = topNames.includes('Budget') || topNames.includes('Price');
+              const hasPremium = topNames.includes('Premium');
+              const hasConvenience = topNames.includes('Convenience');
+              const hasTrend = topNames.includes('Trend');
+
+              let messagingAdvice = '';
+              if (hasQuality && hasBudget) messagingAdvice = 'This market values quality but is price-conscious. Messaging should emphasize durable value — the product delivers quality without excess cost.';
+              else if (hasPremium && hasQuality) messagingAdvice = 'Premium and quality traits dominate. Lead with craftsmanship, materials, and brand authority. Price justification messaging performs well here.';
+              else if (hasConvenience && hasBudget) messagingAdvice = 'Convenience and budget-sensitivity are the dominant traits. Lead with ease-of-purchase, fast delivery, and value-for-money messaging.';
+              else if (hasTrend) messagingAdvice = 'Trend-following is a dominant trait. Use social proof, bestseller positioning, and trending/popular badges to capture these buyers quickly.';
+              else messagingAdvice = `Messaging should focus on the top trait signals: ${topNames.slice(0, 2).join(' and ')}, as these drive the highest-converting segments.`;
+
               return (
-                <div className="mt-3 p-3 bg-muted/20 border border-border/40 rounded-xl text-xs text-muted-foreground">
-                  <span className="font-bold text-foreground">What this means: </span>
-                  The strongest traits in this market are{' '}
-                  <span className="text-primary font-bold">{top.map(t => t.subject).join(', ')}</span>.{' '}
-                  These signals drive which segments have high adoption and should inform your messaging priorities.
+                <div className="mt-3 p-4 bg-muted/20 border border-border/40 rounded-xl text-xs text-muted-foreground space-y-2">
+                  <p>
+                    <span className="font-bold text-foreground">Top 3 traits: </span>
+                    {top3.map(t => (
+                      <span key={t.subject} className="inline-flex items-center gap-1 mr-2">
+                        <span className="text-primary font-bold">{t.subject}</span>
+                        <span className="font-mono text-muted-foreground">({t.value.toFixed(0)}/100)</span>
+                      </span>
+                    ))}
+                  </p>
+                  <p>
+                    <span className="font-bold text-foreground">Weakest traits: </span>
+                    {bottom2.map(t => (
+                      <span key={t.subject} className="inline-flex items-center gap-1 mr-2">
+                        <span className="text-red-400 font-bold">{t.subject}</span>
+                        <span className="font-mono text-muted-foreground">({t.value.toFixed(0)}/100)</span>
+                      </span>
+                    ))}
+                    {' '}<span className="text-muted-foreground">— segments driven by these traits are harder to convert in this market.</span>
+                  </p>
+                  {topSegsByTrait.length > 0 && (
+                    <p>
+                      <span className="font-bold text-foreground">Segments driving top traits: </span>
+                      <span className="text-primary">{topSegsByTrait.map(s => s.cluster_name).join(', ')}</span>
+                    </p>
+                  )}
+                  <p>
+                    <span className="font-bold text-foreground">Messaging implication: </span>
+                    {messagingAdvice}
+                  </p>
                 </div>
               );
             })()}
@@ -997,43 +1052,55 @@ export default function ConsumerAdoptionSimulator() {
                 label: 'Habit Lock-In',
                 key: 'habit_lock_in' as const,
                 color: '#EF4444',
-                meaning: 'How stuck consumers are in existing purchase routines. High scores mean they need a compelling reason to change — promotions, bundling, or category education.',
-                action: 'Counter with trial offers, subscription discounts, or comparison content that makes switching feel low-risk.',
+                meaning: 'Consumers are locked in existing purchase routines. High scores mean they need a compelling, low-risk reason to switch — your product must differentiate clearly from what they already use.',
+                actionHigh: 'Add a side-by-side comparison chart against the top 2 alternatives currently in the market. Highlight specific advantages in features, price/oz, or shelf life.',
+                actionMed: 'Create a "Why switch?" section in the product listing. Use trial size or starter pack to lower perceived risk of changing.',
+                actionLow: 'Reinforce convenience and habit fit in copy — remind buyers this replaces what they already do, just better.',
               },
               {
                 label: 'Trust Barrier',
                 key: 'trust_barrier' as const,
                 color: '#EAB308',
-                meaning: 'How skeptical consumers are before their first purchase. Reviews, A+ content, certifications, and brand credibility reduce this barrier directly.',
-                action: 'Invest in verified reviews, detailed Q&A, brand story content, and certifications before launch.',
+                meaning: 'Consumers are skeptical before their first purchase. In this category, trust is built through social proof, brand history, certifications, and detailed product transparency.',
+                actionHigh: 'Add 3–5 review snippets directly addressing top purchase objections above the fold. Include seller tenure, total review count, and any certifications in bullet points.',
+                actionMed: 'Surface your return policy and any guarantees prominently near the purchase button. Add a Q&A section addressing the 3 most common buyer concerns.',
+                actionLow: 'Maintain review quality and respond to 1-2 star reviews publicly — visible responses improve trust signals for fence-sitters.',
               },
               {
                 label: 'Price Resistance',
                 key: 'price_resistance' as const,
                 color: '#8B5CF6',
-                meaning: 'How much pricing blocks purchase. High scores indicate price-sensitive segments — value framing, tiered pricing, and comparison anchors help.',
-                action: 'Use value stacking (bundles, warranties, volume discounts) and emphasise ROI vs. competitor alternatives.',
+                meaning: 'Price is a blocker for a meaningful share of consumers. This does not mean you must lower price — it means the value proposition needs to be more visible relative to the cost.',
+                actionHigh: 'Create a bundle offer (product + accessory) priced at 85% of individual total. Add a cost-per-use or cost-per-day metric in bullet points to reframe the price.',
+                actionMed: 'Use Subscribe & Save if applicable. Add a "Compared to alternatives: X more uses per unit" claim in the listing.',
+                actionLow: 'Emphasize quantity, longevity, or quality proof in copy. Show premium ingredient or material credentials to justify the current price.',
               },
               {
                 label: 'Competitor Loyalty',
                 key: 'competitor_loyalty' as const,
                 color: '#F97316',
-                meaning: 'How attached consumers are to existing competitor brands. Requires strong differentiation, trial offers, or clear feature advantages to overcome.',
-                action: 'Lead with a clear differentiation hook — feature gap, price advantage, or unmet need competitors ignore.',
+                meaning: 'Consumers have strong existing relationships with competitor brands. Breaking loyalty requires a clear, memorable advantage — not just "as good as" the alternative.',
+                actionHigh: 'Lead with a single differentiating claim that a competitor cannot easily copy (exclusive ingredient, unique form factor, certified claim). Run a conquest campaign targeting competitor brand search terms.',
+                actionMed: 'Target the gap in competitor reviews — find the most common complaint about the top brand and make that your positioning hook.',
+                actionLow: 'Maintain competitive pricing and review quality so switchers who try your product stay. Price-parity is the minimum bar for loyalty-switching categories.',
               },
               {
                 label: 'Product Complexity',
                 key: 'product_complexity' as const,
                 color: '#3B82F6',
-                meaning: 'How confusing or overwhelming the product category feels. Simplified listings, comparison tables, and use-case content reduce this barrier.',
-                action: 'Add a simplified "What it does and why you need it" section above the fold in the product listing.',
+                meaning: 'The product category or use-case feels confusing to buyers. Too many options, unclear specifications, or jargon in listings drive abandonment before purchase.',
+                actionHigh: 'Add a simplified "What it does in one sentence" line at the top of bullet points. Create a selection guide: "If you need X, choose this. If you need Y, choose that."',
+                actionMed: 'Replace specification-heavy copy with outcome-based language. "Covers 500 sq ft in 2 coats" beats "high viscosity formula with 40% solids."',
+                actionLow: 'Add infographics or a comparison table to the A+ content section. Visual comparisons reduce perceived complexity without changing the copy.',
               },
               {
                 label: 'Education Required',
                 key: 'education_requirement' as const,
                 color: '#10B981',
-                meaning: 'How much pre-purchase education consumers need. High scores suggest investing in FAQs, videos, and detailed Q&A sections before launch.',
-                action: 'Create a how-to video, comparison guide, or FAQ that reduces the learning curve before purchase.',
+                meaning: 'Buyers need to understand what the product does and why they need it before purchasing. High education requirements indicate a knowledge gap that must be bridged before intent can convert.',
+                actionHigh: 'Create a 60-second how-to video as the first product image. Add a "Frequently Bought Together" educational FAQ in the listing. Target long-tail informational keywords in PPC.',
+                actionMed: 'Add a "How to use in 3 steps" graphic to images. Explicitly answer "Who is this for?" and "What problem does it solve?" in bullet points.',
+                actionLow: 'Include one testimonial that describes the before/after use-case scenario. Real-world context bridges the education gap naturally.',
               },
             ].map((b) => {
               const avg = activeSegs.length
@@ -1045,6 +1112,24 @@ export default function ConsumerAdoptionSimulator() {
                 .sort((a, b2) => (b2.resistance?.[b.key] || 0) - (a.resistance?.[b.key] || 0))
                 .slice(0, 3)
                 .map(s => s.cluster_name);
+
+              // Signals from DNA that caused this barrier score
+              const sourceSig = {
+                habit_lock_in: 'brand_loyalty + switching_cost + HHI score',
+                trust_barrier: 'risk_aversion + conversion_efficiency + friction keywords',
+                price_resistance: 'price_focused + budget_sensitivity + price spread',
+                competitor_loyalty: 'brand_loyalty + brand_dominance_top1',
+                product_complexity: 'risk_aversion + HHI fragmentation + convenience_focused',
+                education_requirement: 'conversion_efficiency + risk_aversion + base floor',
+              }[b.key] ?? 'multiple dataset signals';
+
+              const actionText = level === 'High' ? b.actionHigh : level === 'Moderate' ? b.actionMed : b.actionLow;
+
+              // Adoption and revenue impact estimate
+              const adoptionImpact = avg >= 65 ? 'High impact on adoption — removing this barrier unlocks significant conversion uplift.' :
+                avg >= 40 ? 'Moderate impact — reducing this barrier will meaningfully improve conversion for affected segments.' :
+                'Low impact — this barrier is manageable and unlikely to block a majority of buyers.';
+
               return (
                 <Card key={b.label} className="border-border/30 bg-card">
                   <CardContent className="p-3">
@@ -1067,14 +1152,18 @@ export default function ConsumerAdoptionSimulator() {
                       />
                     </div>
                     <p className="text-[10px] text-muted-foreground leading-relaxed mb-1.5">{b.meaning}</p>
+                    <p className="text-[10px] text-muted-foreground mb-1">
+                      <span className="font-bold text-foreground">Source signals: </span>{sourceSig}
+                    </p>
                     {topAffected.length > 0 && (
-                      <p className="text-[10px] text-muted-foreground">
+                      <p className="text-[10px] text-muted-foreground mb-1">
                         <span className="font-bold text-foreground">Most affected: </span>
                         {topAffected.join(' · ')}
                       </p>
                     )}
-                    <p className="text-[10px] text-primary mt-1 leading-relaxed">
-                      <span className="font-bold">Action: </span>{b.action}
+                    <p className="text-[10px] text-amber-400/90 mb-1.5">{adoptionImpact}</p>
+                    <p className="text-[10px] text-primary leading-relaxed">
+                      <span className="font-bold">Specific action: </span>{actionText}
                     </p>
                   </CardContent>
                 </Card>
@@ -1115,21 +1204,55 @@ export default function ConsumerAdoptionSimulator() {
           </ResponsiveContainer>
         </ChartContainer>
 
-        {/* Insight text */}
+        {/* Enhanced insight text */}
         {liftRows.length > 0 && (() => {
           const topSeg = liftRows[0];
-          const worstSeg = [...liftRows].sort((a, b) => a.revOpp - b.revOpp)[0];
+          const sortedByRev = [...liftRows].sort((a, b) => b.revOpp - a.revOpp);
+          const hardestSeg = [...liftRows].sort((a, b) =>
+            (b.seg.resistance?.resistance_index || 0) - (a.seg.resistance?.resistance_index || 0)
+          )[0];
+          const fastestWin = [...liftRows].sort((a, b) =>
+            (a.seg.resistance?.resistance_index || 0) - (b.seg.resistance?.resistance_index || 0)
+          )[0];
+          // Check if Price Resistance really dominates across all 5 or just some
+          const priceResCount = liftRows.filter(r => r.dominantBarrier === 'Price Resistance').length;
+          const barrierDiversityNote = priceResCount === liftRows.length
+            ? 'Price resistance is the dominant blocker across all top segments — this market is highly price-sensitive.'
+            : priceResCount === 0
+            ? 'Price resistance is not the primary blocker — each segment has a unique barrier. Targeted lever strategies are more effective than blanket discounting.'
+            : `${priceResCount} of ${liftRows.length} segments are primarily blocked by price; the rest have other barriers.`;
+
           return (
-            <div className="mt-4 p-4 bg-muted/20 border border-border/40 rounded-xl text-sm text-muted-foreground">
-              <span className="font-bold text-foreground">Key insight: </span>
-              <span className="text-primary font-bold">{topSeg.seg.cluster_name}</span>
-              {' '}has the highest revenue lift potential
-              {topSeg.revOpp > 0 ? ` (~${topSeg.revOpp >= 1000 ? `$${(topSeg.revOpp/1000).toFixed(1)}K` : `$${topSeg.revOpp.toFixed(0)}`} opportunity)` : ''}.
-              {' '}The primary barrier blocking them is <span className="text-amber-400 font-bold">{topSeg.dominantBarrier}</span>.
-              {' '}Resolving this single barrier moves the needle most.
-              {liftRows.length >= 2 && worstSeg.seg.cluster_name !== topSeg.seg.cluster_name
-                ? ` ${worstSeg.seg.cluster_name} is the lowest priority — smaller population or higher resistance reduces the revenue return.`
-                : ''}
+            <div className="mt-4 p-4 bg-muted/20 border border-border/40 rounded-xl text-sm text-muted-foreground space-y-2">
+              <p>
+                <span className="font-bold text-foreground">Highest upside: </span>
+                <span className="text-primary font-bold">{topSeg.seg.cluster_name}</span>
+                {' '}has the largest revenue lift potential
+                {topSeg.revOpp > 0 ? ` (~${fmtCurrency(topSeg.revOpp)})` : ''}.
+                {' '}Main blocker: <span className="text-amber-400 font-bold">{topSeg.dominantBarrier}</span>.
+                {' '}This segment represents{' '}
+                <span className="font-bold text-foreground">{topSeg.seg.percentage?.toFixed(1)}%</span> of the simulated market — making it the highest-priority target for barrier reduction.
+              </p>
+              {fastestWin.seg.cluster_name !== topSeg.seg.cluster_name && (
+                <p>
+                  <span className="font-bold text-foreground">Fastest win: </span>
+                  <span className="text-emerald-400 font-bold">{fastestWin.seg.cluster_name}</span>
+                  {' '}has the lowest resistance ({fastestWin.seg.resistance?.resistance_index?.toFixed(0) ?? '—'}/100) — easiest to convert with minimal intervention.
+                  {' '}Barrier: <span className="text-amber-400 font-bold">{fastestWin.dominantBarrier}</span>.
+                </p>
+              )}
+              {hardestSeg.seg.cluster_name !== topSeg.seg.cluster_name && (
+                <p>
+                  <span className="font-bold text-foreground">Hardest to unlock: </span>
+                  <span className="text-red-400 font-bold">{hardestSeg.seg.cluster_name}</span>
+                  {' '}({hardestSeg.seg.resistance?.resistance_index?.toFixed(0) ?? '—'}/100 resistance) — deprioritize until primary segments are captured.
+                </p>
+              )}
+              <p className="text-xs">{barrierDiversityNote}</p>
+              <p className="text-xs">
+                <span className="font-bold text-foreground">First action: </span>
+                Resolve {topSeg.dominantBarrier} for {topSeg.seg.cluster_name} — this single move unlocks the largest revenue opportunity in the simulation.
+              </p>
             </div>
           );
         })()}
@@ -1230,21 +1353,63 @@ export default function ConsumerAdoptionSimulator() {
                 </AreaChart>
               </ResponsiveContainer>
             </ChartContainer>
-            {retentionData.length >= 4 && (
-              <div className="mt-3 p-3 bg-muted/20 border border-border/40 rounded-xl text-xs text-muted-foreground">
-                <span className="font-bold text-foreground">Reading the curve: </span>
-                Starting at {retentionData[0]?.retention?.toFixed(0)}% at Month 1, dropping to{' '}
-                {retentionData[1]?.retention?.toFixed(0)}% at Month 3 and{' '}
-                {retentionData[3]?.retention?.toFixed(0)}% at Month 12.{' '}
-                {productTypeLabel.type === 'consumable'
-                  ? 'Consumable product — focus on subscribe-and-save and replenishment reminders to lock in the repeat cycle early.'
-                  : productTypeLabel.type === 'durable'
-                  ? 'Durable or high-priced product — short-term repeat is limited by nature. Prioritise referral, cross-sell, and accessory purchase paths instead.'
-                  : productTypeLabel.type === 'premium'
-                  ? 'Premium product — repeat purchase builds over a longer cycle. Quality experience and post-purchase support are the key retention drivers.'
-                  : (retentionData[3]?.retention ?? 0) > 40
-                  ? 'A reasonably loyal customer base — invest in subscribe-and-save and loyalty programs to push retention higher.'
-                  : 'Retention drops significantly over time. Focus on post-purchase engagement, packaging inserts, and follow-up email campaigns.'}
+        {retentionData.length >= 4 && (
+              <div className="mt-3 p-4 bg-muted/20 border border-border/40 rounded-xl text-xs text-muted-foreground space-y-2">
+                {/* Product type and category */}
+                <p>
+                  <span className="font-bold text-foreground">Product type detected: </span>
+                  <span className="text-primary font-bold capitalize">{productTypeLabel.type}</span>
+                  {' '}(based on price midpoint ${((dna?.market_price_floor ?? 5) + (dna?.market_price_ceiling ?? 50)) / 2 | 0}).
+                </p>
+                {/* Curve reading */}
+                <p>
+                  <span className="font-bold text-foreground">Retention curve: </span>
+                  Starts at {retentionData[0]?.retention?.toFixed(0)}% (Month 1), drops to{' '}
+                  {retentionData[1]?.retention?.toFixed(0)}% (Month 3) and{' '}
+                  {retentionData[3]?.retention?.toFixed(0)}% (Month 12).
+                  {(() => {
+                    const m1 = retentionData[0]?.retention ?? 0;
+                    const m3 = retentionData[1]?.retention ?? 0;
+                    const m12 = retentionData[3]?.retention ?? 0;
+                    const earlyDrop = m1 > 0 ? (m1 - m3) / m1 : 0;
+                    if (earlyDrop > 0.4) return ' High M1→M3 churn — the 30-day window is critical. Most buyers who will churn do so before Month 3.';
+                    if (earlyDrop < 0.15) return ' Flat curve through M3 — strong early retention. The product is forming purchase habits quickly.';
+                    return ' Moderate early drop — typical for this product type. M3 engagement campaigns reduce churn significantly.';
+                  })()}
+                </p>
+                {/* Product-type specific guidance */}
+                <p>
+                  {productTypeLabel.type === 'consumable'
+                    ? 'Consumable product — repeat purchase is naturally high if the product satisfies. Focus on Subscribe & Save enrollment during the M1 window and replenishment reminder emails at M2.'
+                    : productTypeLabel.type === 'durable'
+                    ? 'Durable or high-priced product — repeat purchase of the same item is limited by nature. M6+ retention should come from accessories, replacements, gifting, or cross-sell. Referral programs work well here.'
+                    : productTypeLabel.type === 'premium'
+                    ? 'Premium product — repeat purchase builds over a longer cycle driven by satisfaction and brand trust. Post-purchase experience (packaging, support, follow-up) directly drives M6 and M12 retention.'
+                    : 'Mass-market product — repeat purchase depends on convenience, satisfaction, and whether competitors offer a better alternative. Price and availability are the main retention levers at M6+.'}
+                </p>
+                {/* Segment retention differences */}
+                {(() => {
+                  const sorted = [...segmentRetentionData].filter(s => s.population > 0).sort((a, b) => b.m12 - a.m12);
+                  const topRetainers = sorted.slice(0, 2);
+                  const poorRetainers = sorted.reverse().slice(0, 2);
+                  if (topRetainers.length === 0) return null;
+                  return (
+                    <p>
+                      <span className="font-bold text-foreground">Segment differences: </span>
+                      <span className="text-emerald-400">{topRetainers.map(s => s.name.split(' ').slice(0, 2).join(' ')).join(', ')}</span>
+                      {' '}have the strongest M12 retention ({topRetainers.map(s => `${s.m12}%`).join(', ')}) due to higher brand loyalty and lower switching probability.{' '}
+                      <span className="text-red-400">{poorRetainers.map(s => s.name.split(' ').slice(0, 2).join(' ')).join(', ')}</span>
+                      {' '}are most likely to churn ({poorRetainers.map(s => `${s.m12}%`).join(', ')}) — re-engagement at M1 is essential for these groups.
+                    </p>
+                  );
+                })()}
+                {/* Action */}
+                <p>
+                  <span className="font-bold text-foreground">Key action: </span>
+                  {retentionData[3]?.retention > 35
+                    ? 'Loyalty is reasonably strong. Invest in post-purchase email flows and loyalty rewards to push M12 retention above current levels.'
+                    : 'Retention drops significantly. Prioritize a post-purchase follow-up sequence — insert card in packaging, 30-day check-in email, and an M2 repurchase coupon.'}
+                </p>
               </div>
             )}
           </div>
@@ -1288,12 +1453,44 @@ export default function ConsumerAdoptionSimulator() {
                   </tbody>
                 </table>
               </div>
-              <div className="p-3 border-t border-border/40 text-[10px] text-muted-foreground bg-muted/10">
-                <span className="font-bold text-foreground">Evidence: </span>
-                Values = segment conversion probability × product-type decay^(month/12) × 100.
-                Decay is adjusted by brand loyalty, risk aversion, and price tier
-                ({productTypeLabel.type} product, decay modifier applied).
-                Segments with higher brand loyalty and convenience focus retain longer.
+              <div className="p-4 border-t border-border/40 text-[10px] text-muted-foreground bg-muted/10 space-y-1.5">
+                <p>
+                  <span className="font-bold text-foreground">How this works: </span>
+                  Values = segment conversion probability × product-type decay^(month/12) × 100.
+                  Decay is adjusted by brand loyalty, risk aversion, and price tier
+                  ({productTypeLabel.type} product — decay modifier applied).
+                </p>
+                {(() => {
+                  const sorted = [...segmentRetentionData].filter(s => s.population > 0).sort((a, b) => b.m12 - a.m12);
+                  const top2 = sorted.slice(0, 2);
+                  const bottom2 = sorted.reverse().slice(0, 2);
+                  return (
+                    <>
+                      {top2.length > 0 && (
+                        <p>
+                          <span className="font-bold text-foreground">Strongest M12 retention: </span>
+                          <span className="text-emerald-400">{top2.map(s => `${s.name.split(' ').slice(0, 2).join(' ')} (${s.m12}%)`).join(', ')}</span>
+                          {' '}— driven by higher brand loyalty and lower switching probability in these segments.
+                        </p>
+                      )}
+                      {bottom2.length > 0 && (
+                        <p>
+                          <span className="font-bold text-foreground">Fastest decline: </span>
+                          <span className="text-red-400">{bottom2.map(s => `${s.name.split(' ').slice(0, 2).join(' ')} (${s.m12}%)`).join(', ')}</span>
+                          {' '}— low brand loyalty and high switching probability accelerate churn. Re-engagement campaigns at M1 are critical.
+                        </p>
+                      )}
+                    </>
+                  );
+                })()}
+                <p>
+                  <span className="font-bold text-foreground">Business action: </span>
+                  {productTypeLabel.type === 'consumable'
+                    ? 'Target top-retaining segments with Subscribe & Save offers at M1. For fast-churning segments, send a repurchase reminder at 3–4 weeks.'
+                    : productTypeLabel.type === 'durable'
+                    ? 'For high-churn segments, activate cross-sell and accessory paths at M3. For top-retaining segments, invest in referral programs.'
+                    : 'Invest in post-purchase email flows for top-retaining segments. Offer loyalty discounts to mid-retention segments at M3.'}
+                </p>
               </div>
             </CardContent>
           </Card>
