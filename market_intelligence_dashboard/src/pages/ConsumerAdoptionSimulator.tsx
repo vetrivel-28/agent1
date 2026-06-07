@@ -35,7 +35,8 @@ import { FIXED_SEGMENT_NAMES } from '../constants/fixedPsychographicSegments';
 import type { SimResults, Segment } from './consumerAdoption/types';
 import {
   fmtPct, fmtNum, fmtScore, fmtCurrency, resistanceBg,
-  intentColor, heatCell, orderSegments, activeSegments, adoptionRate,
+  intentColor, adoptionColor, trustColor, resistanceScoreColor, switchingColor,
+  heatCell, resistanceHeatCell, orderSegments, activeSegments, adoptionRate,
 } from './consumerAdoption/utils';
 import {
   buildSimulatedConsumersModal,
@@ -138,15 +139,31 @@ function SegmentCard({
 }) {
   const color = SEGMENT_COLORS[index % SEGMENT_COLORS.length];
   const inactive = seg.population === 0;
+  const rate = adoptionRate(seg);
+  const resistance = seg.resistance?.resistance_index || 0;
+  const popShare = seg.percentage || 0;
+
+  // Dataset-driven badge classification
+  const badge = (() => {
+    if (inactive) return { label: 'No Data', cls: 'bg-muted text-muted-foreground border-border/40' };
+    // Opportunity score = (adoption × popShare × intent/100) / max(resistance, 1)
+    const oppScore = (rate * popShare * (seg.purchase_intent / 100)) / Math.max(resistance, 1);
+    if (rate >= 50 && resistance < 45 && popShare >= 5) return { label: 'Scale Candidate', cls: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' };
+    if (rate >= 50 && resistance < 60 && popShare >= 5) return { label: 'High Opportunity', cls: 'bg-blue-500/10 text-blue-400 border-blue-500/20' };
+    if (resistance >= 60 && oppScore > 0.5)             return { label: 'Barrier Heavy',    cls: 'bg-red-500/10 text-red-400 border-red-500/20' };
+    if (rate >= 50 && popShare < 5)                     return { label: 'Niche Segment',    cls: 'bg-purple-500/10 text-purple-400 border-purple-500/20' };
+    if (rate >= 35 && rate < 50)                        return { label: 'Moderate Opportunity', cls: 'bg-amber-500/10 text-amber-400 border-amber-500/20' };
+    return { label: 'Low Fit', cls: 'bg-muted text-muted-foreground border-border/40' };
+  })();
+
   return (
     <motion.div
       whileHover={{ y: inactive ? 0 : -2 }}
       onClick={onClick}
       className={cn(
         'cursor-pointer rounded-xl border p-4 transition-all',
-        inactive && 'opacity-50',
         selected
-          ? 'border-primary/60 bg-primary/5 shadow-md'
+          ? 'border-primary/60 bg-primary/5 shadow-md ring-1 ring-primary/30'
           : 'border-border/50 bg-card hover:border-primary/30 hover:shadow-sm',
       )}
     >
@@ -155,38 +172,66 @@ function SegmentCard({
           <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: color }} />
           <h4 className="text-sm font-bold text-foreground leading-tight truncate">{seg.cluster_name}</h4>
         </div>
-        <span className={cn(
-          'text-[10px] font-bold px-1.5 py-0.5 rounded border shrink-0',
-          resistanceBg(seg.resistance?.resistance_level || 'Low'),
-        )}>
-          {seg.resistance?.resistance_level || '—'}
+        <span className={cn('text-[10px] font-bold px-1.5 py-0.5 rounded border shrink-0 ml-1', badge.cls)}>
+          {badge.label}
         </span>
       </div>
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs mb-3">
-        <div>
-          <span className="text-muted-foreground">Population</span>
-          <p className="font-bold font-mono">{fmtNum(seg.population)}</p>
-        </div>
-        <div>
-          <span className="text-muted-foreground">Share</span>
-          <p className="font-bold font-mono">{fmtPct(seg.percentage)}</p>
-        </div>
-        <div>
-          <span className="text-muted-foreground">Adoption</span>
-          <p className={cn('font-bold font-mono', intentColor(adoptionRate(seg)))}>
-            {fmtPct(adoptionRate(seg))}
-          </p>
-        </div>
-        <div>
-          <span className="text-muted-foreground">Intent</span>
-          <p className={cn('font-bold font-mono', intentColor(seg.purchase_intent))}>
-            {fmtScore(seg.purchase_intent)}
-          </p>
-        </div>
-      </div>
-      <ProgressBar value={adoptionRate(seg)} colorClass="bg-primary" />
-      {seg.motivations?.[0] && seg.motivations[0] !== '—' && (
-        <p className="text-[10px] text-muted-foreground mt-1.5 line-clamp-2">{seg.motivations[0]}</p>
+
+      {inactive ? (
+        <p className="text-[10px] text-muted-foreground mt-1">
+          Minimum population allocated — no strong dataset signal match.
+        </p>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs mb-3">
+            <div>
+              <span className="text-muted-foreground">Population</span>
+              <p className="font-bold font-mono">{fmtNum(seg.population)}</p>
+            </div>
+            <div>
+              <span className="text-muted-foreground">Share</span>
+              <p className="font-bold font-mono">{fmtPct(popShare)}</p>
+            </div>
+            <div>
+              <span className="text-muted-foreground">Adoption</span>
+              <p className={cn('font-bold font-mono', adoptionColor(rate))}>{fmtPct(rate)}</p>
+            </div>
+            <div>
+              <span className="text-muted-foreground">Intent</span>
+              <p className={cn('font-bold font-mono', intentColor(seg.purchase_intent))}>
+                {fmtScore(seg.purchase_intent)}
+              </p>
+            </div>
+          </div>
+
+          {/* Dual progress bars: Adoption + Intent */}
+          <div className="space-y-1.5 mb-2">
+            <div className="flex items-center gap-2">
+              <span className="text-[9px] text-muted-foreground w-12 shrink-0">Adoption</span>
+              <div className="flex-1 bg-muted rounded-full h-1.5 overflow-hidden">
+                <div
+                  className={cn('h-full rounded-full transition-all', rate >= 50 ? 'bg-emerald-500' : rate >= 35 ? 'bg-amber-500' : 'bg-red-500')}
+                  style={{ width: `${Math.min(100, rate)}%` }}
+                />
+              </div>
+              <span className="text-[9px] font-mono text-muted-foreground w-8 text-right">{rate.toFixed(0)}%</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-[9px] text-muted-foreground w-12 shrink-0">Intent</span>
+              <div className="flex-1 bg-muted rounded-full h-1.5 overflow-hidden">
+                <div
+                  className={cn('h-full rounded-full transition-all', seg.purchase_intent >= 65 ? 'bg-blue-500' : seg.purchase_intent >= 45 ? 'bg-amber-400' : 'bg-red-400')}
+                  style={{ width: `${Math.min(100, seg.purchase_intent)}%` }}
+                />
+              </div>
+              <span className="text-[9px] font-mono text-muted-foreground w-8 text-right">{seg.purchase_intent.toFixed(0)}</span>
+            </div>
+          </div>
+
+          {seg.motivations?.[0] && seg.motivations[0] !== '—' && (
+            <p className="text-[10px] text-muted-foreground mt-1 line-clamp-1">{seg.motivations[0]}</p>
+          )}
+        </>
       )}
       <p className="text-[10px] text-primary mt-1.5">Click for full profile →</p>
     </motion.div>
@@ -539,53 +584,193 @@ export default function ConsumerAdoptionSimulator() {
           SECTION 2: Market DNA Overview
       ═══════════════════════════════════════════════════════════════════ */}
       <PageSection title="2. Market DNA Overview">
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Radar chart */}
-          <ChartContainer
-            title="Market Signal Radar"
-            description="Five normalised market signals powering the simulation — hover for values"
-            xAxisLabel=""
-            yAxisLabel=""
-            businessExplanation="Each axis (0–100): Demand = keyword volume + growth rate; Velocity = demand acceleration; Efficiency = conversion rate from search to revenue; Revenue = revenue density/momentum score; Accessibility = 100 minus competitive saturation. A larger coverage area means stronger market conditions for adoption."
-          >
-            <ResponsiveContainer width="100%" height={300}>
-              <RadarChart data={dnaRadarData} margin={{ top: 20, right: 40, bottom: 20, left: 40 }}>
-                <PolarGrid stroke="hsl(var(--border))" />
-                <PolarAngleAxis
-                  dataKey="subject"
-                  tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))', fontWeight: 600 }}
-                />
-                <PolarRadiusAxis domain={[0, 100]} tick={{ fontSize: 9, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} />
-                <Radar name="Market DNA" dataKey="value" stroke="#8B5CF6" fill="#8B5CF6" fillOpacity={0.25} strokeWidth={2} />
-                <Tooltip content={<CustomTooltip />} />
-              </RadarChart>
-            </ResponsiveContainer>
-          </ChartContainer>
-          {/* Radar insight */}
-          {dnaRadarData.length > 0 && (() => {
+
+        {/* Row 1: Radar chart (left) + Signal Summary (right) — equal height cards */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch mb-6">
+
+          {/* Left: Radar chart card */}
+          <Card className="border-border/40 bg-card flex flex-col">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm">Market Signal Radar</CardTitle>
+              <CardDescription className="text-xs">
+                Five normalised market signals powering the simulation — hover for values
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex-1 flex flex-col">
+              <ResponsiveContainer width="100%" height={280}>
+                <RadarChart data={dnaRadarData} margin={{ top: 16, right: 40, bottom: 16, left: 40 }}>
+                  <PolarGrid stroke="hsl(var(--border))" />
+                  <PolarAngleAxis
+                    dataKey="subject"
+                    tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))', fontWeight: 600 }}
+                  />
+                  <PolarRadiusAxis domain={[0, 100]} tick={{ fontSize: 9, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} />
+                  <Radar name="Market DNA" dataKey="value" stroke="#8B5CF6" fill="#8B5CF6" fillOpacity={0.25} strokeWidth={2} />
+                  <Tooltip content={<CustomTooltip />} />
+                </RadarChart>
+              </ResponsiveContainer>
+              <p className="text-[10px] text-muted-foreground mt-2">
+                Each axis (0–100): Demand = keyword volume + growth; Velocity = demand acceleration; Efficiency = search-to-revenue conversion; Revenue = revenue density; Accessibility = 100 minus competitive saturation.
+              </p>
+            </CardContent>
+          </Card>
+
+          {/* Right: Signal Summary card — equal height, structured insight blocks */}
+          {(() => {
             const strong = dnaRadarData.filter(d => d.value >= 60);
             const weak   = dnaRadarData.filter(d => d.value < 30);
-            const avgCoverage = dnaRadarData.reduce((s, d) => s + d.value, 0) / dnaRadarData.length;
+            const mod    = dnaRadarData.filter(d => d.value >= 30 && d.value < 60);
+            const avgCoverage = dnaRadarData.length
+              ? dnaRadarData.reduce((s, d) => s + d.value, 0) / dnaRadarData.length
+              : 0;
+
+            // Strongest and weakest by value
+            const sortedSignals = [...dnaRadarData].sort((a, b) => b.value - a.value);
+            const strongestSignal  = sortedSignals[0];
+            const weakestSignal    = sortedSignals[sortedSignals.length - 1];
+
+            // Adoption support level
+            const supportLevel = avgCoverage >= 65 ? 'Strong' : avgCoverage >= 45 ? 'Moderate' : avgCoverage >= 25 ? 'Limited' : 'Insufficient';
+            const supportColor = avgCoverage >= 65 ? 'text-emerald-400' : avgCoverage >= 45 ? 'text-amber-400' : 'text-red-400';
+
+            // What this means for simulator
+            let simMeaning = '';
+            if (strong.length >= 3) simMeaning = 'Strong multi-signal coverage — simulation results are highly reliable and dataset-grounded.';
+            else if (strong.length >= 2) simMeaning = 'Good core signal coverage — simulation is reliable for primary analysis. Run remaining engines for full confidence.';
+            else if (strong.length === 1) simMeaning = `Only ${strong.map(d => d.subject).join(', ')} is strong — simulation has partial signal coverage. Adoption confidence may be directional.`;
+            else simMeaning = 'Limited signal coverage — run Demand Strength, Revenue Momentum, and Market Concentration engines to improve simulation accuracy.';
+
+            // Competition and consumer note
+            const compSat = dna?.competitive_saturation ?? 0;
+            const trustScore = summary?.avg_trust_score ?? 0;
+            const compNote = compSat >= 70
+              ? 'Competitive pressure is high — adoption confidence may be reduced by competitor loyalty barriers.'
+              : compSat >= 40
+              ? 'Moderate competitive landscape — adoption is achievable with clear differentiation.'
+              : compSat > 0
+              ? 'Low competitive saturation — strong adoption conditions for a new entrant.'
+              : null;
+            const consumerNote = trustScore >= 70
+              ? 'Consumer trust signals support conversion — the market is receptive.'
+              : trustScore >= 45
+              ? 'Moderate consumer trust — social proof and reviews are key conversion levers.'
+              : trustScore > 0
+              ? 'Low consumer trust signals — significant trust barriers must be resolved before launch.'
+              : null;
+
             return (
-              <div className="mt-3 p-3 bg-muted/20 border border-border/40 rounded-xl text-xs text-muted-foreground">
-                <span className="font-bold text-foreground">Signal summary: </span>
-                {strong.length > 0
-                  ? <><span className="text-emerald-400 font-bold">{strong.map(d => d.subject).join(', ')}</span> are strong signals (≥60/100) supporting adoption. </>
-                  : 'No signals above 60/100 — limited data from engines. '}
-                {weak.length > 0
-                  ? <><span className="text-red-400 font-bold">{weak.map(d => d.subject).join(', ')}</span> are weak (&lt;30/100) — run the relevant engines to improve these scores. </>
-                  : ''}
-                Overall signal coverage: {avgCoverage.toFixed(0)}/100
-                {avgCoverage < 40 ? ' — run more engines for a complete picture.' : '.'}
-              </div>
+              <Card className="border-border/40 bg-card flex flex-col">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Signal Summary</CardTitle>
+                  <CardDescription className="text-xs">
+                    Dataset-driven interpretation for the Consumer Adoption Simulator
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="flex-1 flex flex-col gap-3">
+
+                  {/* Overall coverage meter */}
+                  <div className="p-3 bg-muted/20 border border-border/40 rounded-xl">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-xs font-bold text-foreground">Overall Adoption Support</span>
+                      <span className={cn('text-xs font-black', supportColor)}>{supportLevel}</span>
+                    </div>
+                    <div className="w-full bg-muted rounded-full h-2 overflow-hidden mb-1.5">
+                      <div
+                        className="h-full rounded-full transition-all"
+                        style={{
+                          width: `${Math.min(100, avgCoverage)}%`,
+                          backgroundColor: avgCoverage >= 65 ? '#10B981' : avgCoverage >= 45 ? '#F59E0B' : '#EF4444',
+                        }}
+                      />
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">
+                      Signal coverage: <span className="font-bold font-mono text-foreground">{avgCoverage.toFixed(0)}/100</span>
+                      {' '}({strong.length} strong · {mod.length} moderate · {weak.length} weak)
+                    </p>
+                  </div>
+
+                  {/* Strongest / Weakest signals */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="p-2.5 bg-emerald-500/5 border border-emerald-500/20 rounded-xl">
+                      <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wide mb-1">Strongest Signal</p>
+                      {strongestSignal ? (
+                        <>
+                          <p className="text-sm font-black text-emerald-400">{strongestSignal.subject}</p>
+                          <p className="text-[10px] font-mono text-foreground/70">{strongestSignal.value.toFixed(0)}/100</p>
+                          <p className="text-[10px] text-muted-foreground mt-1 leading-tight">
+                            {strongestSignal.value >= 60
+                              ? 'Primary adoption driver — reliable signal.'
+                              : 'Available but not yet strong — run the relevant engine to improve it.'}
+                          </p>
+                        </>
+                      ) : <p className="text-xs text-muted-foreground">No data</p>}
+                    </div>
+                    <div className="p-2.5 bg-red-500/5 border border-red-500/20 rounded-xl">
+                      <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wide mb-1">Weakest Signal</p>
+                      {weakestSignal ? (
+                        <>
+                          <p className="text-sm font-black text-red-400">{weakestSignal.subject}</p>
+                          <p className="text-[10px] font-mono text-foreground/70">{weakestSignal.value.toFixed(0)}/100</p>
+                          <p className="text-[10px] text-muted-foreground mt-1 leading-tight">
+                            {weakestSignal.value < 30
+                              ? 'Run the relevant engine to fill this gap.'
+                              : 'Moderate — simulation can proceed but confidence is limited here.'}
+                          </p>
+                        </>
+                      ) : <p className="text-xs text-muted-foreground">No data</p>}
+                    </div>
+                  </div>
+
+                  {/* What this means for the simulator */}
+                  <div className="p-3 bg-primary/5 border border-primary/20 rounded-xl text-xs text-muted-foreground">
+                    <p className="font-bold text-foreground mb-1">What this means for the simulator</p>
+                    <p className="leading-relaxed">{simMeaning}</p>
+                  </div>
+
+                  {/* Competition + Consumer notes */}
+                  {(compNote || consumerNote) && (
+                    <div className="space-y-1.5 text-[10px] text-muted-foreground">
+                      {compNote && (
+                        <p>
+                          <span className="font-bold text-foreground">Competition: </span>{compNote}
+                        </p>
+                      )}
+                      {consumerNote && (
+                        <p>
+                          <span className="font-bold text-foreground">Consumer trust: </span>{consumerNote}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Strong signals list if any */}
+                  {strong.length > 0 && (
+                    <p className="text-[10px] text-muted-foreground">
+                      <span className="font-bold text-foreground">Strong signals (≥60): </span>
+                      <span className="text-emerald-400">{strong.map(d => `${d.subject} (${d.value.toFixed(0)})`).join(', ')}</span>
+                      {' '}— {strong.length === 1 ? 'this is the primary adoption driver.' : 'these drive the strongest adoption confidence.'}
+                    </p>
+                  )}
+                  {weak.length > 0 && (
+                    <p className="text-[10px] text-muted-foreground">
+                      <span className="font-bold text-foreground">Weak signals (&lt;30): </span>
+                      <span className="text-red-400">{weak.map(d => d.subject).join(', ')}</span>
+                      {' '}— run the relevant dashboard engines to improve these scores before relying on this simulation for launch decisions.
+                    </p>
+                  )}
+
+                </CardContent>
+              </Card>
             );
           })()}
+        </div>
 
-          {/* Environment scorecards — each clickable */}
-          <div className="space-y-3">
-            <h3 className="text-xs font-bold uppercase tracking-widest text-muted-foreground">
-              Signal Breakdown
-            </h3>
+        {/* Row 2: Signal Breakdown (environment scorecards) — full width below */}
+        <div>
+          <h3 className="text-xs font-bold uppercase tracking-widest text-muted-foreground mb-3">
+            Signal Breakdown — Click Any Card for Full Analysis
+          </h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
             {[
               {
                 label: 'Demand Environment',
@@ -635,13 +820,13 @@ export default function ConsumerAdoptionSimulator() {
               >
                 <CardContent className="p-4">
                   <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2">
-                      <div className="p-1.5 rounded-md" style={{ backgroundColor: `${item.color}20` }}>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="p-1.5 rounded-md shrink-0" style={{ backgroundColor: `${item.color}20` }}>
                         <item.icon className="w-4 h-4" style={{ color: item.color }} />
                       </div>
-                      <span className="text-sm font-bold text-foreground">{item.label}</span>
+                      <span className="text-sm font-bold text-foreground truncate">{item.label}</span>
                     </div>
-                    <span className="text-lg font-black font-mono" style={{ color: item.color }}>
+                    <span className="text-lg font-black font-mono shrink-0 ml-2" style={{ color: item.color }}>
                       {item.value != null && item.value > 0 ? item.value.toFixed(1) : '—'}
                     </span>
                   </div>
@@ -661,6 +846,7 @@ export default function ConsumerAdoptionSimulator() {
             ))}
           </div>
         </div>
+
       </PageSection>
 
       {/* ═══════════════════════════════════════════════════════════════════
@@ -668,9 +854,11 @@ export default function ConsumerAdoptionSimulator() {
       ═══════════════════════════════════════════════════════════════════ */}
       <PageSection title="3. Psychographic Segment Explorer">
         <p className="text-xs text-muted-foreground mb-4">
-          All 20 consumer segments are shown for every dataset. Segments with low relevance
-          for this product have smaller population but are still evaluated — showing
-          exactly how this product performs across every buyer type. Click any segment for a detailed profile.
+          All 20 consumer segments are shown for every dataset. Each segment receives a
+          balanced population between 25 and 150 consumers, preventing unfair calculations
+          from very small samples or over-dominant groups. Larger populations indicate
+          stronger product fit, while smaller segments are still evaluated to compare
+          adoption behavior across every buyer type. Click any segment for a detailed profile.
         </p>
         {/* All 20 segments — no search/sort/filter */}
         <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
@@ -792,8 +980,9 @@ export default function ConsumerAdoptionSimulator() {
           <div>
             <h3 className="text-sm font-bold text-foreground mb-1">Segment Opportunity Quadrant</h3>
             <p className="text-xs text-muted-foreground mb-3">
-              Each segment ranked by opportunity score (intent × population share ÷ resistance). 
-              Quadrant shows strategic priority — act on Priority first, Fix Barriers second.
+              Each segment ranked by opportunity score. Formula:{' '}
+              <span className="font-mono text-foreground">(Adoption% × Pop.Share × Intent/100) ÷ max(Resistance, 1)</span>.
+              {' '}Quadrant shows strategic priority.
             </p>
             <div className="overflow-x-auto rounded-xl border border-border/40">
               <table className="w-full text-xs">
@@ -801,6 +990,7 @@ export default function ConsumerAdoptionSimulator() {
                   <tr className="border-b border-border bg-muted/20">
                     <th className="text-left px-3 py-2 font-bold text-muted-foreground">Segment</th>
                     <th className="text-center px-2 py-2 font-bold text-muted-foreground">Adoption</th>
+                    <th className="text-center px-2 py-2 font-bold text-muted-foreground">Intent</th>
                     <th className="text-center px-2 py-2 font-bold text-muted-foreground">Resistance</th>
                     <th className="text-center px-2 py-2 font-bold text-muted-foreground">Opp. Score</th>
                     <th className="text-center px-2 py-2 font-bold text-muted-foreground">Quadrant</th>
@@ -811,16 +1001,27 @@ export default function ConsumerAdoptionSimulator() {
                     .map((s) => {
                       const adoption = adoptionRate(s);
                       const resistance = s.resistance?.resistance_index || 0;
-                      const oppScore = parseFloat(((adoption * (s.percentage || 0.1)) / Math.max(resistance, 1)).toFixed(2));
-                      const quadrant =
-                        adoption >= 45 && resistance < 45 ? 'Priority' :
-                        adoption >= 45 && resistance >= 45 ? 'Fix Barriers' :
-                        adoption < 45 && resistance < 45  ? 'Nurture' : 'Low Priority';
-                      return { s, adoption, resistance, oppScore, quadrant };
+                      const intent = s.purchase_intent || 0;
+                      const popShare = s.percentage || 0.1;
+                      // Formula: (adoption × popShare × intent/100) / max(resistance, 1)
+                      const oppScore = parseFloat(
+                        ((adoption * popShare * (intent / 100)) / Math.max(resistance, 1)).toFixed(2),
+                      );
+                      // Quadrant: high adoption + high pop = Scale Now; high pop + high resistance = Fix Barriers;
+                      // high adoption + small pop = Niche Opportunity; low adoption + low opp = Low Priority
+                      const isHighAdoption = adoption >= 45;
+                      const isHighPop = popShare >= 4;        // ≥4% = notable segment
+                      const isLowResistance = resistance < 45;
+                      let quadrant: string;
+                      if (isHighAdoption && isHighPop && isLowResistance) quadrant = 'Scale Now';
+                      else if ((isHighPop || isHighAdoption) && !isLowResistance) quadrant = 'Fix Barriers';
+                      else if (isHighAdoption && !isHighPop) quadrant = 'Niche Opportunity';
+                      else quadrant = 'Low Priority';
+                      return { s, adoption, resistance, intent, oppScore, quadrant };
                     })
                     .sort((a, b) => b.oppScore - a.oppScore)
                     .slice(0, 12)
-                    .map(({ s, adoption, resistance, oppScore, quadrant }) => (
+                    .map(({ s, adoption, resistance, intent, oppScore, quadrant }) => (
                       <tr
                         key={s.cluster_name}
                         className="border-b border-border/20 hover:bg-muted/10 cursor-pointer transition-colors"
@@ -829,9 +1030,12 @@ export default function ConsumerAdoptionSimulator() {
                           setModal(buildSegmentModal(s));
                         }}
                       >
-                        <td className="px-3 py-2 font-medium truncate max-w-[130px]">{s.cluster_name}</td>
+                        <td className="px-3 py-2 font-medium truncate max-w-[120px]">{s.cluster_name}</td>
                         <td className={cn('px-2 py-2 text-center font-mono font-bold', heatCell(adoption))}>
                           {adoption.toFixed(1)}%
+                        </td>
+                        <td className={cn('px-2 py-2 text-center font-mono font-bold', heatCell(intent))}>
+                          {intent.toFixed(0)}
                         </td>
                         <td className={cn('px-2 py-2 text-center font-mono font-bold',
                           resistance >= 70 ? 'bg-red-500/10 text-red-400' :
@@ -844,10 +1048,10 @@ export default function ConsumerAdoptionSimulator() {
                         <td className="px-2 py-2 text-center">
                           <span className={cn(
                             'text-[10px] font-bold px-1.5 py-0.5 rounded border',
-                            quadrant === 'Priority'     ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
-                            quadrant === 'Fix Barriers' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' :
-                            quadrant === 'Nurture'      ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' :
-                                                          'bg-muted text-muted-foreground border-border/40',
+                            quadrant === 'Scale Now'         ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+                            quadrant === 'Fix Barriers'      ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' :
+                            quadrant === 'Niche Opportunity' ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' :
+                                                               'bg-muted text-muted-foreground border-border/40',
                           )}>
                             {quadrant}
                           </span>
@@ -857,27 +1061,71 @@ export default function ConsumerAdoptionSimulator() {
                 </tbody>
               </table>
             </div>
-            {/* Insight */}
+            {/* Dataset-driven insight */}
             {activeSegs.length > 0 && (() => {
-              const ranked = [...activeSegs].map((s) => {
+              const scored = [...activeSegs].map((s) => {
                 const adoption = adoptionRate(s);
                 const resistance = s.resistance?.resistance_index || 0;
-                const quadrant =
-                  adoption >= 45 && resistance < 45 ? 'Priority' :
-                  adoption >= 45 && resistance >= 45 ? 'Fix Barriers' :
-                  adoption < 45 && resistance < 45  ? 'Nurture' : 'Low Priority';
-                return { s, adoption, resistance, quadrant };
-              });
-              const priority = ranked.filter(r => r.quadrant === 'Priority');
-              const fixBarriers = ranked.filter(r => r.quadrant === 'Fix Barriers');
+                const intent = s.purchase_intent || 0;
+                const popShare = s.percentage || 0.1;
+                const oppScore = (adoption * popShare * (intent / 100)) / Math.max(resistance, 1);
+                const isHighAdoption = adoption >= 45;
+                const isHighPop = popShare >= 4;
+                const isLowResistance = resistance < 45;
+                let quadrant: string;
+                if (isHighAdoption && isHighPop && isLowResistance) quadrant = 'Scale Now';
+                else if ((isHighPop || isHighAdoption) && !isLowResistance) quadrant = 'Fix Barriers';
+                else if (isHighAdoption && !isHighPop) quadrant = 'Niche Opportunity';
+                else quadrant = 'Low Priority';
+                return { s, adoption, resistance, intent, oppScore, quadrant };
+              }).sort((a, b) => b.oppScore - a.oppScore);
+
+              const scaleNow    = scored.filter(r => r.quadrant === 'Scale Now');
+              const fixBarriers = scored.filter(r => r.quadrant === 'Fix Barriers');
+              const niche       = scored.filter(r => r.quadrant === 'Niche Opportunity');
+              const lowPri      = scored.filter(r => r.quadrant === 'Low Priority');
+              const topSeg      = scored[0];
+              const lowestSeg   = scored[scored.length - 1];
+
               return (
-                <div className="mt-3 p-3 bg-muted/20 border border-border/40 rounded-xl text-xs text-muted-foreground">
-                  <span className="font-bold text-foreground">Action: </span>
-                  {priority.length > 0
-                    ? <><span className="text-emerald-400 font-bold">{priority.map(r => r.s.cluster_name).slice(0, 2).join(', ')}</span> are your Priority segments — high adoption, low resistance. Allocate primary ad budget here.</>
-                    : 'No easy-win priority segments found — focus on barrier reduction across the board.'}
-                  {fixBarriers.length > 0 && <>{' '}<span className="text-amber-400 font-bold">{fixBarriers.map(r => r.s.cluster_name).slice(0, 2).join(', ')}</span> have high intent but face barriers — fix their primary blocker for a quick lift.</>}
-                  {' '}Opp. Score = (Adoption % × Population Share) ÷ Resistance Index.
+                <div className="mt-3 p-3 bg-muted/20 border border-border/40 rounded-xl text-xs text-muted-foreground space-y-1.5">
+                  {topSeg && (
+                    <p>
+                      <span className="font-bold text-foreground">Scale Now: </span>
+                      {scaleNow.length > 0
+                        ? <><span className="text-emerald-400 font-bold">{scaleNow.map(r => r.s.cluster_name).slice(0, 2).join(', ')}</span> — high adoption, solid population, low resistance. Allocate primary ad budget here.</>
+                        : 'No Scale Now segments found — all high-adoption segments face barriers.'}
+                    </p>
+                  )}
+                  {fixBarriers.length > 0 && (
+                    <p>
+                      <span className="font-bold text-foreground">Fix Barriers: </span>
+                      <span className="text-amber-400 font-bold">{fixBarriers.map(r => r.s.cluster_name).slice(0, 2).join(', ')}</span>
+                      {' '}— strong opportunity but blocked by resistance. Remove their primary barrier for a quick lift.
+                    </p>
+                  )}
+                  {niche.length > 0 && (
+                    <p>
+                      <span className="font-bold text-foreground">Niche Opportunity: </span>
+                      <span className="text-blue-400 font-bold">{niche.map(r => r.s.cluster_name).slice(0, 2).join(', ')}</span>
+                      {' '}— high adoption rate but small segment size. Efficient to convert but limited scale.
+                    </p>
+                  )}
+                  {lowestSeg && lowPri.length > 0 && (
+                    <p>
+                      <span className="font-bold text-foreground">Lowest priority: </span>
+                      <span className="text-muted-foreground">{lowestSeg.s.cluster_name}</span>
+                      {' '}— deprioritize until primary segments are captured.
+                    </p>
+                  )}
+                  <p className="text-[10px] text-muted-foreground border-t border-border/30 pt-1.5">
+                    <span className="font-bold text-foreground">Recommended next action: </span>
+                    {scaleNow.length > 0
+                      ? `Invest in ${scaleNow[0].s.cluster_name} first (highest opportunity score ${scaleNow[0].oppScore.toFixed(2)}). Build a campaign targeting their primary motivation: ${scaleNow[0].s.motivations?.[0] || 'quality and value'}.`
+                      : fixBarriers.length > 0
+                      ? `Focus on barrier reduction for ${fixBarriers[0].s.cluster_name} — their primary barrier is ${fixBarriers[0].s.resistance?.primary_barrier || 'resistance'}. Resolving it unlocks the next largest opportunity.`
+                      : `All active segments have limited opportunity. Run more engines to improve signal coverage and simulation accuracy.`}
+                  </p>
                 </div>
               );
             })()}
@@ -967,20 +1215,17 @@ export default function ConsumerAdoptionSimulator() {
                         {seg.emotional_resonance.toFixed(0)}
                       </td>
                       {/* Switching prob: HIGH switching = BAD (red), LOW = good (green) — inverted */}
+                      {/* Thresholds: >50% = high risk/red, 35–50% = moderate/amber, <35% = low/green */}
                       <td className={cn('px-3 py-2.5 text-center font-mono font-bold',
-                        seg.switching_probability > 0.6 ? 'bg-red-500/10 text-red-400' :
-                        seg.switching_probability > 0.4 ? 'bg-amber-500/15 text-amber-400' :
-                        seg.switching_probability > 0.2 ? 'bg-emerald-500/15 text-emerald-400' :
-                        'bg-emerald-500/20 text-emerald-400')}>
+                        seg.switching_probability >= 0.5 ? 'bg-red-500/10 text-red-400' :
+                        seg.switching_probability >= 0.35 ? 'bg-amber-500/15 text-amber-400' :
+                        'bg-emerald-500/15 text-emerald-400')}>
                         {(seg.switching_probability * 100).toFixed(1)}%
                       </td>
-                      {/* Resistance: HIGH = bad (red), LOW = good (green) */}
+                      {/* Resistance: HIGH = bad (red), LOW = good (green) — thresholds: ≥60 red, ≥45 orange, ≥30 amber */}
                       <td className={cn(
                         'px-3 py-2.5 text-center font-mono font-bold',
-                        (seg.resistance?.resistance_index || 0) >= 70 ? 'bg-red-500/10 text-red-500' :
-                        (seg.resistance?.resistance_index || 0) >= 50 ? 'bg-orange-500/10 text-orange-500' :
-                        (seg.resistance?.resistance_index || 0) >= 30 ? 'bg-amber-500/10 text-amber-500' :
-                        'bg-emerald-500/10 text-emerald-500',
+                        resistanceHeatCell(seg.resistance?.resistance_index || 0),
                       )}>
                         {(seg.resistance?.resistance_index || 0).toFixed(0)}
                       </td>

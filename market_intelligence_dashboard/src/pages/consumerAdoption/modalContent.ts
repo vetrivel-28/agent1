@@ -582,89 +582,363 @@ export function buildConsumerEnvironmentModal(value: number | null | undefined, 
 
 // ─── Segment Card Modal ────────────────────────────────────────────────────────
 
+/** Compute a concise classification label for the modal header */
+function segmentClassification(seg: Segment): string {
+  const rate       = adoptionRate(seg);
+  const resistance = seg.resistance?.resistance_index ?? 0;
+  const intent     = seg.purchase_intent ?? 0;
+  const popShare   = seg.percentage ?? 0;
+
+  // Primary classification
+  let primary = '';
+  if (rate >= 50 && resistance < 45 && popShare >= 5) primary = 'Scale Candidate';
+  else if (rate >= 50 && resistance < 60 && popShare >= 5) primary = 'High Opportunity';
+  else if (rate >= 50 && popShare < 5) primary = 'Niche Segment';
+  else if (rate >= 35 && rate < 50) primary = 'Moderate Opportunity';
+  else if (resistance >= 60) primary = 'Barrier Heavy';
+  else primary = 'Low Fit';
+
+  // Secondary qualifier
+  let secondary = '';
+  if (resistance >= 60) secondary = 'High Resistance';
+  else if (resistance >= 45) secondary = 'Moderate Resistance';
+  else secondary = 'Low Resistance';
+
+  // Override secondary when intent is distinctive
+  if (intent >= 65) secondary = 'Strong Intent';
+  else if (intent < 45) secondary = 'Weak Intent';
+
+  return `${primary} · ${secondary}`;
+}
+
+/** Sort resistance barriers highest-to-lowest and build labelled lines */
+function sortedBarrierLines(seg: Segment): string[] {
+  const r = seg.resistance;
+  if (!r) return ['No resistance data available for this segment.'];
+
+  const barriers: Array<[string, number]> = [
+    ['Habit Lock-In',         r.habit_lock_in         ?? 0],
+    ['Competitor Loyalty',    r.competitor_loyalty    ?? 0],
+    ['Trust Barrier',         r.trust_barrier         ?? 0],
+    ['Price Resistance',      r.price_resistance      ?? 0],
+    ['Product Complexity',    r.product_complexity    ?? 0],
+    ['Education Required',    r.education_requirement ?? 0],
+  ].filter(([, v]) => (v as number) > 0) as Array<[string, number]>;
+
+  // Sort highest first
+  barriers.sort((a, b) => (b[1] as number) - (a[1] as number));
+
+  return barriers.map(([name, score], i) => {
+    const label = i === 0 ? 'Primary barrier'
+                : i === 1 ? 'Secondary barrier'
+                : 'Other barrier';
+    const s = score as number;
+    const severity = s >= 60 ? '⚠ High' : s >= 45 ? 'Moderate' : 'Low';
+    return `${label}: ${name} — ${s.toFixed(0)}/100 (${severity})`;
+  });
+}
+
+/** Intent vs adoption explanation */
+function intentAdoptionExplanation(seg: Segment): string {
+  const rate       = adoptionRate(seg);
+  const intent     = seg.purchase_intent ?? 0;
+  const resistance = seg.resistance?.resistance_index ?? 0;
+  const switching  = (seg.switching_probability ?? 0) * 100;
+  const trust      = seg.trust_score ?? 0;
+  const gap        = intent - rate;
+
+  if (gap > 15) {
+    // Intent noticeably higher than adoption — explain the drop
+    const reasons: string[] = [];
+    if (resistance >= 55) reasons.push(`high resistance (${resistance.toFixed(0)}/100)`);
+    if (switching >= 45)  reasons.push(`elevated switching difficulty (${switching.toFixed(0)}%)`);
+    if (trust < 50)       reasons.push(`low trust score (${trust.toFixed(0)}/100)`);
+    const r = seg.resistance;
+    const topBarrier = r
+      ? (() => {
+          const bars: Array<[string, number]> = [
+            ['habit lock-in',       r.habit_lock_in      ?? 0],
+            ['competitor loyalty',  r.competitor_loyalty ?? 0],
+            ['price resistance',    r.price_resistance   ?? 0],
+            ['trust barrier',       r.trust_barrier      ?? 0],
+          ].map(([n, v]) => [n, v as number] as [string, number]);
+          bars.sort((a, b) => b[1] - a[1]);
+          return bars[0][0];
+        })()
+      : null;
+
+    const reasonStr = reasons.length > 0
+      ? reasons.join(' and ')
+      : `${seg.resistance?.primary_barrier ?? 'unknown barriers'} reducing conversion`;
+
+    return `Adoption (${rate.toFixed(1)}%) is lower than intent (${intent.toFixed(0)}/100) because this segment shows ${reasonStr}.${
+      topBarrier ? ` The dominant blocker is ${topBarrier} — addressing it is the most direct path to improving conversion.` : ''
+    } Interest exists, but conversion needs stronger proof or incentive to close the gap.`;
+  }
+
+  if (rate >= intent * 0.95) {
+    // Adoption is close to or exceeds intent level
+    return `Adoption (${rate.toFixed(1)}%) is strong relative to intent (${intent.toFixed(0)}/100). This segment's motivations align closely with the product benefits and resistance (${resistance.toFixed(0)}/100) is manageable. Trust (${trust.toFixed(0)}/100) and emotional resonance support conversion without major friction.`;
+  }
+
+  // Small gap
+  return `Adoption (${rate.toFixed(1)}%) tracks close to intent (${intent.toFixed(0)}/100), with a modest gap driven by ${
+    resistance >= 45 ? `moderate resistance (${resistance.toFixed(0)}/100)` : 'minor friction factors'
+  }. Small improvements to trust or value clarity can close this gap.`;
+}
+
+/** Segment-specific business insight */
+function segmentBusinessInsight(seg: Segment): string {
+  const name = seg.cluster_name;
+  const r    = seg.resistance;
+
+  // Build sorted barriers with explicit tuple types to satisfy TypeScript
+  const topBarrier: string = r
+    ? ((): string => {
+        const bars: [string, number][] = [
+          ['Habit Lock-In',       Number(r.habit_lock_in       ?? 0)] as [string, number],
+          ['Competitor Loyalty',  Number(r.competitor_loyalty  ?? 0)] as [string, number],
+          ['Trust Barrier',       Number(r.trust_barrier       ?? 0)] as [string, number],
+          ['Price Resistance',    Number(r.price_resistance    ?? 0)] as [string, number],
+          ['Product Complexity',  Number(r.product_complexity  ?? 0)] as [string, number],
+          ['Education Required',  Number(r.education_requirement ?? 0)] as [string, number],
+        ];
+        bars.sort((a, b) => b[1] - a[1]);
+        return bars[0][0];
+      })()
+    : (seg.resistance?.primary_barrier as string | undefined) ?? 'resistance';
+
+  const insights: Record<string, string> = {
+    'Sustainability Focused':
+      `Position the product around responsible materials, durability, reduced waste, ethical sourcing, recyclable packaging, or long-term value. Certifications and transparency of supply chain build the most trust here. Avoid purely discount-led messaging — this segment needs proof of responsible value, not just a lower price. Primary blocker: ${topBarrier}.`,
+    'Value Maximizers':
+      `Frame the product around value per use, bundle savings, durability, and long-term cost advantage. This segment responds better to proof of savings (e.g. cost-per-use calculator, quantity per pack) than premium lifestyle imagery. Show the math — they want evidence, not claims. Primary blocker: ${topBarrier}.`,
+    'First-Time Buyers':
+      `Reduce uncertainty with simple, jargon-free explanations, a buyer guide or how-it-works section, FAQ content addressing the most common concerns, return confidence, and beginner-friendly proof points. This segment has the most to gain from an easy first-purchase experience. Primary blocker: ${topBarrier}.`,
+    'Brand Loyalists':
+      `Win trust through clear comparison proof against familiar alternatives, credibility signals (certifications, verified reviews, seller tenure), and explicit reasons to switch. Don't ask them to abandon their loyalty — give them a compelling reason to try this instead. Primary blocker: ${topBarrier}.`,
+    'Risk-Averse Buyers':
+      `Lead with trust infrastructure: return policy guarantees, a+ content, verified buyer reviews that address their specific concerns, and purchase protection signals. Every friction point they encounter reduces conversion — address their top objection directly above the fold. Primary blocker: ${topBarrier}.`,
+    'Deal Hunters':
+      `Activate with limited-time offers, visible coupon codes, percentage-off anchors, and bundle discounts. "Deal of the day" mechanics and lightning deals outperform standard promotions for this segment. Price anchoring (crossed-out original price) raises perceived savings. Primary blocker: ${topBarrier}.`,
+    'Premium Quality Seekers':
+      `Prove superiority through material quality evidence, craftsmanship details, performance specifications, and comparison against cheaper alternatives. This segment will pay more — but only if they believe the product genuinely outperforms. Don't undersell. Primary blocker: ${topBarrier}.`,
+    'Convenience Buyers':
+      `Eliminate every friction point: emphasise Prime eligibility, fast and reliable delivery, easy returns, and simple one-step replenishment (subscribe-and-save). Effort reduction is the dominant motivator — make the buying experience effortless. Primary blocker: ${topBarrier}.`,
+    'Category Experts':
+      `Provide accurate technical specifications, detailed comparison tables, and advanced use-case proof. This segment detects vague or generic claims immediately and will abandon listings that don't prove performance at a technical level. They reward honesty. Primary blocker: ${topBarrier}.`,
+    'Heavy Users':
+      `Emphasise durability, repeat-use reliability, cost-over-time value, and subscription/auto-reorder benefits. This segment buys frequently, so subscription pricing and bulk discounts reduce churn. Consistency is the key trust signal. Primary blocker: ${topBarrier}.`,
+    'Occasional Users':
+      `Position as a low-commitment, high-value choice. Highlight simple use cases, flexible purchase options (single purchase, no subscription required), and clear suitability for infrequent needs. Reduce the fear of buying something they won't use. Primary blocker: ${topBarrier}.`,
+    'Gift Buyers':
+      `Emphasise emotional appeal, safe and universal choice, high-quality presentation, and gifting suitability signals. Gift-wrap availability, premium packaging photos, and "perfect for occasions" messaging help. Price should feel appropriate, not cheap or excessive. Primary blocker: ${topBarrier}.`,
+    'Impulse Shoppers':
+      `Maximise urgency and visual appeal: hero images, strong emotional headline, clear price, and quick social proof. Bestseller rank, "X people bought this today", and limited-stock signals trigger impulse conversion. Keep the path to purchase very short. Primary blocker: ${topBarrier}.`,
+    'Practical Buyers':
+      `Prove functionality and reliability with real-world use cases, honest performance claims, and no-fluff product descriptions. This segment is allergic to marketing puffery — clear, factual, and direct language converts best. Show what it does and why it works. Primary blocker: ${topBarrier}.`,
+    'Problem Solvers':
+      `Match the product description precisely to their stated problem. Use "if you struggle with X, this product solves it by Y" framing. Before/after clarity and specific pain-point resolution are the highest-converting messaging patterns for this segment. Primary blocker: ${topBarrier}.`,
+    'Switchers':
+      `Provide direct side-by-side comparison with what they currently use. Highlight specific advantages (price, features, quality, availability) over their existing choice. Introductory offers or trial incentives reduce the perceived risk of switching brands. Primary blocker: ${topBarrier}.`,
+    'Trend Followers':
+      `Use social proof heavily: bestseller ranking, review count and velocity, "trending in [category]" signals, and "customers who viewed this also bought" patterns. Recency signals (new launch, recently updated, popular right now) drive this segment. Primary blocker: ${topBarrier}.`,
+    'Feature Researchers':
+      `Provide the most comprehensive listing possible: detailed feature comparison table, technical spec sheet, video walkthrough, and answers to the most asked questions. This segment will find any gap — fill it before they do. Primary blocker: ${topBarrier}.`,
+    'Budget Maximizers':
+      `Lead with affordability proof: unit economics, quantity per pack, total value vs. alternatives, and visible price transparency. "Lowest price for this quality" framing outperforms premium messaging entirely. Show exactly what they get for the price. Primary blocker: ${topBarrier}.`,
+    'Status Seekers':
+      `Signal exclusivity, style, and brand reputation. Premium packaging, aspirational lifestyle imagery, limited-edition cues, and association with respected brands or celebrities convert this segment. Price should feel elevated, not discounted. Primary blocker: ${topBarrier}.`,
+  };
+
+  return insights[name]
+    ?? `Focus messaging on ${(seg.motivations ?? ['value and quality'])[0]?.toLowerCase() ?? 'value and quality'} — the primary driver for this segment. Reducing "${topBarrier}" (currently ${r?.resistance_index?.toFixed(0) ?? '—'}/100 resistance) is the most direct route to improving conversion.`;
+}
+
+/** Full description of each segment archetype */
+function getSegmentDescription(name: string): string {
+  const descriptions: Record<string, string> = {
+    'Budget Maximizers':
+      'Highly price-sensitive consumers who systematically compare prices across options and wait for deals before committing. They are motivated by extracting maximum value from every purchase and are immediately deterred by any perception of overpricing.',
+    'Premium Quality Seekers':
+      'Consumers who equate higher prices with superior quality. They invest time reading detailed product descriptions, comparing specifications, and evaluating reviews. They willingly pay a premium for products that genuinely outperform alternatives.',
+    'Convenience Buyers':
+      'Motivated entirely by speed, simplicity, and frictionless purchase experience. Prime membership, fast shipping, easy returns, and minimal steps to checkout are decisive. Any additional effort in the buying process loses them.',
+    'Brand Loyalists':
+      'Have strong, established brand preferences and rarely deviate without a compelling reason. They are challenging to acquire but retain extremely well once converted. Brand credibility and comparison signals are the most effective levers.',
+    'Deal Hunters':
+      'Actively and systematically hunt for coupons, limited-time offers, and promotional pricing. They respond powerfully to "deal of the day" mechanics, visible savings, and lightning deals. Price anchoring against a higher original price drives conversion.',
+    'Feature Researchers':
+      'Invest significant time comparing product specifications, reading detailed reviews, and watching product videos before purchasing. Comprehensive listings, detailed Q&A, and feature comparison tables are essential to convert them.',
+    'Risk-Averse Buyers':
+      'Deeply concerned about making a poor purchase decision. Social proof, strong return policies, A+ content, verified review counts, and purchase guarantees reduce their hesitation. They convert slowly but confidently once trust is established.',
+    'Impulse Shoppers':
+      'Make fast, low-consideration purchase decisions based on immediate visual appeal, clear pricing, and emotional triggers. Strong hero images, compelling headlines, bestseller signals, and urgency cues drive quick conversion.',
+    'Trend Followers':
+      'Attracted to products that are socially validated, trending, or recently popular. Bestseller rank, review velocity, "customers also bought" patterns, and "trending now" signals influence them strongly.',
+    'Practical Buyers':
+      'Focus on functional utility and real-world performance. They care whether the product does the job reliably, not about brand prestige or aesthetics. Honest, functional product descriptions and practical use-case proof convert them best.',
+    'Gift Buyers':
+      'Purchasing on behalf of someone else. Packaging quality, giftability, appropriate price point, and ease of gifting are the top decision factors. Occasion-specific messaging, gift-wrap options, and "ideal gift for" framing help.',
+    'Heavy Users':
+      'Frequent, high-volume purchasers with strong category knowledge. They typically buy in bulk or use auto-reorder. They value product reliability, consistency, and the economics of repeat purchase above novelty.',
+    'Occasional Users':
+      'Purchase infrequently — typically for seasonal needs or specific life events. They require more category education and purchase reassurance because they are less familiar with the category norms and expectations.',
+    'Sustainability Focused':
+      'Prioritise environmentally responsible and ethically sourced products. They look for certifications, recyclable or minimal packaging, sustainable sourcing claims, and transparent supply chains. Greenwashing immediately destroys trust.',
+    'Status Seekers':
+      'Purchase decisions are strongly influenced by how the product reflects on their identity and social standing. Premium positioning, aspirational imagery, exclusivity signals, and strong brand associations drive this segment.',
+    'Value Maximizers':
+      'Neither the cheapest nor the most premium — they seek the optimal quality-to-price ratio. They respond well to clear value comparisons, cost-per-use breakdowns, and evidence that the product outperforms alternatives at its price point.',
+    'Problem Solvers':
+      'Have a specific, well-defined problem and are actively searching for the right solution. They use precise, problem-focused search queries. Product descriptions that directly map to their stated problem convert them most effectively.',
+    'First-Time Buyers':
+      'New to the product category. They require education, reassurance, and guided decision support. FAQs, how-it-works explanations, return guarantees, and beginner-friendly proof points significantly reduce their purchase anxiety.',
+    'Category Experts':
+      'Possess deep category knowledge and very specific technical requirements. They are not misled by generic marketing language and require accurate, detailed specifications. They are highly valuable long-term customers when won.',
+    'Switchers':
+      'Currently purchasing from a competitor but open to better alternatives. They are motivated by dissatisfaction, price differences, or the lure of something better. Comparison messaging, introductory offers, and strong differentiation proof win them.',
+  };
+  return descriptions[name]
+    ?? `${name} is a distinct psychographic segment in this simulation. Their behavior, intent, and resistance values are calculated from actual dataset signals — not hardcoded archetypes.`;
+}
+
 export function buildSegmentModal(seg: Segment): InsightModalData {
-  const rate = adoptionRate(seg);
-  const inactive = seg.population === 0;
+  const rate       = adoptionRate(seg);
+  const inactive   = seg.population === 0;
+  const resistance = seg.resistance?.resistance_index ?? 0;
+  const intent     = seg.purchase_intent ?? 0;
+  const trust      = seg.trust_score ?? 0;
+  const resonance  = seg.emotional_resonance ?? 0;
+  const switching  = (seg.switching_probability ?? 0) * 100;
+
+  // Classification label for subtitle
+  const classLabel = inactive ? 'Minimum Population Allocated' : segmentClassification(seg);
+
   return {
     title: seg.cluster_name,
-    subtitle: inactive
-      ? 'Inactive in this dataset — no consumers allocated'
-      : `${fmtNum(seg.population)} consumers · ${seg.percentage.toFixed(1)}% of simulated population`,
-    value: inactive ? '0%' : fmtPct(rate),
-    valueMeaning: inactive ? 'No population assigned' : 'adoption rate',
+    subtitle: classLabel,
+    value: inactive ? fmtPct(0) : fmtPct(rate),
+    valueMeaning: inactive
+      ? `${fmtNum(seg.population)} consumers allocated (minimum floor) — limited signal match`
+      : `adoption rate · ${fmtNum(seg.population)} consumers (${seg.percentage?.toFixed(1) ?? '0'}% of 1,000)`,
     sections: [
+      // ── Who this segment is ──────────────────────────────────────────────
       {
         heading: 'Who this segment represents',
         type: 'normal',
-        body: inactive
-          ? `No consumers from the current dataset were strong enough matches for the ${seg.cluster_name} segment profile. This typically means the dataset lacks keyword or revenue signals that align with this psychographic group. Uploading additional data may activate this segment.`
-          : getSegmentDescription(seg.cluster_name),
+        body: getSegmentDescription(seg.cluster_name),
       },
-      ...(inactive ? [] : [
-        {
-          heading: 'Adoption metrics',
-          type: 'table' as const,
-          body: [
-            signal('Population', seg.population, `${seg.percentage.toFixed(1)}% share`),
-            signal('Purchase intent', seg.purchase_intent, 'out of 100'),
-            signal('Adoption rate (conversion probability)', fmtPct(rate)),
-            signal('Trust score', seg.trust_score),
-            signal('Emotional resonance', seg.emotional_resonance),
-            signal('Switching probability', fmtPct(seg.switching_probability * 100)),
-          ],
-        },
-        {
-          heading: 'Behavioral traits',
-          type: 'normal' as const,
-          body: segmentTraitDescription(seg),
-        },
-        {
-          heading: 'Motivations',
-          type: 'normal' as const,
-          body: (seg.motivations ?? []).filter(m => m !== '—').slice(0, 5).length
-            ? (seg.motivations ?? []).filter(m => m !== '—').slice(0, 5)
-            : ['No specific motivation signals in current dataset.'],
-        },
-        {
-          heading: 'Objections and barriers',
-          type: 'normal' as const,
-          body: resistanceExplanation(seg),
-        },
-        {
-          heading: 'Business insight',
-          type: 'insight' as const,
-          body: seg.resistance?.recommended_approach
-            ?? `This segment has a ${seg.resistance?.resistance_level ?? 'Low'} resistance level. Focus messaging on ${(seg.motivations ?? ['value and convenience'])[0]?.toLowerCase() ?? 'value and convenience'} to improve conversion.`,
-        },
-      ]),
+
+      // ── Adoption metrics ─────────────────────────────────────────────────
+      {
+        heading: 'Adoption metrics',
+        type: 'table',
+        body: [
+          signal('Population', seg.population,
+            `${seg.percentage?.toFixed(1) ?? '—'}% share · constrained to 25–150 per segment`),
+          signal('Purchase intent', intent, 'willingness to buy, out of 100'),
+          signal('Adoption rate (conversion probability)', fmtPct(rate),
+            'modeled % likely to complete purchase given intent, trust, and resistance'),
+          signal('Trust score', trust,
+            'estimated from review sentiment, rating confidence, friction signals, and brand familiarity'),
+          signal('Emotional resonance', resonance,
+            'how strongly segment motivations match the product\'s perceived benefits'),
+          signal('Switching probability', fmtPct(switching),
+            'estimated from competitor loyalty, habit lock-in, price sensitivity, and perceived differentiation'),
+          signal('Resistance index', resistance,
+            resistance >= 60 ? 'High — strong barriers to first purchase'
+              : resistance >= 45 ? 'Moderate — notable but addressable barriers'
+              : 'Low — few barriers, easier to convert'),
+        ],
+      },
+
+      // ── Intent vs adoption explanation ───────────────────────────────────
+      {
+        heading: 'Intent vs adoption analysis',
+        type: 'normal',
+        body: intentAdoptionExplanation(seg),
+      },
+
+      // ── Score explanations ───────────────────────────────────────────────
+      {
+        heading: 'Score explanations',
+        type: 'table',
+        body: [
+          `Trust score (${trust.toFixed(0)}/100): Estimated from review sentiment score, average rating confidence, complaint and friction keyword signals, brand familiarity, and return confidence where available from the dataset.`,
+          `Emotional resonance (${resonance.toFixed(0)}/100): Estimates how strongly this segment's motivations match the product's perceived benefits — quality, convenience, sustainability, status, safety, or value. Higher resonance = better motivation-product fit.`,
+          `Switching probability (${switching.toFixed(1)}%): Estimated from competitor loyalty strength, habit lock-in score, price sensitivity, trust barrier level, and perceived differentiation advantage. Lower is better — under 35% is low risk.`,
+        ],
+      },
+
+      // ── Motivations ──────────────────────────────────────────────────────
+      {
+        heading: 'Motivations',
+        type: 'normal',
+        body: (() => {
+          const motives = (seg.motivations ?? []).filter(m => m && m !== '—');
+          return motives.length > 0
+            ? motives.slice(0, 3)
+            : ['No specific motivation signals from current dataset — upload richer keyword and revenue data to activate segment-specific motivations.'];
+        })(),
+      },
+
+      // ── Behavioral traits ─────────────────────────────────────────────────
+      {
+        heading: 'Behavioral traits',
+        type: 'normal',
+        body: segmentTraitDescription(seg),
+      },
+
+      // ── Barriers (sorted highest → lowest) ──────────────────────────────
+      {
+        heading: 'Barriers — sorted highest to lowest',
+        type: 'normal',
+        body: sortedBarrierLines(seg),
+      },
+
+      // ── Business insight (segment-specific) ──────────────────────────────
+      {
+        heading: 'Business insight',
+        type: 'insight',
+        body: segmentBusinessInsight(seg),
+      },
+
+      // ── Calculation details ───────────────────────────────────────────────
+      {
+        heading: 'Calculation details',
+        type: 'formula',
+        body: [
+          'Segment Adoption Probability = Base Intent + Motivation Fit + Trust Score Impact + Product Resonance − Resistance Penalty − Switching Difficulty',
+          '',
+          `Base intent (purchase_intent): ${intent.toFixed(1)}/100`,
+          `  → Derived from demand score, segment trait affinity, and dataset signal alignment`,
+          '',
+          `Trust score impact: ${trust.toFixed(1)}/100`,
+          `  → From review sentiment, friction keyword count, and brand familiarity signals`,
+          '',
+          `Emotional resonance: ${resonance.toFixed(1)}/100`,
+          `  → Motivation-product match across quality, convenience, sustainability, value axes`,
+          '',
+          `Resistance penalty: ${resistance.toFixed(1)}/100`,
+          `  → Composite of habit lock-in, competitor loyalty, trust barrier, price resistance,`,
+          `    product complexity, and education requirement`,
+          '',
+          `Switching difficulty: ${switching.toFixed(1)}%`,
+          `  → Competitor loyalty + habit lock-in + price sensitivity + trust barrier`,
+          '',
+          `Final adoption probability ≈ ${fmtPct(rate)}`,
+          `  → conversion_probability × 100`,
+          '',
+          'Population allocation method:',
+          `  All 20 segments start at minimum 25 consumers. Remaining 500 are distributed`,
+          `  by dataset-driven fit scores (affinity × DNA signals), capped at 150 per segment.`,
+          `  Largest-remainder rounding ensures total = exactly 1,000.`,
+          `  This segment: ${seg.population} consumers (${seg.percentage?.toFixed(1) ?? '—'}% share).`,
+        ],
+      },
     ],
   };
-}
-
-function getSegmentDescription(name: string): string {
-  const descriptions: Record<string, string> = {
-    'Budget Maximizers': 'Highly price-sensitive consumers who compare prices across options and wait for deals before buying. They are motivated by getting maximum value and are deterred by any perception of overpricing.',
-    'Premium Quality Seekers': 'Consumers who associate higher prices with superior quality. They read detailed product descriptions, compare specifications, and are willing to pay more for perceived excellence.',
-    'Convenience Buyers': 'Motivated by speed, simplicity, and ease of purchase. Prime membership, fast shipping, and hassle-free returns are decisive factors. They resist anything that creates friction.',
-    'Brand Loyalists': 'Have strong, established brand preferences and rarely deviate. They are hard to acquire but retain extremely well once converted. Competitive brand trust signals are key.',
-    'Deal Hunters': 'Actively search for coupons, limited-time offers, and promotional pricing. They respond strongly to "deal of the day" mechanics and lightning deals. Price anchoring works well.',
-    'Feature Researchers': 'Spend significant time comparing product specifications, reading reviews, and watching videos before purchasing. Comprehensive listing content, detailed Q&A, and comparison charts convert them.',
-    'Risk-Averse Buyers': 'Highly concerned about making a bad purchase. Social proof, return policies, A+ content, and verified review counts reduce their hesitation. They convert slowly but confidently.',
-    'Impulse Shoppers': 'Make fast, low-consideration purchase decisions based on visual appeal, pricing, and positioning. Strong hero images, clear pricing, and bestseller signals drive quick conversion.',
-    'Trend Followers': 'Attracted to products that are socially validated, trending, or recently popular. Bestseller rank, recent review velocity, and "customers also bought" patterns influence them.',
-    'Practical Buyers': 'Focus on functional utility and real-world performance. They care about whether the product does the job well, not about brand status or aesthetics. Honest, functional descriptions convert them.',
-    'Gift Buyers': 'Purchasing for someone else. Packaging quality, giftability, price appropriateness, and ease of gifting matter most. Gift-wrap options and occasion-specific messaging help.',
-    'Heavy Users': 'Frequent, high-volume purchasers in this category. They have strong category knowledge and typically buy in bulk or with subscribe-and-save. They value reliability and consistency.',
-    'Occasional Users': 'Purchase infrequently — perhaps seasonally or for specific life events. They need more education and reassurance because they are less familiar with the category.',
-    'Sustainability Focused': 'Prioritise environmentally responsible products. They look for certifications, recyclable packaging, ethical sourcing, and sustainability claims. Greenwashing repels them.',
-    'Status Seekers': 'Purchase is influenced by how the product reflects on their identity or social standing. Premium positioning, aspirational imagery, and brand associations matter.',
-    'Value Maximizers': 'Balance seekers — neither the cheapest nor the most premium option. They seek the best combination of quality and price and respond well to value comparisons.',
-    'Problem Solvers': 'Have a specific problem and are searching for a solution. They describe their need precisely in search queries. Matching product descriptions to their exact problem converts them.',
-    'First-Time Buyers': 'New to the category. They need education, reassurance, and guidance. FAQs, how-it-works content, and return guarantees significantly reduce purchase anxiety.',
-    'Category Experts': 'Deep category knowledge and very specific requirements. They will not be misled by marketing language and require accurate technical detail. They are valuable long-term customers.',
-    'Switchers': 'Currently purchasing from a competitor but open to alternatives. They are price-sensitive or dissatisfied. Comparison messaging, introductory offers, and strong social proof can win them.',
-  };
-  return descriptions[name] ?? `${name} represents a distinct psychographic group in this simulation. Their behavior, purchase intent, and resistance are calculated from your dataset signals.`;
 }
 
 // ─── Adoption Matrix Row ──────────────────────────────────────────────────────

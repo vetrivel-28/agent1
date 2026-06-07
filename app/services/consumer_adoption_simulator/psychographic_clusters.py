@@ -156,41 +156,156 @@ class PsychographicClusterEngine:
             best_segment = self._assign_to_segment(consumer)
             assignments[best_segment].append(i)
 
-        # ── Ensure all 20 segments have minimum population ────────────────────
-        # Step 1: Count how many segments currently have 0 consumers
-        MIN_POP_PER_SEGMENT = 10      # every segment gets at least 10 consumers (1% of 1000)
-        empty_segments = [n for n in FIXED_SEGMENT_NAMES if not assignments[n]]
-        donors_needed = len(empty_segments) * MIN_POP_PER_SEGMENT
+        # ── Ensure all 20 segments have minimum population and enforce max cap ─────
+        # RULES:
+        #   MIN_POP_PER_SEGMENT = 25  (statistically usable sample)
+        #   MAX_POP_PER_SEGMENT = 150 (no segment dominates)
+        #   TOTAL = exactly 1,000
+        #
+        # Algorithm:
+        #   1. Give every segment 25 (uses 500 consumers, 20 × 25)
+        #   2. Score each segment by dataset fit (affinity × DNA signals)
+        #   3. Distribute remaining 500 proportionally, capping at 150
+        #   4. Largest-remainder correction to hit exactly 1,000
+        MIN_POP_PER_SEGMENT = 25
+        MAX_POP_PER_SEGMENT = 150
 
-        if empty_segments and donors_needed > 0:
-            logger.info(
-                "Ensuring minimum population: %d empty segments need %d consumers total",
-                len(empty_segments), donors_needed,
+        # Step 1: compute dataset-driven fit scores per segment
+        # Fit score = mean affinity of assigned consumers × dataset signal bonus
+        # Segments with more naturally-assigned consumers get a higher raw score
+        raw_scores: Dict[str, float] = {}
+        for seg_name in FIXED_SEGMENT_NAMES:
+            assigned_count = len(assignments[seg_name])
+            # Base score = natural assignment share (0–1)
+            base = assigned_count / max(total, 1)
+            # Bonus: how well the segment's affinity profile aligns with key DNA signals
+            affinity = SEGMENT_TRAIT_AFFINITY.get(seg_name, {})
+            hhi_norm  = min((dna.hhi_score or 2500) / 10000.0, 1.0)
+            vel_norm  = min((dna.demand_velocity or 50) / 100.0, 1.0)
+            eff_norm  = min((dna.conversion_efficiency or 50) / 100.0, 1.0)
+            price_mid = ((dna.market_price_ceiling or 50) + (dna.market_price_floor or 5)) / 2.0
+            premium_norm = min(price_mid / 100.0, 1.0)
+            # Signal bonuses per key trait
+            bonus = (
+                affinity.get("brand_loyalty", 0)      * hhi_norm   * 0.3 +
+                affinity.get("trend_focused", 0)       * vel_norm   * 0.3 +
+                affinity.get("convenience_focused", 0) * eff_norm   * 0.2 +
+                affinity.get("premium_willingness", 0) * premium_norm * 0.2
             )
-            # Step 2: Find the largest segments to take from
-            rng_fill = random.Random(total * 31337)
-            for empty_name in empty_segments:
-                # Donate MIN_POP_PER_SEGMENT consumers from the largest available segment
-                for _ in range(MIN_POP_PER_SEGMENT):
-                    # Always take from the current largest donor that has surplus
-                    eligible_donors = [
-                        n for n in FIXED_SEGMENT_NAMES 
-                        if len(assignments[n]) > MIN_POP_PER_SEGMENT + 5  # keep buffer
-                    ]
-                    if not eligible_donors:
-                        # Fallback: take from any segment with more than MIN_POP
-                        eligible_donors = [
-                            n for n in FIXED_SEGMENT_NAMES 
-                            if len(assignments[n]) > MIN_POP_PER_SEGMENT
-                        ]
-                    if not eligible_donors:
-                        logger.warning("Cannot donate more consumers - all segments at minimum")
-                        break
-                    
-                    donor_name = max(eligible_donors, key=lambda n: len(assignments[n]))
-                    # Move one consumer index from donor to empty segment
-                    idx = assignments[donor_name].pop()
-                    assignments[empty_name].append(idx)
+            raw_scores[seg_name] = base * 0.7 + bonus * 0.3
+
+        # Step 2: start every segment at MIN, use a deterministic seed
+        populations: Dict[str, int] = {name: MIN_POP_PER_SEGMENT for name in FIXED_SEGMENT_NAMES}
+        budget = total - MIN_POP_PER_SEGMENT * len(FIXED_SEGMENT_NAMES)  # = 1000 - 500 = 500
+
+        # Step 3: distribute budget proportionally, capping each at MAX
+        total_score = sum(raw_scores.values()) or 1.0
+        ideal_extras: Dict[str, float] = {
+            name: (raw_scores[name] / total_score) * budget
+            for name in FIXED_SEGMENT_NAMES
+        }
+
+        # Hard-cap extras so no segment exceeds MAX
+        capped_extras: Dict[str, float] = {}
+        overflow = 0.0
+        for name in FIXED_SEGMENT_NAMES:
+            raw_extra = ideal_extras[name]
+            cap_room  = MAX_POP_PER_SEGMENT - MIN_POP_PER_SEGMENT  # = 125
+            if raw_extra > cap_room:
+                overflow += raw_extra - cap_room
+                capped_extras[name] = float(cap_room)
+            else:
+                capped_extras[name] = raw_extra
+
+        # Redistribute overflow to segments still below their cap
+        if overflow > 0.01:
+            eligible = [n for n in FIXED_SEGMENT_NAMES if capped_extras[n] < (MAX_POP_PER_SEGMENT - MIN_POP_PER_SEGMENT)]
+            if eligible:
+                elig_score = sum(raw_scores[n] for n in eligible) or 1.0
+                for name in eligible:
+                    room = (MAX_POP_PER_SEGMENT - MIN_POP_PER_SEGMENT) - capped_extras[name]
+                    share = (raw_scores[name] / elig_score) * overflow
+                    capped_extras[name] += min(share, room)
+
+        # Step 4: largest-remainder integer rounding to hit exactly TOTAL
+        int_extras: Dict[str, int] = {name: int(capped_extras[name]) for name in FIXED_SEGMENT_NAMES}
+        remainder_sum = budget - sum(int_extras.values())
+
+        # Sort by fractional part descending to distribute remainders fairly
+        fractions = sorted(
+            FIXED_SEGMENT_NAMES,
+            key=lambda n: (capped_extras[n] - int(capped_extras[n])),
+            reverse=True,
+        )
+        for i in range(max(0, int(remainder_sum))):
+            name = fractions[i % len(fractions)]
+            if populations[name] + int_extras[name] + 1 <= MAX_POP_PER_SEGMENT:
+                int_extras[name] += 1
+
+        # Apply extras to populations
+        for name in FIXED_SEGMENT_NAMES:
+            populations[name] = MIN_POP_PER_SEGMENT + int_extras[name]
+
+        # Final safety clamp and correction
+        for name in FIXED_SEGMENT_NAMES:
+            populations[name] = max(MIN_POP_PER_SEGMENT, min(MAX_POP_PER_SEGMENT, populations[name]))
+
+        actual_total = sum(populations.values())
+        diff = total - actual_total
+        if diff != 0:
+            # Correct by adding/removing from segments with room
+            direction = 1 if diff > 0 else -1
+            eligibles = [
+                n for n in FIXED_SEGMENT_NAMES
+                if (direction == 1 and populations[n] < MAX_POP_PER_SEGMENT) or
+                   (direction == -1 and populations[n] > MIN_POP_PER_SEGMENT)
+            ]
+            sorted_elig = sorted(eligibles, key=lambda n: populations[n], reverse=(direction == -1))
+            for i in range(abs(diff)):
+                name = sorted_elig[i % len(sorted_elig)] if sorted_elig else FIXED_SEGMENT_NAMES[i % 20]
+                populations[name] += direction
+
+        # Now reassign consumers to match the target populations deterministically
+        # Rebuild assignments respecting new population targets
+        rng_assign = random.Random(total * 99991)
+        new_assignments: Dict[str, List[int]] = {name: [] for name in FIXED_SEGMENT_NAMES}
+
+        # First pass: keep naturally-assigned consumers, up to target
+        for seg_name in FIXED_SEGMENT_NAMES:
+            target = populations[seg_name]
+            natural = assignments[seg_name]
+            rng_assign.shuffle(natural)
+            new_assignments[seg_name] = natural[:target]
+
+        # Second pass: collect unassigned consumers
+        unassigned: List[int] = []
+        for seg_name in FIXED_SEGMENT_NAMES:
+            target = populations[seg_name]
+            natural = assignments[seg_name]
+            if len(natural) > target:
+                unassigned.extend(natural[target:])
+
+        # Third pass: fill segments that need more consumers
+        rng_assign.shuffle(unassigned)
+        ptr = 0
+        for seg_name in FIXED_SEGMENT_NAMES:
+            needed = populations[seg_name] - len(new_assignments[seg_name])
+            if needed > 0 and ptr < len(unassigned):
+                fill = unassigned[ptr:ptr + needed]
+                new_assignments[seg_name].extend(fill)
+                ptr += len(fill)
+
+        # Replace assignments
+        assignments = new_assignments
+
+        logger.info(
+            "Population distribution enforced: min=%d, max=%d, total=%d, "
+            "actual_min=%d, actual_max=%d, actual_total=%d",
+            MIN_POP_PER_SEGMENT, MAX_POP_PER_SEGMENT, total,
+            min(len(v) for v in assignments.values()),
+            max(len(v) for v in assignments.values()),
+            sum(len(v) for v in assignments.values()),
+        )
 
         # Build cluster objects
         theme_names = [
@@ -246,8 +361,8 @@ class PsychographicClusterEngine:
         clusters.sort(key=lambda c: c.population, reverse=True)
         active_count = sum(1 for c in clusters if c.population > 0)
         logger.info(
-            "Assigned %d consumers to %d fixed psychographic segments (%d active, %d with min-pop)",
-            total, len(clusters), active_count, len(empty_segments),
+            "Assigned %d consumers to %d fixed psychographic segments (%d with population > 0)",
+            total, len(clusters), active_count,
         )
         return clusters
 

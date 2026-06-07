@@ -38,17 +38,56 @@ export function resistanceBg(level: string): string {
 }
 
 export function intentColor(score: number): string {
-  if (score >= 70) return 'text-emerald-500';
-  if (score >= 50) return 'text-amber-500';
+  // Intent thresholds: < 45 = red, 45–65 = orange/amber, > 65 = green
+  if (score >= 65) return 'text-emerald-500';
+  if (score >= 45) return 'text-amber-500';
   return 'text-red-500';
 }
 
+export function adoptionColor(pct: number): string {
+  // Adoption thresholds: < 35% = red, 35–50% = orange, > 50% = green
+  if (pct >= 50) return 'text-emerald-500';
+  if (pct >= 35) return 'text-amber-500';
+  return 'text-red-500';
+}
+
+export function trustColor(score: number): string {
+  // Trust thresholds: < 45 = red, 45–65 = amber, > 65 = green
+  if (score >= 65) return 'text-emerald-500';
+  if (score >= 45) return 'text-amber-500';
+  return 'text-red-500';
+}
+
+export function resistanceScoreColor(score: number): string {
+  // Resistance thresholds: < 45 = green (manageable), 45–60 = orange, > 60 = red
+  if (score >= 60) return 'text-red-500';
+  if (score >= 45) return 'text-orange-500';
+  return 'text-emerald-500';
+}
+
+export function switchingColor(pct: number): string {
+  // Switching probability: > 50% = high risk (red), 35–50% = moderate (amber), < 35% = low (green)
+  if (pct >= 50) return 'text-red-400';
+  if (pct >= 35) return 'text-amber-400';
+  return 'text-emerald-400';
+}
+
 export function heatCell(val: number, max = 100): string {
+  // General heat cell — maps 0–100 onto 4 bands
+  // Aligned with adoption thresholds for consistency
   const pct = val / max;
-  if (pct >= 0.75) return 'bg-emerald-500/20 text-emerald-400';
-  if (pct >= 0.5) return 'bg-amber-500/15 text-amber-400';
+  if (pct >= 0.65) return 'bg-emerald-500/20 text-emerald-400';
+  if (pct >= 0.45) return 'bg-amber-500/15 text-amber-400';
   if (pct >= 0.25) return 'bg-orange-500/15 text-orange-400';
   return 'bg-red-500/10 text-red-400';
+}
+
+export function resistanceHeatCell(val: number): string {
+  // Inverted — high resistance = red
+  if (val >= 60) return 'bg-red-500/10 text-red-500';
+  if (val >= 45) return 'bg-orange-500/10 text-orange-500';
+  if (val >= 30) return 'bg-amber-500/10 text-amber-500';
+  return 'bg-emerald-500/10 text-emerald-500';
 }
 
 export function metricConfidence(

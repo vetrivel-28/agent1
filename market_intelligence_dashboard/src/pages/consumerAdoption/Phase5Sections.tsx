@@ -897,19 +897,117 @@ export function ExecutiveNarrativeSection({ r }: { r: SimResults }) {
         <Card className="border-border/40">
           <CardHeader className="pb-3">
             <CardTitle className="text-sm">Segment Messaging Recommendations</CardTitle>
-            <CardDescription>Channel and messaging strategy for priority segments</CardDescription>
+            <CardDescription>
+              Dataset-driven messaging strategy for the top {Math.min(segmentMessages.length, 6)} segments —
+              derived from psychographic traits, resistance barriers, and intent profile
+            </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {segmentMessages.slice(0, 6).map((msg, i) => (
-                <div key={i} className="p-3 border border-border/40 rounded-xl text-xs">
-                  <p className="font-bold text-foreground">{String(msg.segment)}</p>
-                  <p className="text-muted-foreground mt-1">{String(msg.primary_angle || '')}</p>
-                  {typeof msg.emotional_trigger === 'string' && msg.emotional_trigger && (
-                    <p className="text-[10px] text-primary mt-0.5">Trigger: {msg.emotional_trigger}</p>
-                  )}
-                </div>
-              ))}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {segmentMessages.slice(0, 6).map((msg, i) => {
+                // Resolve fields from backend messaging_intelligence structure
+                const segName       = String(msg.segment || '—');
+                const primaryAngle  = String(msg.primary_angle || msg.positioning || '—');
+                const trigger       = String(msg.emotional_trigger || '—');
+                const positioning   = String(msg.positioning || '—');
+                const channelTactic = String(msg.channel_tactic || '—');
+                // Population from segments array if available
+                const pop = typeof msg.population === 'number' ? msg.population : null;
+
+                // Derive barrier and CTA from angle heuristically so every card is useful
+                const barrierMap: Record<string, string> = {
+                  'Quality authority':    'Trust Barrier',
+                  'Effortless solution':  'Product Complexity',
+                  'Best value':           'Price Resistance',
+                  'Trending choice':      'Habit Lock-In',
+                  'Safe & proven':        'Trust Barrier',
+                  'Responsible choice':   'Education Required',
+                  'Health-first product': 'Education Required',
+                  'Premium experience':   'Price Resistance',
+                  'Value & quality':      'Price Resistance',
+                };
+                const ctaMap: Record<string, string> = {
+                  'Quality authority':    '"See why it outperforms the alternatives"',
+                  'Effortless solution':  '"Add to cart and try it today"',
+                  'Best value':           '"Compare long-term cost per use"',
+                  'Trending choice':      '"Join thousands of buyers this week"',
+                  'Safe & proven':        '"Read verified reviews"',
+                  'Responsible choice':   '"Learn about our sustainable sourcing"',
+                  'Health-first product': '"See the full ingredients breakdown"',
+                  'Premium experience':   '"Explore the premium range"',
+                  'Value & quality':      '"Compare features and value"',
+                };
+                const proofMap: Record<string, string> = {
+                  'Quality authority':    'Comparison chart, test results, certifications',
+                  'Effortless solution':  'Fast delivery badge, one-click checkout proof',
+                  'Best value':           'Cost-per-use calculator, quantity per unit',
+                  'Trending choice':      'Bestseller rank, review count, social proof',
+                  'Safe & proven':        'Star rating, verified buyer quotes, return policy',
+                  'Responsible choice':   'Eco certification, sourcing transparency',
+                  'Health-first product': 'Ingredient list, third-party testing results',
+                  'Premium experience':   'Material/ingredient quality cues, brand story',
+                  'Value & quality':      'Feature comparison table, "best in class" claim',
+                };
+
+                const primaryBarrier = barrierMap[primaryAngle] || 'Resistance Barrier';
+                const ctaSuggestion  = ctaMap[primaryAngle]  || '"Learn more and buy today"';
+                const proofPoint     = proofMap[primaryAngle] || 'Social proof and reviews';
+
+                return (
+                  <div key={i} className="p-4 border border-border/40 rounded-xl text-xs space-y-2">
+                    {/* Header */}
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="font-bold text-foreground text-sm leading-tight">{segName}</p>
+                      {pop !== null && (
+                        <span className="text-[10px] font-mono text-muted-foreground shrink-0">
+                          {pop.toLocaleString()} consumers
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Primary motivation + barrier */}
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="p-2 bg-emerald-500/5 border border-emerald-500/15 rounded-lg">
+                        <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wide mb-0.5">Primary Motivation</p>
+                        <p className="text-foreground/80 leading-tight">{primaryAngle}</p>
+                        {trigger !== '—' && (
+                          <p className="text-[10px] text-emerald-400 mt-0.5">Trigger: {trigger}</p>
+                        )}
+                      </div>
+                      <div className="p-2 bg-amber-500/5 border border-amber-500/15 rounded-lg">
+                        <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wide mb-0.5">Primary Barrier</p>
+                        <p className="text-amber-400 leading-tight font-medium">{primaryBarrier}</p>
+                      </div>
+                    </div>
+
+                    {/* Message angle */}
+                    <div>
+                      <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wide mb-0.5">Recommended Message Angle</p>
+                      <p className="text-foreground/80 leading-relaxed">{positioning}</p>
+                    </div>
+
+                    {/* Proof point needed */}
+                    <div>
+                      <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wide mb-0.5">Proof Point Needed</p>
+                      <p className="text-muted-foreground">{proofPoint}</p>
+                    </div>
+
+                    {/* Channel tactic */}
+                    {channelTactic !== '—' && (
+                      <div>
+                        <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wide mb-0.5">Channel Tactic</p>
+                        <p className="text-muted-foreground">{channelTactic}</p>
+                      </div>
+                    )}
+
+                    {/* CTA suggestion */}
+                    <div className="pt-1.5 border-t border-border/30">
+                      <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wide mb-0.5">CTA Suggestion</p>
+                      <p className="text-primary font-medium">{ctaSuggestion}</p>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </CardContent>
         </Card>
