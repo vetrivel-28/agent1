@@ -246,7 +246,7 @@ export default function ConsumerAdoptionSimulator() {
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ['consumer-adoption-simulator', categoryKey],
-    queryFn: () => api.runConsumerAdoptionSimulator(1000, categoryScope),
+    queryFn: () => api.runConsumerAdoptionSimulator({ populationSize: 1000, scope: categoryScope }),
     retry: false,
     refetchOnWindowFocus: false,
     enabled: !!statusData,

@@ -139,7 +139,7 @@ export default function DatasetUpload() {
         }
         
         // Backend returned error response
-        const backendMessage = err.response?.data?.message || err.message;
+        const backendMessage = err.response?.data?.error || err.response?.data?.message || err.message;
         setUploadStatus({
           type: 'error',
           message: `Category detection failed: ${backendMessage}`,
@@ -186,7 +186,7 @@ export default function DatasetUpload() {
         }
       }
       
-      const firstMsg = firstErr?.message || error.response?.data?.message;
+      const firstMsg = firstErr?.message || error.response?.data?.error || error.response?.data?.message;
       setUploadStatus({
         type: 'error',
         message: firstMsg || error.response?.data?.detail?.[0]?.msg || error.message || 'Upload validation failed.',

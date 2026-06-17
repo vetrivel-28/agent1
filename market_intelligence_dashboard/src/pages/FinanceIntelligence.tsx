@@ -431,7 +431,7 @@ export default function FinanceIntelligence() {
 
   const { data: finData, isLoading, isError, error } = useQuery({
     queryKey: ['finance-intelligence', categoryKey],
-    queryFn: () => api.getFinanceIntelligence(categoryScope),
+    queryFn: () => api.getFinanceIntelligence({ scope: categoryScope }),
   });
   
   const data = finData;

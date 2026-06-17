@@ -275,7 +275,7 @@ export default function MarketConcentration() {
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ['market-concentration', categoryKey],
-    queryFn: () => api.getMarketConcentration(50, categoryScope),
+    queryFn: () => api.getMarketConcentration({ topN: 50, scope: categoryScope }),
   });
 
   // Safe data extraction - handles undefined gracefully

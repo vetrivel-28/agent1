@@ -111,12 +111,19 @@ type Diagnostics = {
 };
 
 type ThemeQuality = {
-  total_themes_detected?: number;
-  specific_themes?: number;
-  broad_or_classification_themes?: number;
-  eligible_strategic_themes?: number;
-  excluded_themes?: number;
+  detected_demand_themes?: number;
+  specific_buyer_intent_themes?: number;
+  broad_generic_themes?: number;
+  themes_used_for_scoring?: number;
+  themes_excluded_from_scoring?: number;
   generic_demand_share_pct?: number;
+  confidence_score?: number;
+  confidence_label?: string;
+  insights?: string[];
+  recommended_action?: string;
+  ratios_used?: Record<string, number>;
+  formula?: string;
+  dataset_scope?: string;
   excluded_theme_details?: Array<Record<string, unknown>>;
 };
 
@@ -315,7 +322,7 @@ export default function DemandStrength() {
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['demand-strength', datasetSessionId, categoryKey, keywordScopeKey],
-    queryFn: () => api.getDemandStrength(50, categoryScope),
+    queryFn: () => api.getDemandStrength({ topN: 50, scope: categoryScope }),
     retry: false,
     refetchOnWindowFocus: false,
   });
@@ -463,11 +470,7 @@ export default function DemandStrength() {
         description="All metrics are calculated from your active uploaded datasets only."
       />
 
-      {sessionId && (
-        <p className="text-[10px] font-mono text-muted-foreground mb-4 -mt-6">
-          Active session: {sessionId}
-        </p>
-      )}
+      {/* Moved Active Session to Dataset scope / audit details drawer at the bottom of the page */}
 
       {/* Data quality panel */}
       {showQualityPanel && (
@@ -538,36 +541,135 @@ export default function DemandStrength() {
         </PageSection>
       )}
 
-      {(themeQuality.eligible_strategic_themes != null || themeQuality.generic_demand_share_pct != null) && (
-        <PageSection title="Theme Quality Summary">
-          <Card className="border-border/50 bg-card">
-            <CardContent className="p-6 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 text-sm">
-              <div>
-                <p className="text-muted-foreground text-xs">Themes detected</p>
-                <p className="font-bold">{themeQuality.total_themes_detected ?? '—'}</p>
+      {(themeQuality.themes_used_for_scoring != null || themeQuality.generic_demand_share_pct != null) && (
+        <PageSection title="Demand Theme Readiness">
+          <Card 
+            className="border-primary/20 bg-card mb-6 cursor-pointer hover:border-primary/50 transition-all shadow-sm"
+            onClick={() => setEvidence({
+                title: 'Demand Theme Readiness Metrics',
+                displayed_value: `${themeQuality.confidence_score ?? '—'}/100`,
+                business_summary: 'Theme Quality Confidence Score',
+                business_meaning: 'Measures whether the detected keyword themes are specific, differentiated, and actionable enough to support reliable market strategy and simulation.',
+                formula: themeQuality.formula || '40% * KPI-ready ratio + 30% * specific ratio + 20% * non-excluded ratio + 10% * inverse generic',
+                source_datasets: ['Classification Dataset'],
+                source_columns: [],
+                source_row_count: 0,
+                counts: themeQuality.ratios_used as any,
+              })}
+          >
+            <CardContent className="p-6 flex flex-col md:flex-row items-center gap-8">
+              {/* Prominent Confidence Score */}
+              <div className="flex flex-col items-center justify-center shrink-0 w-48 border-r border-border/50 pr-8">
+                <div className="relative flex items-center justify-center w-28 h-28 mb-2">
+                  <svg className="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
+                    <path
+                      className="text-muted/30"
+                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="3"
+                    />
+                    <path
+                      className={cn(
+                        "transition-all duration-1000 ease-out",
+                        (themeQuality.confidence_score ?? 0) >= 70 ? "text-emerald-500" :
+                        (themeQuality.confidence_score ?? 0) >= 45 ? "text-amber-500" : "text-red-500"
+                      )}
+                      strokeDasharray={`${themeQuality.confidence_score ?? 0}, 100`}
+                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="3"
+                    />
+                  </svg>
+                  <div className="absolute flex flex-col items-center">
+                    <span className="text-3xl font-black font-mono leading-none">{themeQuality.confidence_score ?? '—'}</span>
+                    <span className="text-[10px] text-muted-foreground uppercase tracking-widest mt-1">Score</span>
+                  </div>
+                </div>
+                <div className={cn(
+                  "px-3 py-1 rounded-full text-xs font-bold border",
+                  (themeQuality.confidence_score ?? 0) >= 70 ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20" :
+                  (themeQuality.confidence_score ?? 0) >= 45 ? "bg-amber-500/10 text-amber-500 border-amber-500/20" : "bg-red-500/10 text-red-500 border-red-500/20"
+                )}>
+                  {(themeQuality.confidence_score ?? 0) >= 70 ? "High Readiness" : (themeQuality.confidence_score ?? 0) >= 45 ? "Moderate Readiness" : "Low Readiness"}
+                </div>
               </div>
-              <div>
-                <p className="text-muted-foreground text-xs">Specific themes</p>
-                <p className="font-bold text-success">{themeQuality.specific_themes ?? '—'}</p>
+
+              {/* Supporting Metrics */}
+              <div className="flex-1 grid grid-cols-2 lg:grid-cols-3 gap-y-6 gap-x-4">
+                <div>
+                  <p className="text-muted-foreground text-xs font-medium uppercase tracking-wider mb-1">Detected Themes</p>
+                  <p className="text-2xl font-bold">{themeQuality.detected_demand_themes ?? '—'}</p>
+                  <p className="text-[10px] text-muted-foreground mt-1">Total distinct market segments</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs font-medium uppercase tracking-wider mb-1">Specific Intent</p>
+                  <p className="text-2xl font-bold text-success">{themeQuality.specific_buyer_intent_themes ?? '—'}</p>
+                  <p className="text-[10px] text-muted-foreground mt-1">Actionable business themes</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs font-medium uppercase tracking-wider mb-1">Generic Demand</p>
+                  <p className="text-2xl font-bold text-warning">{Number(themeQuality.generic_demand_share_pct ?? 0).toFixed(1)}%</p>
+                  <p className="text-[10px] text-muted-foreground mt-1">Share of non-specific queries</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs font-medium uppercase tracking-wider mb-1">Themes Scored</p>
+                  <p className="text-xl font-bold">{themeQuality.themes_used_for_scoring ?? '—'}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs font-medium uppercase tracking-wider mb-1">Broad/Generic</p>
+                  <p className="text-xl font-bold">{themeQuality.broad_generic_themes ?? '—'}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs font-medium uppercase tracking-wider mb-1">Themes Excluded</p>
+                  <p className="text-xl font-bold">{themeQuality.themes_excluded_from_scoring ?? '—'}</p>
+                </div>
               </div>
-              <div>
-                <p className="text-muted-foreground text-xs">Broad / classification</p>
-                <p className="font-bold text-warning">{themeQuality.broad_or_classification_themes ?? '—'}</p>
-              </div>
-              <div>
-                <p className="text-muted-foreground text-xs">Eligible for KPIs</p>
-                <p className="font-bold">{themeQuality.eligible_strategic_themes ?? '—'}</p>
-              </div>
-              <div>
-                <p className="text-muted-foreground text-xs">Excluded</p>
-                <p className="font-bold">{themeQuality.excluded_themes ?? '—'}</p>
-              </div>
-              <div>
-                <p className="text-muted-foreground text-xs">Generic demand share</p>
-                <p className="font-bold">{Number(themeQuality.generic_demand_share_pct ?? 0).toFixed(1)}%</p>
+              
+              <div className="shrink-0 pl-4 hidden md:block">
+                <ChevronRight className="w-6 h-6 text-muted-foreground/30" />
               </div>
             </CardContent>
           </Card>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+            <Card className="border-primary/20 bg-primary/5">
+              <CardContent className="p-6">
+                <h3 className="font-bold text-primary mb-4 flex items-center gap-2">
+                  <Activity className="w-5 h-5" />
+                  Strategic Implications
+                </h3>
+                <ul className="space-y-3 text-sm text-foreground/80">
+                  {themeQuality.insights?.map((insight, idx) => (
+                    <li key={idx} className="flex items-start gap-2">
+                      <span className="text-primary mt-1">•</span>
+                      <span className="leading-relaxed">{insight}</span>
+                    </li>
+                  ))}
+                </ul>
+              </CardContent>
+            </Card>
+
+            <Card className="border-border/50">
+              <CardContent className="p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="font-bold flex items-center gap-2">
+                    <Target className="w-5 h-5 text-muted-foreground" />
+                    Recommended action
+                  </h3>
+                  {themeQuality.confidence_label && (
+                    <Badge variant={themeQuality.confidence_score && themeQuality.confidence_score >= 75 ? "default" : "outline"}>
+                      {themeQuality.confidence_label}
+                    </Badge>
+                  )}
+                </div>
+                <p className="text-sm text-foreground/80 leading-relaxed">
+                  {themeQuality.recommended_action || "Ensure keyword classification is complete before relying on these themes for strategy."}
+                </p>
+              </CardContent>
+            </Card>
+          </div>
         </PageSection>
       )}
 
@@ -711,6 +813,20 @@ export default function DemandStrength() {
           </div>
         )}
       </PageSection>
+
+      <details className="mt-8 border-t border-border pt-4 cursor-pointer group">
+        <summary className="text-sm font-medium text-muted-foreground group-hover:text-foreground transition-colors outline-none list-none flex items-center gap-2">
+          <ChevronRight className="w-4 h-4 transition-transform group-open:rotate-90" />
+          Dataset scope / audit details
+        </summary>
+        <div className="mt-4 p-4 bg-muted/20 border border-border/50 rounded-lg text-xs text-muted-foreground font-mono space-y-2">
+          {sessionId && <p>active session: {sessionId}</p>}
+          <p>selected category: {categoryKey || 'global'}</p>
+          <p>dataset fingerprint: {datasetSessionId || 'none'}</p>
+          <p>keyword count: {diagnostics.total_keyword_count?.toLocaleString() || '0'}</p>
+          <p>generated timestamp: {new Date().toISOString()}</p>
+        </div>
+      </details>
     </div>
   );
 }

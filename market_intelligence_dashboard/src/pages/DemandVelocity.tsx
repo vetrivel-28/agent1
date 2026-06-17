@@ -26,7 +26,7 @@ export default function DemandVelocity() {
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['demand-velocity', categoryKey],
-    queryFn: () => api.getDemandVelocity(10, categoryScope),
+    queryFn: () => api.getDemandVelocity({ topN: 10, scope: categoryScope }),
   });
 
   if (isLoading) return <DashboardSkeleton />;

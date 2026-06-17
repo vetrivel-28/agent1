@@ -510,13 +510,75 @@ def build_theme_quality_summary(
     )
     generic_share = float(generic_seg["demand_share"]) if generic_seg else 0.0
 
+    detected_themes = len(non_other)
+    kpi_ready_ratio = len(eligible) / max(detected_themes, 1)
+    specific_ratio = len(specific) / max(detected_themes, 1)
+    non_excluded_ratio = 1 - (len(excluded) / max(detected_themes, 1))
+    inverse_generic = 1 - (generic_share / 100.0)
+
+    theme_quality_score = round(
+        40 * kpi_ready_ratio +
+        30 * specific_ratio +
+        20 * non_excluded_ratio +
+        10 * inverse_generic,
+        1
+    )
+
+    if theme_quality_score >= 75:
+        confidence_label = "Strong theme quality"
+    elif theme_quality_score >= 50:
+        confidence_label = "Moderate theme quality"
+    else:
+        confidence_label = "Weak theme quality"
+
+    insights = []
+    if generic_share >= 50:
+        insights.append(f"Most demand is generic. {generic_share:.1f}% of keyword demand comes from broad category-level searches, so buyers may still be exploring rather than searching for a specific product type.")
+    elif generic_share < 20 and detected_themes > 0:
+        insights.append(f"Demand is highly specific. Only {generic_share:.1f}% of demand is generic, indicating strong buyer-intent clusters across the market.")
+    
+    if specific_ratio >= 0.6:
+        insights.append(f"The market has usable segmentation. {len(specific)} out of {detected_themes} detected themes are specific, meaning there are clear keyword groups that can support targeted listing optimization, PPC campaigns, and product positioning.")
+    elif specific_ratio <= 0.3 and detected_themes > 0:
+        insights.append(f"Demand is less differentiated. Only {len(specific)} out of {detected_themes} themes are specific, meaning keyword segmentation needs improvement before major product decisions.")
+
+    if kpi_ready_ratio >= 0.7:
+        insights.append(f"Themes are strong enough for KPI scoring. With {len(eligible)} KPI-ready themes, the dashboard can confidently calculate demand strength.")
+    elif kpi_ready_ratio <= 0.4 and detected_themes > 0:
+        insights.append(f"Only {len(eligible)} themes are strong enough for KPI scoring. This means dashboard confidence is limited and decisions should be made carefully.")
+
+    if len(excluded) > 0:
+        insights.append(f"Do not base strategy on excluded themes. {len(excluded)} themes were excluded from scoring and should be treated as weak/noisy demand signals until more data supports them.")
+
+    if not insights and detected_themes == 0:
+        insights.append("Insufficient data. No themes were detected to generate insights.")
+
+    if theme_quality_score >= 75:
+        recommended_action = "Prioritize the KPI-ready themes for product positioning and paid campaigns. Use generic terms for visibility, but avoid relying only on broad keywords because they have weaker buyer intent."
+    elif theme_quality_score >= 50:
+        recommended_action = "Use specific themes for targeted listings and content, but avoid spending heavily on broad/generic terms. Refine dataset quality if possible."
+    else:
+        recommended_action = "Do not rely heavily on these themes for strategy. Improve dataset quality and keyword segmentation before executing major product decisions."
+
     return {
-        "total_themes_detected": len(non_other),
-        "specific_themes": len(specific),
-        "broad_or_classification_themes": len(broad),
-        "eligible_strategic_themes": len(eligible),
-        "excluded_themes": len(excluded),
+        "detected_demand_themes": detected_themes,
+        "specific_buyer_intent_themes": len(specific),
+        "broad_generic_themes": len(broad),
+        "themes_used_for_scoring": len(eligible),
+        "themes_excluded_from_scoring": len(excluded),
         "generic_demand_share_pct": round(generic_share, 2),
+        "confidence_score": theme_quality_score,
+        "confidence_label": confidence_label,
+        "insights": insights,
+        "recommended_action": recommended_action,
+        "ratios_used": {
+            "kpi_ready_ratio": round(kpi_ready_ratio, 3),
+            "specific_ratio": round(specific_ratio, 3),
+            "non_excluded_ratio": round(non_excluded_ratio, 3),
+            "inverse_generic": round(inverse_generic, 3),
+        },
+        "formula": "40% * KPI-ready ratio + 30% * specific ratio + 20% * non-excluded ratio + 10% * inverse generic",
+        "dataset_scope": "Demand classification dataset",
         "excluded_theme_details": [
             {
                 "segment": s.get("segment"),

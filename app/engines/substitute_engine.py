@@ -15,76 +15,61 @@ def run(kc_df: Optional[pd.DataFrame], blackbox_df: Optional[pd.DataFrame], top_
     logger.info("Substitute dataset-backed engine started.")
 
     if blackbox_df is None or blackbox_df.empty:
-        return {"status": "error", "summary": "Missing dataset."}
+        return {"status": "error", "message": "Missing dataset."}
 
     title_col = find_column(blackbox_df, _TITLE_CANDIDATES)
-    if not title_col: return {"status": "error", "summary": "Missing BB title column."}
+    if not title_col: return {"status": "error", "message": "Missing BB title column."}
     
     brand_col = find_column(blackbox_df, _BRAND_CANDIDATES)
+    cat_col = find_column(blackbox_df, ["Category", "Subcategory"])
+    price_col = find_column(blackbox_df, ["Price", "Current Price"])
 
     df = blackbox_df.dropna(subset=[title_col]).copy()
-    if df.empty: return {"status": "error", "summary": "No valid products."}
+    if df.empty: return {"status": "error", "message": "No valid products."}
 
-    # We will pick a few products from the scoped blackbox_df
-    # In a real scenario, we would match based on 'substitute', 'complement' keyword overlap or classification
-    
     products = []
     
-    if "substitute" == "substitute":
-        # Deterministic: grab products that don't share the exact same top terms but are in the same category
-        for idx, row in df.head(top_n).iterrows():
-            title = str(row[title_col])
-            brand = str(row[brand_col]) if brand_col and pd.notna(row[brand_col]) else "Unknown Brand"
-            products.append({
-                "title": title,
-                "reason": [
-                    {"label": "Source", "value": "Scoped BlackBox Dataset"},
-                    {"label": "Brand", "value": brand},
-                    {"label": "Confidence", "value": "High (Category Match)"},
-                    {"label": "Selection", "value": "Alternative within same category scope"}
-                ]
-            })
-    elif "substitute" == "complement":
-        # Complements: look for "accessories", "kit", "pack", or just other items
-        for idx, row in df.head(top_n).iterrows():
-            title = str(row[title_col])
-            brand = str(row[brand_col]) if brand_col and pd.notna(row[brand_col]) else "Unknown Brand"
-            products.append({
-                "title": title,
-                "reason": [
-                    {"label": "Source", "value": "Scoped BlackBox Dataset"},
-                    {"label": "Brand", "value": brand},
-                    {"label": "Confidence", "value": "Moderate (Co-occurrence)"},
-                    {"label": "Selection", "value": "Potential complementary usage within scope"}
-                ]
-            })
-    elif "substitute" == "bundle":
-        # Bundles: look for "set", "pack", "bundle"
-        mask = df[title_col].str.lower().str.contains(r'\b(set|pack|bundle|kit|multipack)\b', regex=True, na=False)
-        bundle_df = df[mask] if not df[mask].empty else df.head(top_n)
-        for idx, row in bundle_df.head(top_n).iterrows():
-            title = str(row[title_col])
-            brand = str(row[brand_col]) if brand_col and pd.notna(row[brand_col]) else "Unknown Brand"
-            products.append({
-                "title": title,
-                "reason": [
-                    {"label": "Source", "value": "Scoped BlackBox Dataset"},
-                    {"label": "Brand", "value": brand},
-                    {"label": "Confidence", "value": "High (Bundle Keyword Match)" if mask.loc[idx] else "Low"},
-                    {"label": "Selection", "value": "Bundle or kit configuration"}
-                ]
-            })
+    if cat_col and not df[cat_col].empty:
+        majority_cat = df[cat_col].mode().iloc[0] if not df[cat_col].mode().empty else None
+        
+        if majority_cat:
+            substitutes_df = df[df[cat_col] != majority_cat]
+            if substitutes_df.empty:
+                return {
+                    "status": "success",
+                    "metric_name": "Substitute Intelligence",
+                    "summary": "Insufficient Cross-Category Data for substitutes.",
+                    "results": {
+                        "substitute_products": [],
+                        "total_substitute_products": 0,
+                    },
+                    "processing_time_seconds": round(time.time() - t0, 3)
+                }
+            
+            for idx, row in substitutes_df.head(top_n).iterrows():
+                title = str(row[title_col])
+                brand = str(row[brand_col]) if brand_col and pd.notna(row[brand_col]) else "Unknown Brand"
+                price = f"${row[price_col]:.2f}" if price_col and pd.notna(row[price_col]) else "N/A"
+                cat = str(row[cat_col])
+                
+                products.append({
+                    "title": title,
+                    "brand": brand,
+                    "reason": [
+                        {"label": "Alternative Category", "value": cat},
+                        {"label": "Differentiation", "value": "Solves similar need using a different product type."},
+                        {"label": "Price", "value": price}
+                    ]
+                })
 
     if not products:
         return {
             "status": "success",
             "metric_name": "Substitute Intelligence",
-            "summary": "No validated substitute/complement/bundle products found from the active scoped dataset.",
+            "summary": "Insufficient Cross-Category Data for substitutes.",
             "results": {
                 "substitute_products": [],
                 "total_substitute_products": 0,
-                "substitute_opportunities": [],
-                "total_substitute_opportunities": 0
             },
             "processing_time_seconds": round(time.time() - t0, 3)
         }
@@ -93,12 +78,10 @@ def run(kc_df: Optional[pd.DataFrame], blackbox_df: Optional[pd.DataFrame], top_
     return {
         "status": "success",
         "metric_name": "Substitute Intelligence",
-        "summary": f"Found dataset-backed substitutes.",
+        "summary": "Found valid cross-category substitutes.",
         "results": {
             "substitute_products": products,
             "total_substitute_products": len(products),
-            "substitute_opportunities": products,
-            "total_substitute_opportunities": len(products)
         },
         "processing_time_seconds": elapsed,
     }

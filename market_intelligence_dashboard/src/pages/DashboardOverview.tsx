@@ -101,7 +101,7 @@ export default function DashboardOverview() {
 
   const { data: reportResp, isLoading, isError, error } = useQuery({
     queryKey: ['overview', datasetSessionId, categoryKey, keywordScopeKey],
-    queryFn: () => api.getMarketReport(10, categoryScope),
+    queryFn: () => api.getMarketReport({ topN: 10, scope: categoryScope }),
     retry: false,
     staleTime: 5 * 60 * 1000,
   });

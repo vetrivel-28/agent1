@@ -27,7 +27,7 @@ export default function DirectCompetitors() {
   
   const { data, isLoading, isError } = useQuery({
     queryKey: ['direct-competitors', categoryKey],
-    queryFn: () => api.getDirectCompetitors(15, 17.5, categoryScope),
+    queryFn: () => api.getDirectCompetitors({ topN: 15, priceTolerancePct: 17.5, scope: categoryScope }),
   });
 
   const results = data?.data?.results || {};

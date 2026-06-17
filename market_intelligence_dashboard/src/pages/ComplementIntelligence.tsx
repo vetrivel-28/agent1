@@ -28,7 +28,7 @@ export default function ComplementIntelligence() {
   
   const { data, isLoading, isError } = useQuery({
     queryKey: ['complement-intelligence', categoryKey],
-    queryFn: () => api.getComplementIntelligence(10, categoryScope),
+    queryFn: () => api.getComplementIntelligence({ topN: 10, scope: categoryScope }),
   });
 
   const results = data?.data?.results || {};
@@ -149,7 +149,7 @@ export default function ComplementIntelligence() {
               onClick={() => setSelectedEvidence(createComplementEvidence(item, idx + 1, { active_filters: activeFilters, filtered_row_count: filteredData.length, total_row_count: items.length }))}
             >
               <CardContent className="p-5 flex flex-col gap-3">
-                <h3 className="font-bold text-xl leading-tight text-primary">{titleText}</h3>
+                <h3 className="font-bold text-xl leading-tight text-primary line-clamp-2" title={titleText}>{titleText}</h3>
                 
                 <div className="p-4 bg-muted/30 rounded-md text-sm border border-border/50 space-y-2">
                   {Array.isArray(item.reason) ? (

@@ -263,7 +263,7 @@ def export_market_report_pdf(
     os.close(fd)
 
     if max_rows is None:
-        max_rows = MAX_TABLE_ROWS_EXECUTIVE if report_mode == REPORT_MODE_EXECUTIVE else MAX_TABLE_ROWS_DETAILED
+        max_rows = 5  # Enforced globally per requirements
     if include_appendix is None:
         include_appendix = report_mode == REPORT_MODE_DETAILED
 
@@ -300,6 +300,7 @@ def export_market_report_pdf(
     opportunities = results.get("opportunity_signals", {}).get("signals", [])
     final_verdict = results.get("final_market_verdict", {})
     dataset_diag = results.get("dataset_diagnostics", {})
+    theme_quality = results.get("classification_diagnostics", {}).get("theme_quality") or results.get("theme_quality") or demand.get("theme_quality", {})
     metadata = results.get("report_metadata", {})
 
     elems.append(Spacer(1, 80))
@@ -399,6 +400,25 @@ def export_market_report_pdf(
     else:
         elems.extend(_section_unavailable("Demand Intelligence", _missing_section_reason("Demand Intelligence", demand), styles))
     elems.append(PageBreak())
+
+    if theme_quality and theme_quality.get("detected_demand_themes", 0) > 0:
+        elems.extend(_section_header("Demand Theme Readiness", "4b"))
+        elems.extend(_table_from_kpi_pairs([
+            ("Detected Themes", theme_quality.get("detected_demand_themes", "N/A"), "Total detected demand clusters."),
+            ("Specific Intent", theme_quality.get("specific_buyer_intent_themes", "N/A"), "Highly specific buyer themes."),
+            ("Used for Scoring", theme_quality.get("themes_used_for_scoring", "N/A"), "Themes eligible for KPI use."),
+            ("Excluded", theme_quality.get("themes_excluded_from_scoring", "N/A"), "Themes excluded due to low confidence."),
+            ("Generic Share", f"{theme_quality.get('generic_demand_share_pct', 0)}%", "Percentage of generic broad demand."),
+        ], "Theme Readiness Metrics"))
+        
+        insights = theme_quality.get("insights", [])
+        if insights:
+            elems.extend(_insight_box(insights[:3], colors.HexColor("#f8fafc")))
+        
+        rec_action = theme_quality.get("recommended_action")
+        if rec_action:
+            elems.extend(_text_block([f"<b>Recommended Action:</b> {rec_action}"], styles))
+        elems.append(PageBreak())
 
     elems.extend(_section_header("Conversion Intelligence", "5"))
     if siei:

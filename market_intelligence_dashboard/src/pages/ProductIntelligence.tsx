@@ -43,7 +43,7 @@ export default function ProductIntelligence() {
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
               className={cn(
-                "flex items-center gap-2 px-4 py-2 border-b-2 font-medium text-sm transition-colors",
+                "flex items-center gap-2 px-4 py-2 border-b-2 font-medium text-sm transition-colors focus:outline-none",
                 isActive 
                   ? "border-primary text-primary" 
                   : "border-transparent text-muted-foreground hover:text-foreground hover:border-border"

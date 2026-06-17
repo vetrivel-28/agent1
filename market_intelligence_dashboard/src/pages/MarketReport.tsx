@@ -43,14 +43,14 @@ export default function MarketReport() {
 
   const results = useQueries({
     queries: [
-      { queryKey: ['market-report', categoryKey], queryFn: () => api.getMarketReport(50, categoryScope) },
-      { queryKey: ['market-concentration', categoryKey], queryFn: () => api.getMarketConcentration(50, categoryScope) },
-      { queryKey: ['demand-strength', categoryKey], queryFn: () => api.getDemandStrength(50, categoryScope) },
-      { queryKey: ['demand-velocity', categoryKey], queryFn: () => api.getDemandVelocity(50, categoryScope) },
-      { queryKey: ['whitespace-opportunities', categoryKey], queryFn: () => api.getWhitespaceOpportunities(15, categoryScope) },
-      { queryKey: ['revenue-momentum', categoryKey], queryFn: () => api.getRevenueMomentum(50, categoryScope) },
-      { queryKey: ['price-elasticity', categoryKey], queryFn: () => api.getPriceElasticity(5, categoryScope) },
-      { queryKey: ['direct-competitors', categoryKey], queryFn: () => api.getDirectCompetitors(15, categoryScope) },
+      { queryKey: ['market-report', categoryKey], queryFn: () => api.getMarketReport({ topN: 50, scope: categoryScope }) },
+      { queryKey: ['market-concentration', categoryKey], queryFn: () => api.getMarketConcentration({ topN: 50, scope: categoryScope }) },
+      { queryKey: ['demand-strength', categoryKey], queryFn: () => api.getDemandStrength({ topN: 50, scope: categoryScope }) },
+      { queryKey: ['demand-velocity', categoryKey], queryFn: () => api.getDemandVelocity({ topN: 50, scope: categoryScope }) },
+      { queryKey: ['whitespace-opportunities', categoryKey], queryFn: () => api.getWhitespaceOpportunities({ topN: 15, scope: categoryScope }) },
+      { queryKey: ['revenue-momentum', categoryKey], queryFn: () => api.getRevenueMomentum({ topN: 50, scope: categoryScope }) },
+      { queryKey: ['price-elasticity', categoryKey], queryFn: () => api.getPriceElasticity({ nBuckets: 5, scope: categoryScope }) },
+      { queryKey: ['direct-competitors', categoryKey], queryFn: () => api.getDirectCompetitors({ topN: 15, scope: categoryScope }) },
     ]
   });
 
@@ -140,7 +140,7 @@ export default function MarketReport() {
 
   const handleDownloadPdf = async () => {
     try {
-      const blob = await api.downloadMarketReportPdf(50, 'executive', true);
+      const blob = await api.downloadMarketReportPdf({ topN: 50, reportMode: 'executive', includeCharts: true, scope: categoryScope });
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;

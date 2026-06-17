@@ -421,7 +421,7 @@ export default function PriceElasticity() {
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ['price-intelligence', categoryKey],
-    queryFn: () => api.getPriceElasticity(6, categoryScope), // We mock project_id 6
+    queryFn: () => api.getPriceElasticity({ nBuckets: 6, scope: categoryScope }), // We mock project_id 6
   });
 
   const engineResponse = useMemo(() => {

@@ -311,7 +311,7 @@ function IntentEfficiencyInner() {
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ['intent-efficiency', datasetSessionId, categoryKey, keywordScopeKey],
-    queryFn: () => api.getSearchIntentEfficiency(300, categoryScope),
+    queryFn: () => api.getSearchIntentEfficiency({ topN: 300, scope: categoryScope }),
     retry: false,
     refetchOnWindowFocus: false,
     enabled: !!statusData,

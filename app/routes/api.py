@@ -17,15 +17,16 @@ from fastapi import BackgroundTasks
 
 class StandardResponse(BaseModel):
     success: bool
-    message: str
     data: Any
+    error: Optional[str] = None
+    meta: Optional[dict] = {}
 
 class CategoryScopePayload(BaseModel):
-    mode: str = "all"
-    selected_categories: list[str] = []
-    category_column: str = ""
-    scope_key: str = "all"
-    keyword_scope_key: str = "all"
+    mode: Optional[str] = "all"
+    selected_categories: Optional[list[str]] = []
+    category_column: Optional[str] = ""
+    scope_key: Optional[str] = "all"
+    keyword_scope_key: Optional[str] = "all"
 
 
 def _scope_payload_dict(scope: CategoryScopePayload) -> dict:
@@ -118,11 +119,15 @@ def sanitize_payload(obj):
 def format_response(result: dict) -> dict:
     status = result.get('status', 'success')
     success = status != 'error'
-    message = result.get('message') or result.get('summary') or 'Success'
+    message = result.get('message') or result.get('summary') or None
+    
+    error = message if not success else None
+    
     return {
         'success': success,
-        'message': message,
-        'data': sanitize_payload(result)
+        'data': sanitize_payload(result),
+        'error': error,
+        'meta': {}
     }
 
 logger = get_logger("routes")
@@ -1168,7 +1173,7 @@ def _scoped_engine(name: str, cache_key: str, runner, *args, **kwargs) -> dict:
 
 
 def _build_market_report(scope: CategoryScopePayload, top_n: int = 10):
-    """Build report from category-scoped datasets and scoped engine cache."""
+    """Build report from category-scoped datasets and scoped engine cache with graceful degradation."""
     from app.utils.scope_resolver import attach_scope_to_result
 
     logger.info(f"[MARKET REPORT] Building scoped market report (top_n={top_n})")
@@ -1196,79 +1201,73 @@ def _build_market_report(scope: CategoryScopePayload, top_n: int = 10):
     )
 
     engines: dict = {}
+    skipped_reasons: dict = {}
+    sections_generated = 0
+    sections_skipped = 0
+
+    def _safe_engine(key: str, name: str, cache_key: str, runner, *args, **kwargs):
+        nonlocal sections_generated, sections_skipped
+        try:
+            cached = analysis_cache.get_engine(name, cache_key)
+            if cached:
+                engines[key] = cached
+                if cached.get("status") == "error":
+                    skipped_reasons[key] = cached.get("message", "Cached error")
+                    sections_skipped += 1
+                else:
+                    sections_generated += 1
+                return
+            result = runner(*args, **kwargs)
+            if result.get("status") == "error":
+                engines[key] = result
+                skipped_reasons[key] = result.get("message", "Engine reported error")
+                sections_skipped += 1
+            else:
+                analysis_cache.set_engine(name, result, cache_key)
+                engines[key] = result
+                sections_generated += 1
+        except Exception as e:
+            logger.exception(f"[MARKET REPORT] Engine {key} failed: {e}")
+            engines[key] = {"status": "error", "message": f"Exception: {str(e)}"}
+            skipped_reasons[key] = f"Exception: {str(e)}"
+            sections_skipped += 1
+
     if not is_empty_dataframe(magnet_df) or not is_empty_dataframe(blackbox_df):
-        demand_res = _scoped_engine(
-            "demand", cache_key,
-            demand_engine.run,
-            magnet_df, blackbox_df,
-            top_n=top_n, keyword_classification_df=kc_df,
-        )
-        attach_scope_to_result(demand_res, scope_meta, kw_meta)
-        engines["demand"] = demand_res
+        _safe_engine("demand", "demand", cache_key, demand_engine.run, magnet_df, blackbox_df, top_n=top_n, keyword_classification_df=kc_df)
+        if engines.get("demand", {}).get("status") != "error":
+            attach_scope_to_result(engines["demand"], scope_meta, kw_meta)
 
     if not is_empty_dataframe(blackbox_df):
-        engines["sales_momentum"] = _scoped_engine(
-            "sales_momentum", cache_key, sales_momentum_engine.run, blackbox_df, top_n,
-        )
-        engines["revenue_momentum"] = _scoped_engine(
-            "revenue_momentum", cache_key, revenue_momentum_engine.run, blackbox_df, top_n,
-        )
-        engines["bsr_efficiency"] = _scoped_engine(
-            "bsr_efficiency", cache_key, bsr_efficiency_engine.run, blackbox_df, top_n,
-        )
-        engines["hhi"] = _scoped_engine(
-            "hhi", cache_key, hhi_engine.run, blackbox_df, top_n,
-        )
-        engines["price_elasticity"] = _scoped_engine(
-            "price_elasticity", cache_key, price_elasticity_engine.run, None, blackbox_df,
-        )
-        engines["direct_competitors"] = _scoped_engine(
-            "direct_competitors", cache_key,
-            direct_competitor_engine.run, None, blackbox_df, top_n,
-        )
+        _safe_engine("sales_momentum", "sales_momentum", cache_key, sales_momentum_engine.run, blackbox_df, top_n)
+        _safe_engine("revenue_momentum", "revenue_momentum", cache_key, revenue_momentum_engine.run, blackbox_df, top_n)
+        _safe_engine("bsr_efficiency", "bsr_efficiency", cache_key, bsr_efficiency_engine.run, blackbox_df, top_n)
+        _safe_engine("hhi", "hhi", cache_key, hhi_engine.run, blackbox_df, top_n)
+        _safe_engine("price_elasticity", "price_elasticity", cache_key, price_elasticity_engine.run, None, blackbox_df)
+        _safe_engine("direct_competitors", "direct_competitors", cache_key, direct_competitor_engine.run, None, blackbox_df, top_n)
 
     if not is_empty_dataframe(magnet_df):
-        siei_res = _scoped_engine(
-            "siei", cache_key, siei_engine.run,
-            magnet_df, keyword_classification_df=kc_df, top_n=top_n,
-        )
-        attach_scope_to_result(siei_res, scope_meta, kw_meta)
-        engines["siei"] = siei_res
-        ws_res = _scoped_engine(
-            "whitespace", cache_key,
-            whitespace_engine.run,
-            magnet_df,
-            blackbox_df if not is_empty_dataframe(blackbox_df) else None,
-            top_n,
-        )
-        attach_scope_to_result(ws_res, scope_meta, kw_meta)
-        engines["whitespace"] = ws_res
-        engines["demand_velocity"] = _scoped_engine(
-            "demand_velocity", cache_key, demand_velocity_engine.run,
-            magnet_df, blackbox_df, top_n=top_n,
-        )
+        _safe_engine("siei", "siei", cache_key, siei_engine.run, magnet_df, keyword_classification_df=kc_df, top_n=top_n)
+        if engines.get("siei", {}).get("status") != "error":
+            attach_scope_to_result(engines["siei"], scope_meta, kw_meta)
+            
+        _safe_engine("whitespace", "whitespace", cache_key, whitespace_engine.run, magnet_df, blackbox_df if not is_empty_dataframe(blackbox_df) else None, top_n)
+        if engines.get("whitespace", {}).get("status") != "error":
+            attach_scope_to_result(engines["whitespace"], scope_meta, kw_meta)
+            
+        _safe_engine("demand_velocity", "demand_velocity", cache_key, demand_velocity_engine.run, magnet_df, blackbox_df, top_n=top_n)
 
     if not is_empty_dataframe(kc_df) and not is_empty_dataframe(blackbox_df):
-        engines["substitute"] = _scoped_engine(
-            "substitute", cache_key, substitute_engine.run, kc_df, blackbox_df, top_n,
-        )
-        engines["complement"] = _scoped_engine(
-            "complement", cache_key, complement_engine.run, kc_df, blackbox_df, top_n,
-        )
-        engines["bundle"] = _scoped_engine(
-            "bundle", cache_key, bundle_opportunity_engine.run, kc_df, blackbox_df, top_n,
-        )
+        _safe_engine("substitute", "substitute", cache_key, substitute_engine.run, kc_df, blackbox_df, top_n)
+        _safe_engine("complement", "complement", cache_key, complement_engine.run, kc_df, blackbox_df, top_n)
+        _safe_engine("bundle", "bundle", cache_key, bundle_opportunity_engine.run, kc_df, blackbox_df, top_n)
 
     demand_score = (
         engines.get("demand", {}).get("results", {}).get("market_demand_index")
         or engines.get("demand", {}).get("results", {}).get("overall_demand_score")
     )
-    finance_res = _scoped_engine(
-        "finance", cache_key,
-        run_finance_intelligence, magnet_df, blackbox_df, demand_score=demand_score,
-    )
-    attach_scope_to_result(finance_res, scope_meta, kw_meta)
-    engines["finance"] = finance_res
+    _safe_engine("finance", "finance", cache_key, run_finance_intelligence, magnet_df, blackbox_df, demand_score=demand_score)
+    if engines.get("finance", {}).get("status") != "error":
+        attach_scope_to_result(engines["finance"], scope_meta, kw_meta)
 
     def _eng(key: str):
         return engines.get(key) or {}
@@ -1300,15 +1299,25 @@ def _build_market_report(scope: CategoryScopePayload, top_n: int = 10):
             report["results"]["engine_outputs"] = engines
             report["results"]["scope"] = scope_meta
             report["results"]["keyword_scope"] = kw_meta
+            report["results"]["sections_generated"] = sections_generated
+            report["results"]["sections_skipped"] = sections_skipped
+            report["results"]["skipped_reasons"] = skipped_reasons
         logger.info("[MARKET REPORT] Report generation completed successfully")
         return format_response(report)
     except Exception as e:
-        logger.exception(f"[MARKET REPORT] Report generation failed: {str(e)}")
-        from fastapi import HTTPException
-        raise HTTPException(
-            status_code=500,
-            detail=f"Market report generation failed: {str(e)}",
-        )
+        logger.exception(f"[MARKET REPORT] Report aggregation failed: {str(e)}")
+        # Graceful fallback: return partial data and error status
+        partial_report = {
+            "status": "error",
+            "message": f"Market report aggregation failed: {str(e)}",
+            "results": {
+                "sections_generated": sections_generated,
+                "sections_skipped": sections_skipped,
+                "skipped_reasons": skipped_reasons,
+                "engine_outputs": engines
+            }
+        }
+        return format_response(partial_report)
 
 
 @router.get(
@@ -1451,21 +1460,25 @@ def overview_verification(top_n: int = 10):
     })
 
 
-@router.get(
+@router.post(
     "/market-report/pdf",
     summary="Download Market Report PDF",
     description="Generates a deterministic PDF report from current engine outputs.",
 )
-def market_report_pdf(top_n: int = 10, report_mode: str = "executive", include_charts: bool = True):
+def market_report_pdf(scope: CategoryScopePayload, top_n: int = 10, report_mode: str = "executive", include_charts: bool = True):
     logger.info(f"Market Report PDF requested (top_n={top_n}, report_mode={report_mode}, include_charts={include_charts})")
-    from app.utils.scope_resolver import scope_from_registry
-    scope_dict = scope_from_registry(registry.get_category_scope())
-    report = _build_market_report(CategoryScopePayload(**scope_dict), top_n=top_n)
-    if not report.get("success"):
+    
+    report = _build_market_report(scope, top_n=top_n)
+    
+    # If the report generation failed significantly (or returned an error object directly)
+    if isinstance(report, dict) and not report.get("success"):
         return report
-    if not report.get("data") or not report["data"].get("results"):
-        return report
-    pdf_path = export_market_report_pdf(report["data"], report_mode=report_mode, include_charts=include_charts)
+        
+    data = report.get("data", {}) if isinstance(report, dict) else report
+    if not data or not data.get("results"):
+        return format_response({"status": "error", "message": "Failed to generate valid report data for PDF."})
+        
+    pdf_path = export_market_report_pdf(data, report_mode=report_mode, include_charts=include_charts)
     return FileResponse(
         path=pdf_path,
         media_type="application/pdf",

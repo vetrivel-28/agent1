@@ -403,7 +403,7 @@ export default function RevenueMomentum() {
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ['revenue-momentum', categoryKey],
-    queryFn: () => api.getRevenueMomentum(500, categoryScope),
+    queryFn: () => api.getRevenueMomentum({ topN: 500, scope: categoryScope }),
   });
 
   const rm: RevenueMomentumPayload = data?.data?.results?.revenue_momentum || {

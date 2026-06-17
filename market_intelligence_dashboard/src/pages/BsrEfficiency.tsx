@@ -216,7 +216,7 @@ export default function BsrEfficiency() {
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ['bsr-efficiency', categoryKey],
-    queryFn: () => api.getBsrEfficiency(50, categoryScope),
+    queryFn: () => api.getBsrEfficiency({ topN: 50, scope: categoryScope }),
   });
 
   if (isLoading) {

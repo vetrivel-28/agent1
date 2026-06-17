@@ -38,6 +38,7 @@ export function getEngineErrorMessage(response: unknown, fallback = 'Analysis co
     return `Missing required columns: ${missing.join(', ')}`;
   }
   
+  if (typeof res.error === 'string' && res.error) return res.error;
   if (typeof res.message === 'string' && res.message) return res.message;
   if (typeof d.summary === 'string' && d.summary) return d.summary;
   if (typeof d.message === 'string' && d.message) return d.message;

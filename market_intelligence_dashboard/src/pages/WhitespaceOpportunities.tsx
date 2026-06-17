@@ -197,7 +197,7 @@ export default function WhitespaceOpportunities() {
   const [selectedEvidence, setSelectedEvidence] = useState<EvidenceData | null>(null);
   const { data: whitespaceData, isLoading, isError } = useQuery({
     queryKey: ['whitespace-opportunities', datasetSessionId, categoryKey, keywordScopeKey],
-    queryFn: () => api.getWhitespaceOpportunities(20, categoryScope),
+    queryFn: () => api.getWhitespaceOpportunities({ topN: 20, scope: categoryScope }),
   });
 
   const {

@@ -914,44 +914,9 @@ export function ExecutiveNarrativeSection({ r }: { r: SimResults }) {
                 // Population from segments array if available
                 const pop = typeof msg.population === 'number' ? msg.population : null;
 
-                // Derive barrier and CTA from angle heuristically so every card is useful
-                const barrierMap: Record<string, string> = {
-                  'Quality authority':    'Trust Barrier',
-                  'Effortless solution':  'Product Complexity',
-                  'Best value':           'Price Resistance',
-                  'Trending choice':      'Habit Lock-In',
-                  'Safe & proven':        'Trust Barrier',
-                  'Responsible choice':   'Education Required',
-                  'Health-first product': 'Education Required',
-                  'Premium experience':   'Price Resistance',
-                  'Value & quality':      'Price Resistance',
-                };
-                const ctaMap: Record<string, string> = {
-                  'Quality authority':    '"See why it outperforms the alternatives"',
-                  'Effortless solution':  '"Add to cart and try it today"',
-                  'Best value':           '"Compare long-term cost per use"',
-                  'Trending choice':      '"Join thousands of buyers this week"',
-                  'Safe & proven':        '"Read verified reviews"',
-                  'Responsible choice':   '"Learn about our sustainable sourcing"',
-                  'Health-first product': '"See the full ingredients breakdown"',
-                  'Premium experience':   '"Explore the premium range"',
-                  'Value & quality':      '"Compare features and value"',
-                };
-                const proofMap: Record<string, string> = {
-                  'Quality authority':    'Comparison chart, test results, certifications',
-                  'Effortless solution':  'Fast delivery badge, one-click checkout proof',
-                  'Best value':           'Cost-per-use calculator, quantity per unit',
-                  'Trending choice':      'Bestseller rank, review count, social proof',
-                  'Safe & proven':        'Star rating, verified buyer quotes, return policy',
-                  'Responsible choice':   'Eco certification, sourcing transparency',
-                  'Health-first product': 'Ingredient list, third-party testing results',
-                  'Premium experience':   'Material/ingredient quality cues, brand story',
-                  'Value & quality':      'Feature comparison table, "best in class" claim',
-                };
-
-                const primaryBarrier = barrierMap[primaryAngle] || 'Resistance Barrier';
-                const ctaSuggestion  = ctaMap[primaryAngle]  || '"Learn more and buy today"';
-                const proofPoint     = proofMap[primaryAngle] || 'Social proof and reviews';
+                const primaryBarrier = String(msg.primary_barrier || msg.resistance_barrier || 'Resistance Barrier');
+                const ctaSuggestion  = String(msg.cta_suggestion || msg.call_to_action || '"Learn more and buy today"');
+                const proofPoint     = String(msg.proof_point || msg.proof_point_needed || 'Social proof and reviews');
 
                 return (
                   <div key={i} className="p-4 border border-border/40 rounded-xl text-xs space-y-2">

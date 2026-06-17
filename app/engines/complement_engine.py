@@ -15,90 +15,58 @@ def run(kc_df: Optional[pd.DataFrame], blackbox_df: Optional[pd.DataFrame], top_
     logger.info("Complement dataset-backed engine started.")
 
     if blackbox_df is None or blackbox_df.empty:
-        return {"status": "error", "summary": "Missing dataset."}
+        return {"status": "error", "message": "Missing dataset."}
 
     title_col = find_column(blackbox_df, _TITLE_CANDIDATES)
-    if not title_col: return {"status": "error", "summary": "Missing BB title column."}
+    if not title_col: return {"status": "error", "message": "Missing BB title column."}
     
     brand_col = find_column(blackbox_df, _BRAND_CANDIDATES)
+    price_col = find_column(blackbox_df, ["Price", "Current Price"])
 
     df = blackbox_df.dropna(subset=[title_col]).copy()
-    if df.empty: return {"status": "error", "summary": "No valid products."}
+    if df.empty: return {"status": "error", "message": "No valid products."}
 
-    # We will pick a few products from the scoped blackbox_df
-    # In a real scenario, we would match based on 'substitute', 'complement' keyword overlap or classification
+    # Complements: look for accessories, parts, refills, etc.
+    mask = df[title_col].str.lower().str.contains(r'\b(accessory|case|charger|mount|refill|kit|cable|cover|replacement|part)\b', regex=True, na=False)
+    complement_df = df[mask]
     
     products = []
     
-    if "complement" == "substitute":
-        # Deterministic: grab products that don't share the exact same top terms but are in the same category
-        for idx, row in df.head(top_n).iterrows():
-            title = str(row[title_col])
-            brand = str(row[brand_col]) if brand_col and pd.notna(row[brand_col]) else "Unknown Brand"
-            products.append({
-                "title": title,
-                "reason": [
-                    {"label": "Source", "value": "Scoped BlackBox Dataset"},
-                    {"label": "Brand", "value": brand},
-                    {"label": "Confidence", "value": "High (Category Match)"},
-                    {"label": "Selection", "value": "Alternative within same category scope"}
-                ]
-            })
-    elif "complement" == "complement":
-        # Complements: look for "accessories", "kit", "pack", or just other items
-        for idx, row in df.head(top_n).iterrows():
-            title = str(row[title_col])
-            brand = str(row[brand_col]) if brand_col and pd.notna(row[brand_col]) else "Unknown Brand"
-            products.append({
-                "title": title,
-                "reason": [
-                    {"label": "Source", "value": "Scoped BlackBox Dataset"},
-                    {"label": "Brand", "value": brand},
-                    {"label": "Confidence", "value": "Moderate (Co-occurrence)"},
-                    {"label": "Selection", "value": "Potential complementary usage within scope"}
-                ]
-            })
-    elif "complement" == "bundle":
-        # Bundles: look for "set", "pack", "bundle"
-        mask = df[title_col].str.lower().str.contains(r'\b(set|pack|bundle|kit|multipack)\b', regex=True, na=False)
-        bundle_df = df[mask] if not df[mask].empty else df.head(top_n)
-        for idx, row in bundle_df.head(top_n).iterrows():
-            title = str(row[title_col])
-            brand = str(row[brand_col]) if brand_col and pd.notna(row[brand_col]) else "Unknown Brand"
-            products.append({
-                "title": title,
-                "reason": [
-                    {"label": "Source", "value": "Scoped BlackBox Dataset"},
-                    {"label": "Brand", "value": brand},
-                    {"label": "Confidence", "value": "High (Bundle Keyword Match)" if mask.loc[idx] else "Low"},
-                    {"label": "Selection", "value": "Bundle or kit configuration"}
-                ]
-            })
-
-    if not products:
+    if complement_df.empty:
         return {
             "status": "success",
             "metric_name": "Complement Intelligence",
-            "summary": "No validated substitute/complement/bundle products found from the active scoped dataset.",
+            "summary": "Insufficient data to confidently identify true complementary products.",
             "results": {
                 "complement_products": [],
                 "total_complement_products": 0,
-                "complement_opportunities": [],
-                "total_complement_opportunities": 0
             },
             "processing_time_seconds": round(time.time() - t0, 3)
         }
+        
+    for idx, row in complement_df.head(top_n).iterrows():
+        title = str(row[title_col])
+        brand = str(row[brand_col]) if brand_col and pd.notna(row[brand_col]) else "Unknown Brand"
+        price = f"${row[price_col]:.2f}" if price_col and pd.notna(row[price_col]) else "N/A"
+        
+        products.append({
+            "title": title,
+            "brand": brand,
+            "reason": [
+                {"label": "Complement Factor", "value": "Accessory or add-on detected."},
+                {"label": "Role", "value": "Enhances or completes the primary product experience."},
+                {"label": "Price", "value": price}
+            ]
+        })
 
     elapsed = round(time.time() - t0, 3)
     return {
         "status": "success",
         "metric_name": "Complement Intelligence",
-        "summary": f"Found dataset-backed complements.",
+        "summary": "Found valid complementary products (accessories/add-ons).",
         "results": {
             "complement_products": products,
             "total_complement_products": len(products),
-            "complement_opportunities": products,
-            "total_complement_opportunities": len(products)
         },
         "processing_time_seconds": elapsed,
     }
