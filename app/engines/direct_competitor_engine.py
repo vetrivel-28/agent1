@@ -24,6 +24,22 @@ _BRAND_CANDIDATES = ["Brand", "brand"]
 _PRICE_CANDIDATES = ["Price", "price", "List Price", "list price"]
 _CATEGORY_CANDIDATES = ["Category", "category"]
 
+def _get_core_noun(df: pd.DataFrame, cat_col: str, title_col: str) -> str:
+    """Heuristic to find the core product noun."""
+    if cat_col and not df[cat_col].empty:
+        mode = df[cat_col].mode()
+        if not mode.empty:
+            cat = str(mode.iloc[0]).split(">")[-1].strip()
+            if cat.lower() not in ["home & kitchen", "kitchen", "home", "other"]:
+                return cat
+    titles = df[title_col].dropna().astype(str).str.lower()
+    if titles.empty: return "Product"
+    words = pd.Series(" ".join(titles).split()).value_counts()
+    for word in words.index:
+        if len(word) > 3 and word not in ["with", "for", "pack", "set", "black", "white", "size"]:
+            return word.capitalize()
+    return "Product"
+
 def _string_similarity(s1: str, s2: str) -> float:
     if not s1 or not s2: return 0.0
     return SequenceMatcher(None, s1.lower(), s2.lower()).ratio() * 100.0
@@ -81,6 +97,8 @@ def run(
     refs = df_valid.head(1).to_dict('records')
     pool = df_valid.to_dict('records')
     
+    core_noun = _get_core_noun(df_valid, category_col, title_col).lower()
+    
     metric_name = "Similar Products"
 
     for ref in refs:
@@ -104,16 +122,13 @@ def run(
             
             cand_class = classify_product(cand_title)
 
-            # Rule: Same normalized product type
-            if cand_class["product_type"] != ref_class["product_type"]:
-                continue
-                
             # Rule: Radically different validation layer
             if is_radically_different(ref_class, cand_class):
                 continue
 
-            # Rule: Same category required
-            if cand_cat.lower() != ref_cat.lower():
+            # Core noun validation: if it doesn't contain the core noun AND product type mismatches, it's NOT direct
+            has_core_noun = core_noun in cand_title.lower()
+            if not has_core_noun and cand_class["product_type"] != ref_class["product_type"]:
                 continue
 
             # Deduplication rules: Exclude same ASIN, identical titles

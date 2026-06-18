@@ -60,6 +60,148 @@ def format_percentage(val: float) -> str:
         return f"{val:.3f}%"
     return f"{val:.1f}%"
 
+def call_llm(prompt: str) -> str:
+    """Synchronous call to OpenAI LLM if configured, else returns empty string."""
+    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        return ""
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=api_key)
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=200
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        return ""
+import pandas as pd
+
+def infer_core_category(df: pd.DataFrame, cat_col: str, title_col: str) -> str:
+    """Heuristic to find the core product noun from a dataframe."""
+    if cat_col and not df[cat_col].empty:
+        mode = df[cat_col].mode()
+        if not mode.empty:
+            cat = str(mode.iloc[0]).split(">")[-1].strip()
+            if cat.lower() not in ["home & kitchen", "kitchen", "home", "other"]:
+                return cat
+    # Fallback to most common word in titles
+    titles = df[title_col].dropna().astype(str).str.lower()
+    if titles.empty:
+        return "Product"
+    # Simple heuristic
+    words = pd.Series(" ".join(titles).split()).value_counts()
+    for word in words.index:
+        if len(word) > 3 and word not in ["with", "for", "pack", "set", "black", "white", "size"]:
+            return word.capitalize()
+    return "Product"
+
+
+def clean_product_title(raw_title: str) -> str:
+    """Cleans keyword-stuffed Amazon product titles into readable display names."""
+    if not raw_title or pd.isna(raw_title) or str(raw_title).lower() in ("nan", "none"):
+        return "Unknown Product"
+    title = str(raw_title)
+    
+    # Simple heuristic: take the first part before a comma, dash, or pipe
+    for sep in [',', '|', ' - ', ' – ']:
+        if sep in title:
+            title = title.split(sep)[0]
+    
+    # Limit word count (Amazon titles have lots of keywords, the core item is usually first 4-6 words)
+    words = title.split()
+    if len(words) > 8:
+        title = " ".join(words[:8])
+        
+    # Clean trailing characters or prepositions
+    title = title.strip(" -|,:;")
+    return title
+
+def inferCategoryContext(datasets: Dict[str, Any]) -> Dict[str, Any]:
+    df = datasets.get("blackbox", pd.DataFrame())
+    cat_col = None
+    title_col = None
+    for c in df.columns:
+        if "category" in c.lower() or "class" in c.lower():
+            cat_col = c
+        if "title" in c.lower() or "name" in c.lower():
+            title_col = c
+            
+    main_category = "Product"
+    if cat_col and not df[cat_col].empty:
+        mode = df[cat_col].mode()
+        if not mode.empty:
+            cat = str(mode.iloc[0]).split(">")[-1].strip()
+            if cat.lower() not in ["home & kitchen", "kitchen", "home", "other"]:
+                main_category = cat
+
+    core_product_nouns = []
+    if title_col and not df[title_col].empty:
+        titles = df[title_col].dropna().astype(str).str.lower()
+        if not titles.empty:
+            words = pd.Series(" ".join(titles).split()).value_counts()
+            for word in words.index:
+                if len(word) > 3 and word not in ["with", "for", "pack", "set", "black", "white", "size"]:
+                    core_product_nouns.append(word.capitalize())
+                    if len(core_product_nouns) >= 3:
+                        break
+                        
+    if not core_product_nouns:
+        core_product_nouns = [main_category]
+
+    return {
+        "main_category": main_category,
+        "core_product_nouns": core_product_nouns,
+        "synonyms": [],
+        "variant_terms": ["pack", "set", "size", "color"],
+        "use_cases": [],
+        "occasion_terms": [],
+        "audience_terms": [],
+        "category_confidence": 0.8 if main_category != "Product" else 0.4,
+        "evidence_used": ["title_frequency", "category_column_mode"]
+    }
+
+def classifyProductRelationship(candidate: str, categoryContext: Dict[str, Any], datasetSignals: Dict[str, Any] = None) -> str:
+    candidate_lower = candidate.lower()
+    main_noun = categoryContext.get("main_category", "").lower()
+    core_nouns = [n.lower() for n in categoryContext.get("core_product_nouns", [])]
+    
+    if main_noun in candidate_lower or any(cn in candidate_lower for cn in core_nouns):
+        if "kit" in candidate_lower or "bundle" in candidate_lower or "set" in candidate_lower or "+" in candidate_lower:
+            return "PRODUCT_OPPORTUNITY"
+        return "DIRECT_PRODUCT"
+        
+    if "alternative" in candidate_lower or "substitute" in candidate_lower or "different" in candidate_lower:
+        return "SUBSTITUTE_PRODUCT"
+    if "accessory" in candidate_lower or "attachment" in candidate_lower or "care" in candidate_lower:
+        return "COMPLEMENT_PRODUCT"
+        
+    return "UNKNOWN"
+
+def get_product_relations(core_noun: str, relation_type: str) -> list[str]:
+    """
+    Uses LLM to generate conceptual suggestions for substitutes, complements, or opportunities.
+    Returns a list of suggested product strings.
+    """
+    if relation_type == "substitute":
+        prompt = f"List 3 substitute products for '{core_noun}'. A substitute must share the same underlying customer need or use case but be a DIFFERENT product type (e.g. for Tablecloth, a substitute is Placemats or Table runner). Return ONLY a comma-separated list."
+    elif relation_type == "complement":
+        prompt = f"List 3 complement products for '{core_noun}'. A complement is an accessory or item frequently used TOGETHER with the main product (e.g. for Tablecloth, a complement is Napkins or Centerpiece decor). Return ONLY a comma-separated list."
+    else:
+        prompt = f"List 3 bundle or adjacent product opportunities for '{core_noun}'. An opportunity is a practical bundle or closely related adjacent product (e.g. for Tablecloth, an opportunity is Tablecloth + Napkin Set). Return ONLY a comma-separated list."
+        
+    res = call_llm(prompt)
+    if not res:
+        # Dynamic fallbacks based on core_noun
+        if relation_type == "substitute": return [f"Alternative {core_noun} Type", f"Related Substitute for {core_noun}", f"Different Style of {core_noun}"]
+        if relation_type == "complement": return [f"{core_noun} Accessory", f"Attachment for {core_noun}", f"{core_noun} Care Kit"]
+        return [f"{core_noun} Starter Kit", f"{core_noun} + Accessory Bundle", f"Premium {core_noun} Set"]
+    
+    return [s.strip() for s in res.split(",") if s.strip()]
+
+
 def generate_quadrant_insight(inputs: Dict[str, Any]) -> Dict[str, Any]:
     """
     Generates a data analyst insight using quadrant data based on 4 specific categories.

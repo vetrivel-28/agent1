@@ -427,14 +427,24 @@ class SimulationInsightEngine:
             motives = s.get("motivations") or []
             primary_motive = motives[0] if motives else "quality and value"
             dominant_trait = next(iter((s.get("dominant_traits") or {})), "quality_focused")
-            angle = self._message_angle(dominant_trait, s.get("channel", "Amazon"))
+            
+            if "seen_angles" not in locals():
+                seen_angles = set()
+                
+            angle = self.buildSegmentMessaging(s, demand, {"themes": themes, "channel": s.get("channel", "Amazon")}, seen_angles)
+            
             segment_messages.append({
                 "segment":            s["name"],
                 "population":         s.get("population", 0),
                 "primary_angle":      angle["angle"],
                 "emotional_trigger":  angle["trigger"],
+                "primary_barrier":    angle["primary_barrier"],
                 "positioning":        angle["positioning"],
                 "channel_tactic":     angle["channel_tactic"],
+                "proof_point":        angle["proof_point"],
+                "cta_suggestion":     angle["cta_suggestion"],
+                "action_items":       angle["action_items"],
+                "improvement_scenario": angle["improvement_scenario"],
             })
 
         evidence = [
@@ -794,16 +804,122 @@ class SimulationInsightEngine:
         return {"category": category, "title": title, "summary": "Insufficient data.", "evidence_signals": [], "confidence_score": 0.0}
 
     @staticmethod
-    def _message_angle(dominant_trait: str, channel: str) -> Dict[str, str]:
-        map_: Dict[str, Dict[str, str]] = {
-            "quality_focused":          {"angle": "Quality authority",     "trigger": "Trust & excellence",     "positioning": "Category quality leader",          "channel_tactic": "Detailed comparison content"},
-            "convenience_focused":      {"angle": "Effortless solution",   "trigger": "Time savings",            "positioning": "Easiest path to outcome",           "channel_tactic": "One-click Amazon ads"},
-            "price_focused":            {"angle": "Best value",            "trigger": "Smart buying",            "positioning": "Best ROI in category",              "channel_tactic": "Discount promotions"},
-            "trend_focused":            {"angle": "Trending choice",       "trigger": "Social proof",            "positioning": "What everyone is buying now",        "channel_tactic": "Influencer social commerce"},
-            "risk_aversion":            {"angle": "Safe & proven",         "trigger": "Reassurance",             "positioning": "Most trusted in category",           "channel_tactic": "Review-forward listing"},
-            "sustainability_conscious": {"angle": "Responsible choice",    "trigger": "Values alignment",        "positioning": "Eco-certified market leader",        "channel_tactic": "Brand story content"},
-            "health_conscious":         {"angle": "Health-first product",  "trigger": "Wellbeing",               "positioning": "Health-optimised alternative",       "channel_tactic": "Educational content ads"},
-            "premium_willingness":      {"angle": "Premium experience",    "trigger": "Status & quality",        "positioning": "The premium standard",               "channel_tactic": "Lifestyle imagery"},
+    def buildSegmentMessaging(segment: Dict[str, Any], demand: Dict[str, Any], categoryContext: Dict[str, Any], seen_combinations: set = None) -> Dict[str, Any]:
+        if seen_combinations is None:
+            seen_combinations = set()
+            
+        segment_name = segment.get("name", "Target Segment")
+        intent = segment.get("intent", 50.0)
+        barrier = segment.get("primary_barrier", "purchase friction")
+        if not barrier:
+            barrier = "purchase friction"
+        themes = categoryContext.get("themes", [])
+        theme_context = themes[0] if themes else "the core category"
+        channel = categoryContext.get("channel", "Amazon")
+        dominant_trait = next(iter((segment.get("dominant_traits") or {})), "quality_focused")
+        
+        name_lower = segment_name.lower()
+        
+        is_premium = "premium" in name_lower or "quality" in name_lower or dominant_trait in ("quality_focused", "premium_willingness")
+        is_budget = "budget" in name_lower or "deal" in name_lower or "value" in name_lower or dominant_trait in ("budget_sensitivity", "price_focused")
+        is_convenience = "convenience" in name_lower or "impulse" in name_lower or dominant_trait == "convenience_focused"
+        is_researcher = "researcher" in name_lower or "expert" in name_lower or "risk-averse" in name_lower or dominant_trait in ("risk_aversion", "switching_cost")
+        is_heavy_user = "heavy" in name_lower or "loyal" in name_lower or dominant_trait == "brand_loyalty"
+        
+        if is_researcher or (is_premium and not is_budget):
+            arch_data = {
+                "base": "Quality & comparison authority",
+                "trigger": "Technical superiority and validation",
+                "positioning": f"Position as the definitive {theme_context.lower()} benchmark",
+                "channel_tactic": f"Use deep-dive comparison content via {channel}",
+                "proof_point": f"Highlight third-party expert reviews to dismantle '{barrier.lower()}' concerns",
+                "cta_suggestion": "Compare specifications & upgrade",
+                "actions": [
+                    f"Deploy specification-heavy product listings targeting {segment_name}.",
+                    f"Create comparison charts directly addressing {barrier.lower()}.",
+                ]
+            }
+        elif is_budget:
+            arch_data = {
+                "base": "Value and outcome-driven solution",
+                "trigger": "Pain-point resolution and cost-efficiency",
+                "positioning": f"Position as the most cost-effective way to resolve {theme_context.lower()} challenges",
+                "channel_tactic": f"Run ROI and value-comparison ads on {channel}",
+                "proof_point": f"Feature real user testimonials demonstrating immediate relief from {barrier.lower()}",
+                "cta_suggestion": "Solve your problem affordably today",
+                "actions": [
+                    f"Build landing pages focused entirely on resolving {theme_context} affordably.",
+                    f"Use step-by-step visual guides to lower {barrier.lower()}.",
+                ]
+            }
+        elif is_convenience:
+            arch_data = {
+                "base": "Immediate gratification & ease",
+                "trigger": "Urgency, visual appeal, and time savings",
+                "positioning": f"Position as the lowest-effort {theme_context.lower()} option available",
+                "channel_tactic": f"Target high-intent search queries on {channel} for immediate capture",
+                "proof_point": f"Use social proof counters and 'ready-to-use' guarantees to bypass {barrier.lower()}",
+                "cta_suggestion": "Claim yours before it sells out",
+                "actions": [
+                    f"Promote one-click purchasing or subscription options on {channel}.",
+                    f"Highlight 'no-assembly-required' or 'instant-setup' for {theme_context}.",
+                ]
+            }
+        elif is_heavy_user:
+            arch_data = {
+                "base": "Durability and long-term reliability",
+                "trigger": "Cost-per-use value and robust performance",
+                "positioning": f"Position as the heavy-duty {theme_context.lower()} workhorse",
+                "channel_tactic": f"Target repeat-purchase intent and bulk-buy keywords on {channel}",
+                "proof_point": f"Showcase stress-test results to definitively answer {barrier.lower()}",
+                "cta_suggestion": "Invest in long-term reliability",
+                "actions": [
+                    f"Introduce volume discounts or 'pro' tier pricing on {channel}.",
+                    f"Highlight lifecycle longevity and durability metrics for {theme_context}.",
+                ]
+            }
+        else:
+            arch_data = {
+                "base": f"Value alignment for {segment_name}",
+                "trigger": "Rational benefit and core utility",
+                "positioning": f"Position as the optimal {theme_context.lower()} choice",
+                "channel_tactic": f"Deploy {segment_name}-specific messaging across {channel}",
+                "proof_point": f"Highlight core feature advantages to overcome {barrier.lower()}",
+                "cta_suggestion": f"Discover {segment_name} benefits",
+                "actions": [
+                    f"Test multiple messaging hooks on {channel} to find the best angle.",
+                    f"Address {barrier.lower()} directly in the FAQ.",
+                ]
+            }
+            
+        combo_key = (arch_data["channel_tactic"], arch_data["proof_point"], arch_data["cta_suggestion"])
+        
+        if combo_key in seen_combinations:
+            strongest_signal = "high-intent" if intent > 60 else "value-driven" if intent < 40 else "category"
+            arch_data["channel_tactic"] = f"{arch_data['channel_tactic']} (Targeting {strongest_signal} {segment_name} buyers)"
+            arch_data["proof_point"] = f"{arch_data['proof_point']} — customized for {segment_name} expectations"
+            arch_data["cta_suggestion"] = f"{arch_data['cta_suggestion']} now"
+            combo_key = (arch_data["channel_tactic"], arch_data["proof_point"], arch_data["cta_suggestion"])
+            
+        seen_combinations.add(combo_key)
+            
+        lift_est = min(25.0, round((100 - intent) * 0.3, 1))
+        improvement = {
+            "scenario": f"Neutralizing '{barrier}' for {segment_name}",
+            "description": f"By tailoring positioning to '{arch_data['base']}' and specifically resolving '{barrier}', we estimate significant unlocking of dormant demand.",
+            "adoption_lift": lift_est,
+            "conv_lift_pct": round(lift_est * 0.8, 1),
+            "retention_lift_pct": round(lift_est * 0.4, 1)
         }
-        default = {"angle": "Value & quality", "trigger": "Rational benefit", "positioning": "Strong category choice", "channel_tactic": "Multi-channel approach"}
-        return map_.get(dominant_trait, default)
+        
+        return {
+            "angle": arch_data["base"],
+            "trigger": arch_data["trigger"],
+            "primary_barrier": barrier,
+            "positioning": arch_data["positioning"],
+            "channel_tactic": arch_data["channel_tactic"],
+            "proof_point": arch_data["proof_point"],
+            "cta_suggestion": arch_data["cta_suggestion"],
+            "action_items": arch_data["actions"],
+            "improvement_scenario": improvement,
+        }

@@ -5,6 +5,7 @@ import { Card, CardContent } from '../components/ui/Card';
 import { DataTable, type ColumnDef } from '../components/ui/DataTable';
 import { Badge } from '../components/ui/Badge';
 import { isEngineOk, getEngineErrorMessage } from '../utils/analysisStatus';
+import { cn } from '../utils/cn';
 import {
   AlertCircle, Loader2, Target, Rocket, Layers,
   TrendingDown, TrendingUp, Activity, AlertTriangle, ChevronRight
@@ -233,7 +234,7 @@ function diagnosticsEvidence(diag: Diagnostics): EvidenceData {
   }
 
   return {
-    title: 'Demand Intelligence Quality',
+    title: 'Demand Theme Readiness',
     displayed_value: `${Number(diag.theme_extraction_confidence ?? 0).toFixed(1)}%`,
     source_datasets: ['Magnet', 'Keyword Classification'],
     source_columns: ev?.source_columns ?? [],
@@ -548,7 +549,7 @@ export default function DemandStrength() {
             onClick={() => setEvidence({
                 title: 'Demand Theme Readiness Metrics',
                 displayed_value: `${themeQuality.confidence_score ?? '—'}/100`,
-                business_summary: 'Theme Quality Confidence Score',
+                business_summary: 'Demand Theme Readiness Score',
                 business_meaning: 'Measures whether the detected keyword themes are specific, differentiated, and actionable enough to support reliable market strategy and simulation.',
                 formula: themeQuality.formula || '40% * KPI-ready ratio + 30% * specific ratio + 20% * non-excluded ratio + 10% * inverse generic',
                 source_datasets: ['Classification Dataset'],

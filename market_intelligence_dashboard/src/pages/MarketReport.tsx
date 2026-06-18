@@ -106,17 +106,14 @@ export default function MarketReport() {
 
   const confidencePct = (activeBrands > 0 && totalRevenue > 0) ? 92 : 75;
 
-  const generatedRisks = risks.length > 0 ? risks.map((r: string) => ({
-    risk: r, severity: 'High', likelihood: 'Moderate', mitigation: 'Diversify product launch features.'
-  })) : [
-    { risk: 'Capital Depletion', severity: 'High', likelihood: 'Moderate', mitigation: 'Strict PPC stop-losses and precise keyword targeting.' },
-    { risk: 'Incumbent Retaliation', severity: 'Moderate', likelihood: 'High', mitigation: 'Target long-tail keywords ignored by top brands.' },
-    { risk: 'Demand Saturation', severity: 'Moderate', likelihood: 'Moderate', mitigation: 'Bundle products to increase perceived value.' },
-    { risk: 'Margin Compression', severity: 'High', likelihood: 'Low', mitigation: 'Ensure sourcing costs allow for 30%+ gross margins.' },
-    { risk: 'Review Moat Barrier', severity: 'High', likelihood: 'High', mitigation: 'Launch aggressive post-purchase review campaigns.' }
+  const generatedRisks = risks.length > 0 ? risks.map((r: any) => {
+    if (typeof r === 'string') return { risk: r, severity: 'High', likelihood: 'Moderate', mitigation: 'Diversify product launch features.' };
+    return { risk: r.risk || 'Unknown Risk', severity: r.severity || 'High', likelihood: r.likelihood || 'Moderate', mitigation: r.mitigation || 'N/A' };
+  }) : [
+    { risk: 'Insufficient Data', severity: 'High', likelihood: 'High', mitigation: 'Load more datasets to generate risk signals.' }
   ];
 
-  const bestProduct = whitespaceTop[0]?.cluster_name || "Premium Accessory Category";
+  const bestProduct = whitespaceTop[0]?.cluster_name || (categoryKey !== 'all' ? `${categoryKey} Opportunity` : "Data Missing: No Whitespace Detected");
   const expectedRevenue = formatCurrency(totalRevenue * 0.03); // 3% capture projection
   const expectedUnits = Math.floor((totalRevenue * 0.03) / 25).toLocaleString(); // Assumes $25 ASP
   const compLevel = hhi > 2500 ? 'High' : 'Moderate';
@@ -149,9 +146,20 @@ export default function MarketReport() {
       link.click();
       document.body.removeChild(link);
       window.URL.revokeObjectURL(url);
-    } catch (error) {
-      console.error('Failed to download PDF:', error);
-      alert('Failed to generate PDF report. Please try again.');
+    } catch (error: any) {
+      if (error.response?.data instanceof Blob) {
+        const text = await error.response.data.text();
+        console.error('Failed to download PDF:', text);
+        try {
+          const json = JSON.parse(text);
+          alert(`Failed to generate PDF report: ${json.detail || 'Server Error'}`);
+        } catch {
+          alert(`Failed to generate PDF report: ${text}`);
+        }
+      } else {
+        console.error('Failed to download PDF:', error);
+        alert(`Failed to generate PDF report: ${error.message}`);
+      }
     }
   };
 
@@ -233,7 +241,7 @@ export default function MarketReport() {
                 ))}
                 {whitespaceTop.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="px-4 py-8 text-center text-muted-foreground italic">Insufficient data to rank opportunities.</td>
+                    <td colSpan={6} className="px-4 py-8 text-center text-muted-foreground italic">No opportunity records after filtering.</td>
                   </tr>
                 )}
               </tbody>
@@ -370,7 +378,7 @@ export default function MarketReport() {
               ))}
               {topBrands.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="px-4 py-8 text-center text-muted-foreground italic">Insufficient data to rank brands.</td>
+                  <td colSpan={4} className="px-4 py-8 text-center text-muted-foreground italic">Missing revenue column or valid brands in dataset.</td>
                 </tr>
               )}
             </tbody>
@@ -400,7 +408,7 @@ export default function MarketReport() {
                 ))}
                 {demandClusters.length === 0 && (
                   <tr>
-                    <td colSpan={2} className="px-4 py-8 text-center text-muted-foreground italic">Insufficient data for demand clusters.</td>
+                    <td colSpan={2} className="px-4 py-8 text-center text-muted-foreground italic">Missing Magnet keyword data.</td>
                   </tr>
                 )}
               </tbody>
@@ -432,7 +440,7 @@ export default function MarketReport() {
               ))}
               {whitespaceTop.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="px-4 py-8 text-center text-muted-foreground italic">Insufficient data to identify whitespace opportunities.</td>
+                  <td colSpan={4} className="px-4 py-8 text-center text-muted-foreground italic">No opportunity records after filtering.</td>
                 </tr>
               )}
             </tbody>

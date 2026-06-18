@@ -1,7 +1,6 @@
 import { Outlet } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { Topbar } from './Topbar';
-import { DataTrustPanel } from '../ui/DataTrustPanel';
 
 export function MainLayout() {
   return (
@@ -15,7 +14,6 @@ export function MainLayout() {
         <Topbar />
         <main className="flex-1 overflow-y-auto w-full z-10 scroll-smooth">
           <div className="min-h-full p-6 md:p-8 max-w-[1600px] mx-auto">
-            <DataTrustPanel />
             <Outlet />
           </div>
         </main>

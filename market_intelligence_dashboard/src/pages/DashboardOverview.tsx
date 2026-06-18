@@ -18,6 +18,7 @@ import { RecommendedActions } from '../components/intelligence/RecommendedAction
 import { EvidenceDrawer, type EvidenceData } from '../components/ui/EvidenceDrawer';
 import { DataScopeIndicator } from '../components/ui/DataScopeIndicator';
 import { RevenueAtRisk } from '../components/intelligence/RevenueAtRisk';
+import { DataTrustPanel } from '../components/ui/DataTrustPanel';
 
 import { PageHeader } from '../components/layout/PageHeader';
 import { PageSection } from '../components/layout/PageSection';
@@ -219,6 +220,7 @@ export default function DashboardOverview() {
       />
 
       <div className="pb-16 max-w-[1400px] mx-auto px-6 print-only">
+        <DataTrustPanel />
 
         <PageHeader
           badge="Market Report"

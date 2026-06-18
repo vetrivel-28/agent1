@@ -1468,22 +1468,28 @@ def overview_verification(top_n: int = 10):
 def market_report_pdf(scope: CategoryScopePayload, top_n: int = 10, report_mode: str = "executive", include_charts: bool = True):
     logger.info(f"Market Report PDF requested (top_n={top_n}, report_mode={report_mode}, include_charts={include_charts})")
     
+    from fastapi import HTTPException
+    
     report = _build_market_report(scope, top_n=top_n)
     
     # If the report generation failed significantly (or returned an error object directly)
     if isinstance(report, dict) and not report.get("success"):
-        return report
+        raise HTTPException(status_code=400, detail=report.get("message", "Failed to aggregate report modules."))
         
     data = report.get("data", {}) if isinstance(report, dict) else report
     if not data or not data.get("results"):
-        return format_response({"status": "error", "message": "Failed to generate valid report data for PDF."})
+        raise HTTPException(status_code=400, detail="Failed to generate valid report data for PDF.")
         
-    pdf_path = export_market_report_pdf(data, report_mode=report_mode, include_charts=include_charts)
-    return FileResponse(
-        path=pdf_path,
-        media_type="application/pdf",
-        filename="market_intelligence_report.pdf",
-    )
+    try:
+        pdf_path = export_market_report_pdf(data, report_mode=report_mode, include_charts=include_charts)
+        return FileResponse(
+            path=pdf_path,
+            media_type="application/pdf",
+            filename="market_intelligence_report.pdf",
+        )
+    except Exception as e:
+        logger.error(f"Failed to export PDF: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to generate PDF report: {str(e)}")
 
 
 # =========================================================================

@@ -485,187 +485,6 @@ export function ScenarioTestingSection({ data }: { data: ScenarioTesting }) {
           </>
         )}
 
-        {/* ── Best Possible Improvement Scenario ── */}
-        {sentiment && (
-          <div className="mt-6">
-            <h3 className="text-xs font-bold uppercase tracking-wider text-muted-foreground mb-3">
-              Best Possible Improvement Scenario
-            </h3>
-            <Card className="border-emerald-500/30 bg-emerald-500/5">
-              <CardContent className="p-5">
-                {/* Header */}
-                <div className="flex items-start justify-between gap-4 mb-5">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1">
-                      <Zap className="w-4 h-4 text-emerald-500" />
-                      <p className="text-sm font-bold text-foreground">{sentiment.scenario}</p>
-                    </div>
-                    <p className="text-xs text-muted-foreground leading-relaxed">{sentiment.description}</p>
-                  </div>
-                  <div className="grid grid-cols-3 gap-2 text-xs shrink-0">
-                    <div className="p-2 bg-card border border-border/40 rounded text-center min-w-[80px]">
-                      <span className="text-muted-foreground block text-[10px]">Adoption lift</span>
-                      <p className="font-bold font-mono text-emerald-500">+{sentiment.adoption_lift?.toFixed(1)}</p>
-                    </div>
-                    <div className="p-2 bg-card border border-border/40 rounded text-center min-w-[80px]">
-                      <span className="text-muted-foreground block text-[10px]">Conversion lift</span>
-                      <p className="font-bold font-mono text-emerald-500">+{sentiment.conv_lift_pct?.toFixed(1)}%</p>
-                    </div>
-                    <div className="p-2 bg-card border border-border/40 rounded text-center min-w-[80px]">
-                      <span className="text-muted-foreground block text-[10px]">Retention lift</span>
-                      <p className="font-bold font-mono text-emerald-500">+{sentiment.retention_lift_pct?.toFixed(1)}%</p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Lever cards with strong evidence */}
-                {(sentiment.chosen_levers?.length ?? 0) > 0 && (
-                  <div className="mb-5">
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-3">
-                      Selected improvement levers — why each was chosen
-                    </p>
-                    <div className="space-y-3">
-                      {sentiment.chosen_levers!.map((lever, i) => {
-                        const leverLabel = lever.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-                        const reason = sentiment.selection_reasoning?.[i] ?? '';
-                        const leverReason = sentiment.lever_reasons?.[i] ?? '';
-
-                        // Determine affected signal and segment logic per lever
-                        const leverMeta: Record<string, { signal: string; segHint: string; impact: string }> = {
-                          trust_improvement: {
-                            signal: 'risk_aversion + conversion_efficiency',
-                            segHint: 'Risk-Averse Buyers, First-Time Buyers, Feature Researchers',
-                            impact: 'Reduces trust barrier → raises conversion probability and adoption rate',
-                          },
-                          review_sentiment_improvement: {
-                            signal: 'friction_keyword_count + risk_aversion',
-                            segHint: 'Risk-Averse Buyers, Premium Quality Seekers, Gift Buyers',
-                            impact: 'Higher average rating → improved trust score → more conversions',
-                          },
-                          pain_point_reduction: {
-                            signal: 'friction_keyword_count',
-                            segHint: 'Problem Solvers, Feature Researchers, Practical Buyers',
-                            impact: 'Removes conversion blockers from product listing → reduces abandonment',
-                          },
-                          value_clarity_improvement: {
-                            signal: 'budget_sensitivity + conversion_efficiency',
-                            segHint: 'Budget Maximizers, Value Maximizers, Deal Hunters',
-                            impact: 'Better ROI messaging → converts price-hesitant segments more effectively',
-                          },
-                          return_confidence_improvement: {
-                            signal: 'hhi_score + risk_aversion',
-                            segHint: 'Risk-Averse Buyers, First-Time Buyers, Occasional Users',
-                            impact: 'Purchase guarantees reduce first-buy hesitation → faster adoption',
-                          },
-                          product_education_improvement: {
-                            signal: 'friction_keywords + first_time_buyer_share',
-                            segHint: 'First-Time Buyers, Feature Researchers, Occasional Users',
-                            impact: 'Educational content bridges the knowledge gap → higher intent-to-purchase conversion',
-                          },
-                          advertising_push: {
-                            signal: 'demand_velocity + trend_focused',
-                            segHint: 'Trend Followers, Impulse Shoppers, Convenience Buyers',
-                            impact: 'Visibility uplift captures latent demand from trend-sensitive segments',
-                          },
-                          bundle_strategy: {
-                            signal: 'premium_willingness + bundle_target_share',
-                            segHint: 'Gift Buyers, Value Maximizers, Occasional Users, Heavy Users',
-                            impact: 'Raises perceived value without a direct price cut → improves adoption and AOV',
-                          },
-                        };
-                        const meta = leverMeta[lever] ?? {
-                          signal: 'multiple signals',
-                          segHint: 'All active segments',
-                          impact: 'Improves adoption and conversion across segments',
-                        };
-
-                        return (
-                          <div key={lever} className="p-3 bg-card border border-emerald-500/20 rounded-xl">
-                            <div className="flex items-start gap-2.5">
-                              <div className="w-5 h-5 rounded-full bg-emerald-500/15 flex items-center justify-center shrink-0 mt-0.5">
-                                <span className="text-[10px] font-black text-emerald-500">{i + 1}</span>
-                              </div>
-                              <div className="flex-1">
-                                <p className="text-xs font-bold text-foreground mb-1">{leverLabel}</p>
-                                {leverReason && (
-                                  <p className="text-[10px] text-muted-foreground mb-2 leading-relaxed">{leverReason}</p>
-                                )}
-                                <div className="grid grid-cols-1 gap-1 text-[10px]">
-                                  <p>
-                                    <span className="text-muted-foreground font-bold">Why selected: </span>
-                                    <span className="text-foreground/80">{reason}</span>
-                                  </p>
-                                  <p>
-                                    <span className="text-muted-foreground font-bold">Affected signal: </span>
-                                    <span className="font-mono text-primary">{meta.signal}</span>
-                                  </p>
-                                  <p>
-                                    <span className="text-muted-foreground font-bold">Segments impacted: </span>
-                                    <span className="text-foreground/80">{meta.segHint}</span>
-                                  </p>
-                                  <p>
-                                    <span className="text-muted-foreground font-bold">Expected impact: </span>
-                                    <span className="text-emerald-400">{meta.impact}</span>
-                                  </p>
-                                </div>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {/* Most impacted segments */}
-                {(sentiment.most_impacted_segments?.length ?? 0) > 0 && (
-                  <div className="mb-4">
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground mb-2">
-                      Segments that benefit most
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      {sentiment.most_impacted_segments!.slice(0, 5).map((s) => (
-                        <div
-                          key={s.segment}
-                          className="text-xs px-2.5 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
-                        >
-                          <span className="font-medium">{s.segment.split(' ').slice(0, 2).join(' ')}</span>
-                          {s.sensitivity_score != null && (
-                            <span className="text-[9px] text-emerald-300/70 ml-1.5 font-mono">
-                              sensitivity {s.sensitivity_score.toFixed(2)}
-                            </span>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Final recommendation sentence */}
-                {(sentiment.chosen_levers?.length ?? 0) > 0 && (
-                  <div className="p-3 bg-emerald-500/8 border border-emerald-500/25 rounded-xl text-xs">
-                    <span className="font-bold text-emerald-400">Best scenario recommendation: </span>
-                    <span className="text-foreground/80">
-                      Combine{' '}
-                      {sentiment.chosen_levers!.map((l) =>
-                        l.replace(/_/g, ' ').replace(/improvement|push|strategy/g, '').trim()
-                          .replace(/\b\w/g, (c) => c.toUpperCase()),
-                      ).join(' + ')}
-                      {' '}at the current or slightly reduced price point. This addresses the dominant product weaknesses identified from your dataset and protects revenue while improving adoption and retention.
-                    </span>
-                  </div>
-                )}
-
-                <button
-                  onClick={() => openSentimentModal(sentiment)}
-                  className="text-xs text-emerald-500 hover:underline mt-4 block"
-                >
-                  View full analysis →
-                </button>
-              </CardContent>
-            </Card>
-          </div>
-        )}
       </PageSection>
     </>
   );
@@ -831,66 +650,7 @@ export function ExecutiveNarrativeSection({ r }: { r: SimResults }) {
         </Card>
       )}
 
-      {/* ── Top 5 Actions — Ranked by Business Impact ── */}
-      {actionPlan.length > 0 && (
-        <Card className="border-border/40 mb-6">
-          <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2">
-              <ListChecks className="w-5 h-5 text-primary" />
-              Top 5 Recommended Actions
-            </CardTitle>
-            <CardDescription>
-              Ranked by business impact — derived from simulation outputs, not generic templates
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {actionPlan.slice(0, 5).map((item, i) => {
-              const priorityColors = [
-                'bg-primary text-white',
-                'bg-primary/80 text-white',
-                'bg-primary/60 text-white',
-                'bg-primary/40 text-foreground',
-                'bg-primary/25 text-foreground',
-              ];
-              const impactLabel = i === 0 ? 'Highest Impact' : i === 1 ? 'High Impact' : i === 2 ? 'Medium-High Impact' : 'Medium Impact';
-              return (
-                <div key={i} className="flex items-start gap-4 p-4 bg-muted/20 border border-border/30 rounded-xl">
-                  <div className={cn('w-7 h-7 rounded-full flex items-center justify-center shrink-0', priorityColors[i] || 'bg-muted')}>
-                    <span className="text-xs font-black">{item.priority}</span>
-                  </div>
-                  <div className="flex-1">
-                    <p className="text-sm text-foreground/90 leading-snug">{item.action}</p>
-                    {item.target_segment && (
-                      <p className="text-[10px] text-muted-foreground mt-1">
-                        <span className="font-bold">Target: </span>{item.target_segment}
-                      </p>
-                    )}
-                    {item.why && (
-                      <p className="text-[10px] text-muted-foreground mt-0.5 line-clamp-1">{item.why}</p>
-                    )}
-                  </div>
-                  <div className="text-right shrink-0">
-                    <span className={cn(
-                      'text-[9px] font-bold px-2 py-0.5 rounded border',
-                      i === 0 ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
-                      i === 1 ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' :
-                      'bg-muted text-muted-foreground border-border/40',
-                    )}>
-                      {impactLabel}
-                    </span>
-                    <p className="text-[9px] text-muted-foreground mt-1">{item.category.replace(/_/g, ' ')}</p>
-                  </div>
-                </div>
-              );
-            })}
-            {actionPlan.length > 5 && (
-              <p className="text-xs text-muted-foreground text-center pt-1">
-                Showing top 5 of {actionPlan.length} actions — additional actions available in segment modals.
-              </p>
-            )}
-          </CardContent>
-        </Card>
-      )}
+      {/* Global Top 5 Actions removed to be segment-specific */}
 
       {/* ── Segment Recommendations ── */}
       {segmentMessages.length > 0 && (
@@ -904,7 +664,8 @@ export function ExecutiveNarrativeSection({ r }: { r: SimResults }) {
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {segmentMessages.slice(0, 6).map((msg, i) => {
+              {segmentMessages.slice(0, 6).map((rawMsg, i) => {
+                const msg = rawMsg as any;
                 // Resolve fields from backend messaging_intelligence structure
                 const segName       = String(msg.segment || '—');
                 const primaryAngle  = String(msg.primary_angle || msg.positioning || '—');
@@ -914,9 +675,9 @@ export function ExecutiveNarrativeSection({ r }: { r: SimResults }) {
                 // Population from segments array if available
                 const pop = typeof msg.population === 'number' ? msg.population : null;
 
-                const primaryBarrier = String(msg.primary_barrier || msg.resistance_barrier || 'Resistance Barrier');
-                const ctaSuggestion  = String(msg.cta_suggestion || msg.call_to_action || '"Learn more and buy today"');
-                const proofPoint     = String(msg.proof_point || msg.proof_point_needed || 'Social proof and reviews');
+                const primaryBarrier = String(msg.primary_barrier || msg.resistance_barrier || 'Unspecified barrier');
+                const ctaSuggestion  = String(msg.cta_suggestion || msg.call_to_action || 'CTA not provided');
+                const proofPoint     = String(msg.proof_point || msg.proof_point_needed || 'Evidence required');
 
                 return (
                   <div key={i} className="p-4 border border-border/40 rounded-xl text-xs space-y-2">
@@ -970,6 +731,45 @@ export function ExecutiveNarrativeSection({ r }: { r: SimResults }) {
                       <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wide mb-0.5">CTA Suggestion</p>
                       <p className="text-primary font-medium">{ctaSuggestion}</p>
                     </div>
+                    
+                    {/* Top Recommended Actions */}
+                    {msg.action_items && Array.isArray(msg.action_items) && (
+                      <div className="pt-2 border-t border-border/30">
+                        <p className="text-[10px] font-bold text-muted-foreground uppercase tracking-wide mb-1 flex items-center gap-1">
+                          <ListChecks className="w-3 h-3 text-primary" /> Top Recommended Actions
+                        </p>
+                        <ul className="space-y-1.5 list-disc list-inside">
+                          {msg.action_items.map((action: string, aidx: number) => (
+                            <li key={aidx} className="text-muted-foreground text-[10px] leading-tight ml-1">{action}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    
+                    {/* Best Improvement Scenario */}
+                    {msg.improvement_scenario && (
+                      <div className="pt-2 border-t border-border/30 bg-emerald-500/5 p-2 rounded-lg mt-2">
+                        <p className="text-[10px] font-bold text-emerald-500 uppercase tracking-wide mb-1 flex items-center gap-1">
+                          <Zap className="w-3 h-3" /> Best Improvement Scenario
+                        </p>
+                        <p className="text-[10px] text-emerald-400 mb-1 leading-tight">{msg.improvement_scenario.scenario}</p>
+                        <p className="text-[9px] text-muted-foreground leading-tight mb-2">{msg.improvement_scenario.description}</p>
+                        <div className="grid grid-cols-3 gap-1 mt-1">
+                          <div className="text-center bg-card p-1 rounded border border-emerald-500/20">
+                            <span className="block text-[8px] text-muted-foreground">Adoption</span>
+                            <span className="block text-[9px] font-mono text-emerald-500">+{msg.improvement_scenario.adoption_lift}</span>
+                          </div>
+                          <div className="text-center bg-card p-1 rounded border border-emerald-500/20">
+                            <span className="block text-[8px] text-muted-foreground">Conversion</span>
+                            <span className="block text-[9px] font-mono text-emerald-500">+{msg.improvement_scenario.conv_lift_pct}%</span>
+                          </div>
+                          <div className="text-center bg-card p-1 rounded border border-emerald-500/20">
+                            <span className="block text-[8px] text-muted-foreground">Retention</span>
+                            <span className="block text-[9px] font-mono text-emerald-500">+{msg.improvement_scenario.retention_lift_pct}%</span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })}
