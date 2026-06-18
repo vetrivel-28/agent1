@@ -542,241 +542,121 @@ export default function DemandStrength() {
         </PageSection>
       )}
 
-      {(themeQuality.themes_used_for_scoring != null || themeQuality.generic_demand_share_pct != null) && (
-        <PageSection title="Demand Theme Readiness">
-          <Card 
-            className="border-primary/20 bg-card mb-6 cursor-pointer hover:border-primary/50 transition-all shadow-sm"
-            onClick={() => setEvidence({
-                title: 'Demand Theme Readiness Metrics',
-                displayed_value: `${themeQuality.confidence_score ?? '—'}/100`,
-                business_summary: 'Demand Theme Readiness Score',
-                business_meaning: 'Measures whether the detected keyword themes are specific, differentiated, and actionable enough to support reliable market strategy and simulation.',
-                formula: themeQuality.formula || '40% * KPI-ready ratio + 30% * specific ratio + 20% * non-excluded ratio + 10% * inverse generic',
-                source_datasets: ['Classification Dataset'],
-                source_columns: [],
-                source_row_count: 0,
-                counts: themeQuality.ratios_used as any,
-              })}
-          >
-            <CardContent className="p-6 flex flex-col md:flex-row items-center gap-8">
-              {/* Prominent Confidence Score */}
-              <div className="flex flex-col items-center justify-center shrink-0 w-48 border-r border-border/50 pr-8">
-                <div className="relative flex items-center justify-center w-28 h-28 mb-2">
-                  <svg className="w-full h-full transform -rotate-90" viewBox="0 0 36 36">
-                    <path
-                      className="text-muted/30"
-                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="3"
-                    />
-                    <path
-                      className={cn(
-                        "transition-all duration-1000 ease-out",
-                        (themeQuality.confidence_score ?? 0) >= 70 ? "text-emerald-500" :
-                        (themeQuality.confidence_score ?? 0) >= 45 ? "text-amber-500" : "text-red-500"
-                      )}
-                      strokeDasharray={`${themeQuality.confidence_score ?? 0}, 100`}
-                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="3"
-                    />
-                  </svg>
-                  <div className="absolute flex flex-col items-center">
-                    <span className="text-3xl font-black font-mono leading-none">{themeQuality.confidence_score ?? '—'}</span>
-                    <span className="text-[10px] text-muted-foreground uppercase tracking-widest mt-1">Score</span>
-                  </div>
-                </div>
-                <div className={cn(
-                  "px-3 py-1 rounded-full text-xs font-bold border",
-                  (themeQuality.confidence_score ?? 0) >= 70 ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20" :
-                  (themeQuality.confidence_score ?? 0) >= 45 ? "bg-amber-500/10 text-amber-500 border-amber-500/20" : "bg-red-500/10 text-red-500 border-red-500/20"
-                )}>
-                  {(themeQuality.confidence_score ?? 0) >= 70 ? "High Readiness" : (themeQuality.confidence_score ?? 0) >= 45 ? "Moderate Readiness" : "Low Readiness"}
-                </div>
-              </div>
 
-              {/* Supporting Metrics */}
-              <div className="flex-1 grid grid-cols-2 lg:grid-cols-3 gap-y-6 gap-x-4">
-                <div>
-                  <p className="text-muted-foreground text-xs font-medium uppercase tracking-wider mb-1">Detected Themes</p>
-                  <p className="text-2xl font-bold">{themeQuality.detected_demand_themes ?? '—'}</p>
-                  <p className="text-[10px] text-muted-foreground mt-1">Total distinct market segments</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground text-xs font-medium uppercase tracking-wider mb-1">Specific Intent</p>
-                  <p className="text-2xl font-bold text-success">{themeQuality.specific_buyer_intent_themes ?? '—'}</p>
-                  <p className="text-[10px] text-muted-foreground mt-1">Actionable business themes</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground text-xs font-medium uppercase tracking-wider mb-1">Generic Demand</p>
-                  <p className="text-2xl font-bold text-warning">{Number(themeQuality.generic_demand_share_pct ?? 0).toFixed(1)}%</p>
-                  <p className="text-[10px] text-muted-foreground mt-1">Share of non-specific queries</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground text-xs font-medium uppercase tracking-wider mb-1">Themes Scored</p>
-                  <p className="text-xl font-bold">{themeQuality.themes_used_for_scoring ?? '—'}</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground text-xs font-medium uppercase tracking-wider mb-1">Broad/Generic</p>
-                  <p className="text-xl font-bold">{themeQuality.broad_generic_themes ?? '—'}</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground text-xs font-medium uppercase tracking-wider mb-1">Themes Excluded</p>
-                  <p className="text-xl font-bold">{themeQuality.themes_excluded_from_scoring ?? '—'}</p>
-                </div>
-              </div>
-              
-              <div className="shrink-0 pl-4 hidden md:block">
-                <ChevronRight className="w-6 h-6 text-muted-foreground/30" />
-              </div>
-            </CardContent>
-          </Card>
-          
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-            <Card className="border-primary/20 bg-primary/5">
-              <CardContent className="p-6">
-                <h3 className="font-bold text-primary mb-4 flex items-center gap-2">
-                  <Activity className="w-5 h-5" />
-                  Strategic Implications
-                </h3>
-                <ul className="space-y-3 text-sm text-foreground/80">
-                  {themeQuality.insights?.map((insight, idx) => (
-                    <li key={idx} className="flex items-start gap-2">
-                      <span className="text-primary mt-1">•</span>
-                      <span className="leading-relaxed">{insight}</span>
-                    </li>
-                  ))}
-                </ul>
-              </CardContent>
-            </Card>
-
-            <Card className="border-border/50">
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-bold flex items-center gap-2">
-                    <Target className="w-5 h-5 text-muted-foreground" />
-                    Recommended action
-                  </h3>
-                  {themeQuality.confidence_label && (
-                    <Badge variant={themeQuality.confidence_score && themeQuality.confidence_score >= 75 ? "default" : "outline"}>
-                      {themeQuality.confidence_label}
-                    </Badge>
-                  )}
-                </div>
-                <p className="text-sm text-foreground/80 leading-relaxed">
-                  {themeQuality.recommended_action || "Ensure keyword classification is complete before relying on these themes for strategy."}
-                </p>
-              </CardContent>
-            </Card>
-          </div>
-        </PageSection>
-      )}
 
       <PageSection title="Strategic Demand Metrics">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        {db.filter(r => r.segment && r.segment !== 'Other' && r.segment !== 'Unclassified').length === 1 ? (
+          <Card className="border-border/50 bg-muted/5">
+            <CardContent className="p-6 text-center">
+              <p className="text-muted-foreground">
+                Single theme detected: <strong className="text-foreground">{formatGenericLabel(db.filter(r => r.segment && r.segment !== 'Other' && r.segment !== 'Unclassified')[0]?.segment || 'Unknown')}</strong>. Upload additional product themes to unlock comparative segment analysis (Largest Segment, Highest Efficiency, Undervalued Theme, Best Entry).
+              </p>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
 
-          <KPICard
-            label={largestDemand?.empty_state ? 'Largest Classified Segment' : 'Largest Segment'}
-            value={largestDemand?.empty_state ? (largestDemand.title || 'No specific theme detected') : (largestDemand?.name || 'Insufficient data')}
-            implication={largestDemand?.subtitle || largestDemand?.business_implication || 'Upload keyword data'}
-            confidence={largestDemand?.confidence}
-            icon={Target}
-            scope="Global"
-            onClick={() => setEvidence(rawToEvidence('Largest Demand Segment', largestDemand?.evidence, {
-              displayed_value: largestDemand?.name || '—',
-              business_summary: largestDemand?.business_implication,
-              business_meaning: 'Largest share of search volume among classified themes in the active dataset.',
-              counts: {
-                demand_share: `${Number(largestDemand?.demand_share ?? 0).toFixed(1)}%`,
-                search_volume: largestDemand?.search_volume ?? 0,
-              },
-              top_records: (largestDemand?.top_keywords || []).slice(0, 10).map((k) => ({
-                keyword: String(k.keyword ?? ''),
-                search_volume: Number(k.search_volume ?? 0),
-              })),
-              dataset_session_id: sessionId,
-              missing_fields: largestDemand?.evidence?.missing_fields,
-            }))}
-          />
-
-          <KPICard
-            label="Highest Efficiency"
-            value={monetized?.name || (results.total_keyword_sales ? 'Insufficient data' : 'No revenue data')}
-            implication={monetized?.subtitle || monetized?.business_implication || 'Requires Keyword Sales column'}
-            confidence={monetized?.confidence}
-            icon={TrendingUp}
-            scope="Global"
-            onClick={() => monetized && setEvidence(rawToEvidence('Highest Efficiency', monetized.evidence, {
-              displayed_value: monetized.name || '—',
-              business_summary: monetized.business_implication,
-              business_meaning: 'Revenue share divided by demand share — values above 1× indicate strong monetization.',
-              counts: { efficiency_lift: `${Number(monetized.lift ?? 0).toFixed(2)}×` },
-              top_records: (monetized.top_keywords || []).slice(0, 10).map((k) => ({
-                keyword: String(k.keyword ?? ''),
-                search_volume: Number(k.search_volume ?? 0),
-              })),
-              dataset_session_id: sessionId,
-            }))}
-          />
-
-          <KPICard
-            label="Undervalued Theme"
-            value={undervaluedValue}
-            implication={undervaluedImplication || ''}
-            confidence={undervalued?.confidence}
-            icon={TrendingDown}
-            scope="Global"
-            onClick={() => setEvidence(rawToEvidence('Undervalued Theme', undervalued?.evidence, {
-              displayed_value: undervalued?.empty_state ? 'None detected' : (undervalued?.name || '—'),
-              business_summary: undervalued?.business_implication,
-              business_meaning: undervalued?.empty_state
-                ? `No theme exceeds ${undervalued?.minimum_gap_threshold ?? 2} pt demand-over-revenue gap.`
-                : 'Demand share exceeds revenue share — under-monetized search intent.',
-              counts: {
-                themes_checked: undervalued?.themes_checked ?? 0,
-                gap_threshold: `${undervalued?.minimum_gap_threshold ?? 2} pts`,
-                gap: undervalued?.gap != null ? `${undervalued.gap}%` : '—',
-              },
-              dataset_session_id: sessionId,
-            }))}
-          />
-
-          <KPICard
-            label="Best Entry"
-            value={recommendedEntry?.empty_state ? (recommendedEntry.title || 'No specific entry theme') : (recommendedEntry?.name || 'Insufficient data')}
-            implication={recommendedEntry?.subtitle || recommendedEntry?.business_implication || ''}
-            confidence={recommendedEntry?.confidence}
-            icon={Rocket}
-            scope="Global"
-            onClick={() => recommendedEntry && setEvidence(rawToEvidence('Best Entry Opportunity', recommendedEntry.evidence, {
-              displayed_value: recommendedEntry.name || '—',
-              business_summary: recommendedEntry.business_implication,
-              business_meaning: recommendedEntry.why_selected || 'Balanced score weights opportunity, competition, and confidence.',
-              recommendation: entryRec,
-              counts: {
-                best_entry_score: Number(recommendedEntry.score ?? 0).toFixed(1),
-                opportunity_score: Number(recommendedEntry.opportunity_score ?? recommendedEntry.score ?? 0).toFixed(1),
-              },
-              detail_tables: recommendedEntry.candidate_ranking?.length ? [{
-                title: 'Top Candidates by Best Entry Score',
-                columns: ['segment', 'best_entry_score', 'opportunity_score', 'competition_index'],
-                rows: recommendedEntry.candidate_ranking.map((c) => ({
-                  segment: String(c.segment ?? ''),
-                  best_entry_score: Number(c.best_entry_score ?? 0).toFixed(1),
-                  opportunity_score: Number(c.opportunity_score ?? 0).toFixed(1),
-                  competition_index: Number(c.competition_index ?? 0).toFixed(1),
+            <KPICard
+              label={largestDemand?.empty_state ? 'Largest Classified Segment' : 'Largest Segment'}
+              value={largestDemand?.empty_state ? (largestDemand.title || 'No specific theme detected') : (largestDemand?.name || 'Insufficient data')}
+              implication={largestDemand?.subtitle || largestDemand?.business_implication || 'Upload keyword data'}
+              confidence={largestDemand?.confidence}
+              icon={Target}
+              scope="Global"
+              onClick={() => setEvidence(rawToEvidence('Largest Demand Segment', largestDemand?.evidence, {
+                displayed_value: largestDemand?.name || '—',
+                business_summary: largestDemand?.business_implication,
+                business_meaning: 'Largest share of search volume among classified themes in the active dataset.',
+                counts: {
+                  demand_share: `${Number(largestDemand?.demand_share ?? 0).toFixed(1)}%`,
+                  search_volume: largestDemand?.search_volume ?? 0,
+                },
+                top_records: (largestDemand?.top_keywords || []).slice(0, 10).map((k) => ({
+                  keyword: String(k.keyword ?? ''),
+                  search_volume: Number(k.search_volume ?? 0),
                 })),
-              }] : undefined,
-              data_quality_notes:
-                recommendedEntry.confidence != null && recommendedEntry.confidence < 50
-                  ? ['Low confidence: recommendation is directional because theme coverage or required fields are incomplete.']
-                  : undefined,
-              dataset_session_id: sessionId,
-            }))}
-          />
-        </div>
+                dataset_session_id: sessionId,
+                missing_fields: largestDemand?.evidence?.missing_fields,
+              }))}
+            />
+
+            <KPICard
+              label="Highest Efficiency"
+              value={monetized?.name || (results.total_keyword_sales ? 'Insufficient data' : 'No revenue data')}
+              implication={monetized?.subtitle || monetized?.business_implication || 'Requires Keyword Sales column'}
+              confidence={monetized?.confidence}
+              icon={TrendingUp}
+              scope="Global"
+              onClick={() => monetized && setEvidence(rawToEvidence('Highest Efficiency', monetized.evidence, {
+                displayed_value: monetized.name || '—',
+                business_summary: monetized.business_implication,
+                business_meaning: 'Revenue share divided by demand share — values above 1× indicate strong monetization.',
+                counts: { efficiency_lift: `${Number(monetized.lift ?? 0).toFixed(2)}×` },
+                top_records: (monetized.top_keywords || []).slice(0, 10).map((k) => ({
+                  keyword: String(k.keyword ?? ''),
+                  search_volume: Number(k.search_volume ?? 0),
+                })),
+                dataset_session_id: sessionId,
+              }))}
+            />
+
+            <KPICard
+              label="Undervalued Theme"
+              value={undervaluedValue}
+              implication={undervaluedImplication || ''}
+              confidence={undervalued?.confidence}
+              icon={TrendingDown}
+              scope="Global"
+              onClick={() => setEvidence(rawToEvidence('Undervalued Theme', undervalued?.evidence, {
+                displayed_value: undervalued?.empty_state ? 'None detected' : (undervalued?.name || '—'),
+                business_summary: undervalued?.business_implication,
+                business_meaning: undervalued?.empty_state
+                  ? `No theme exceeds ${undervalued?.minimum_gap_threshold ?? 2} pt demand-over-revenue gap.`
+                  : 'Demand share exceeds revenue share — under-monetized search intent.',
+                counts: {
+                  themes_checked: undervalued?.themes_checked ?? 0,
+                  gap_threshold: `${undervalued?.minimum_gap_threshold ?? 2} pts`,
+                  gap: undervalued?.gap != null ? `${undervalued.gap}%` : '—',
+                },
+                dataset_session_id: sessionId,
+              }))}
+            />
+
+            <KPICard
+              label="Best Entry"
+              value={recommendedEntry?.empty_state ? (recommendedEntry.title || 'No specific entry theme') : (recommendedEntry?.name || 'Insufficient data')}
+              implication={recommendedEntry?.subtitle || recommendedEntry?.business_implication || ''}
+              confidence={recommendedEntry?.confidence}
+              icon={Rocket}
+              scope="Global"
+              onClick={() => recommendedEntry && setEvidence(rawToEvidence('Best Entry Opportunity', recommendedEntry.evidence, {
+                displayed_value: recommendedEntry.name || '—',
+                business_summary: recommendedEntry.business_implication,
+                business_meaning: recommendedEntry.why_selected || 'Balanced score weights opportunity, competition, and confidence.',
+                recommendation: entryRec,
+                counts: {
+                  best_entry_score: Number(recommendedEntry.score ?? 0).toFixed(1),
+                  opportunity_score: Number(recommendedEntry.opportunity_score ?? recommendedEntry.score ?? 0).toFixed(1),
+                },
+                detail_tables: recommendedEntry.candidate_ranking?.length ? [{
+                  title: 'Top Candidates by Best Entry Score',
+                  columns: ['segment', 'best_entry_score', 'opportunity_score', 'competition_index'],
+                  rows: recommendedEntry.candidate_ranking.map((c) => ({
+                    segment: String(c.segment ?? ''),
+                    best_entry_score: Number(c.best_entry_score ?? 0).toFixed(1),
+                    opportunity_score: Number(c.opportunity_score ?? 0).toFixed(1),
+                    competition_index: Number(c.competition_index ?? 0).toFixed(1),
+                  })),
+                }] : undefined,
+                data_quality_notes:
+                  recommendedEntry.confidence != null && recommendedEntry.confidence < 50
+                    ? ['Low confidence: recommendation is directional because theme coverage or required fields are incomplete.']
+                    : undefined,
+                dataset_session_id: sessionId,
+              }))}
+            />
+          </div>
+        )}
       </PageSection>
 
       <PageSection title="Opportunity Database">
@@ -815,19 +695,21 @@ export default function DemandStrength() {
         )}
       </PageSection>
 
-      <details className="mt-8 border-t border-border pt-4 cursor-pointer group">
-        <summary className="text-sm font-medium text-muted-foreground group-hover:text-foreground transition-colors outline-none list-none flex items-center gap-2">
-          <ChevronRight className="w-4 h-4 transition-transform group-open:rotate-90" />
-          Dataset scope / audit details
-        </summary>
-        <div className="mt-4 p-4 bg-muted/20 border border-border/50 rounded-lg text-xs text-muted-foreground font-mono space-y-2">
-          {sessionId && <p>active session: {sessionId}</p>}
-          <p>selected category: {categoryKey || 'global'}</p>
-          <p>dataset fingerprint: {datasetSessionId || 'none'}</p>
-          <p>keyword count: {diagnostics.total_keyword_count?.toLocaleString() || '0'}</p>
-          <p>generated timestamp: {new Date().toISOString()}</p>
-        </div>
-      </details>
+      {import.meta.env.DEV && (
+        <details className="mt-8 border-t border-border pt-4 cursor-pointer group">
+          <summary className="text-sm font-medium text-muted-foreground group-hover:text-foreground transition-colors outline-none list-none flex items-center gap-2">
+            <ChevronRight className="w-4 h-4 transition-transform group-open:rotate-90" />
+            Dataset scope / audit details
+          </summary>
+          <div className="mt-4 p-4 bg-muted/20 border border-border/50 rounded-lg text-xs text-muted-foreground font-mono space-y-2">
+            {sessionId && <p>active session: {sessionId}</p>}
+            <p>selected category: {categoryKey || 'global'}</p>
+            <p>dataset fingerprint: {datasetSessionId || 'none'}</p>
+            <p>keyword count: {diagnostics.total_keyword_count?.toLocaleString() || '0'}</p>
+            <p>generated timestamp: {new Date().toISOString()}</p>
+          </div>
+        </details>
+      )}
     </div>
   );
 }

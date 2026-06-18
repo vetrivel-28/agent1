@@ -27,11 +27,12 @@
  *  - No Recommended Action column in Revenue Lift table
  */
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../services/api';
 import { scopeQueryKeys } from '../hooks/useCategoryScope';
 import { FIXED_SEGMENT_NAMES } from '../constants/fixedPsychographicSegments';
+import { runOllamaSimulation } from '../services/llmService';
 import type { SimResults, Segment } from './consumerAdoption/types';
 import {
   fmtPct, fmtNum, fmtScore, fmtCurrency, resistanceBg,
@@ -256,16 +257,86 @@ export default function ConsumerAdoptionSimulator() {
   const [selectedSegmentName, setSelectedSegmentName] = useState<string | null>(null);
   const [matrixSort, setMatrixSort] = useState<'intent' | 'conversion' | 'trust' | 'resistance'>('intent');
 
+  const [llmSegments, setLlmSegments] = useState<Segment[] | null>(null);
+  const [isLlmLoading, setIsLlmLoading] = useState(false);
+
   const r = useMemo<SimResults | null>(() => {
     const d = data?.data?.results;
     if (!d || !d.population_summary) return null;
     return d as SimResults;
   }, [data]);
 
-  const segments = useMemo(() => orderSegments(r?.psychographic_segments || []), [r]);
+  const originalSegments = r?.psychographic_segments || [];
+  const dna = useMemo(() => r?.market_dna ?? null, [r]);
+
+  useEffect(() => {
+    if (!originalSegments.length || !dna || !categoryKey) return;
+    
+    const cacheKey = `llm_sim_${categoryKey}`;
+    const cached = localStorage.getItem(cacheKey);
+    if (cached) {
+      try {
+        setLlmSegments(JSON.parse(cached));
+        return;
+      } catch (e) {}
+    }
+
+    const run = async () => {
+      setIsLlmLoading(true);
+      try {
+        const prompt = `You are a consumer adoption analyst.
+Given the market DNA and a list of psychographic segments, estimate the adoption probability, intent score, and resistance score for each segment. Also provide a 1-sentence reasoning for the scores.
+Market DNA: ${JSON.stringify(dna)}
+Segments: ${JSON.stringify(originalSegments.map(s => ({ name: s.cluster_name, population: s.population, percentage: s.percentage, traits: s.dominant_traits })))}
+Return a JSON object in this exact format:
+{
+  "segments": [
+    {
+      "segment": "...", // must match name exactly
+      "adoption_probability": 50, // integer 0 to 100
+      "intent_score": 60, // integer 0 to 100
+      "resistance_score": 40, // integer 0 to 100
+      "reasoning": "1 sentence explanation"
+    }
+  ]
+}`;
+        const llmResult = await runOllamaSimulation(prompt);
+        if (llmResult?.segments && Array.isArray(llmResult.segments)) {
+          const updatedSegments = originalSegments.map(s => {
+            const override = llmResult.segments.find((o: any) => o.segment === s.cluster_name);
+            if (override) {
+               return {
+                 ...s,
+                 conversion_probability: override.adoption_probability / 100,
+                 purchase_intent: override.intent_score,
+                 resistance: {
+                   ...s.resistance,
+                   resistance_index: override.resistance_score
+                 },
+                 llm_reasoning: override.reasoning
+               };
+            }
+            return s;
+          });
+          localStorage.setItem(cacheKey, JSON.stringify(updatedSegments));
+          setLlmSegments(updatedSegments);
+        } else {
+          throw new Error('Invalid LLM format');
+        }
+      } catch (e) {
+        console.error("LLM simulation failed, falling back to engine data", e);
+        setLlmSegments(originalSegments);
+      } finally {
+        setIsLlmLoading(false);
+      }
+    };
+    run();
+  }, [originalSegments, dna, categoryKey]);
+
+  const segmentsToUse = llmSegments || originalSegments;
+  const segments = useMemo(() => orderSegments(segmentsToUse), [segmentsToUse]);
   const activeSegs = useMemo(() => activeSegments(segments), [segments]);
   const summary = useMemo(() => r?.population_summary, [r]);
-  const dna = useMemo(() => r?.market_dna ?? null, [r]);
 
   const scenarioData = useMemo(() => r?.scenario_testing, [r]);
 
@@ -481,7 +552,7 @@ export default function ConsumerAdoptionSimulator() {
 
   // ── Loading / Error ───────────────────────────────────────────────────────
 
-  if (isLoading) return <DashboardSkeleton />;
+  if (isLoading || isLlmLoading) return <DashboardSkeleton />;
 
   if (isError || !r) {
     return (

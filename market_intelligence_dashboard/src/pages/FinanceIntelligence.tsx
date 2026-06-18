@@ -641,10 +641,10 @@ export default function FinanceIntelligence() {
   const maInsight = marketAttractivenessScore == null
     ? 'Upload datasets to assess market attractiveness.'
     : marketAttractivenessScore >= 65
-      ? `Available market signals indicate favorable entry conditions (attractiveness ${marketAttractivenessScore.toFixed(0)}/100).`
+      ? `Available market signals indicate favorable entry conditions overall.`
       : marketAttractivenessScore >= 40
-        ? `Market conditions appear mixed with selective entry potential (attractiveness ${marketAttractivenessScore.toFixed(0)}/100).`
-        : `Market conditions appear challenging for new entrants (attractiveness ${marketAttractivenessScore.toFixed(0)}/100).`;
+        ? `Market conditions appear mixed with selective entry potential.`
+        : `Market conditions appear challenging for new entrants.`;
 
   const insightPanels = [
     { category: 'Key Finding', text: keyFinding, border: 'border-l-4 border-l-purple-500 border-purple-500/30 bg-purple-500/5', badge: 'bg-purple-500/10 text-purple-500 border-purple-500/20', dot: 'bg-purple-500' },
@@ -691,7 +691,7 @@ export default function FinanceIntelligence() {
           <KpiCard
             title="Market Attractiveness"
             value={marketAttractivenessLabel}
-            sub={marketAttractivenessScore != null ? `${marketAttractivenessScore.toFixed(0)}/100 composite` : 'Click for details'}
+            sub={marketAttractivenessScore != null ? 'Based on 5 factors · Click for details' : 'Click for details'}
             icon={<TrendingUp className="w-4 h-4" />}
             color={marketAttractivenessScore != null ? classColor(marketAttractivenessLabel) : 'text-muted-foreground'}
             bg={marketAttractivenessScore != null ? classBg(marketAttractivenessLabel) : 'bg-muted border-border'}
@@ -709,9 +709,9 @@ export default function FinanceIntelligence() {
         />
         <KpiCard
           title="Entry Difficulty"
-          value={edOk ? (entry_difficulty_data.classification ?? '—') : 'Unavailable'}
+          value={edOk ? (entry_difficulty_data.classification?.split(' ')[0] ?? '—') : 'Unavailable'}
           sub={edOk
-            ? `${edScore!.toFixed(0)}/100 · ${edConfidenceLabel} confidence · Click for evidence`
+            ? `${entry_difficulty_data.classification?.includes(' ') ? entry_difficulty_data.classification.split(' ').slice(1).join(' ') + ' · ' : ''}${edScore!.toFixed(0)}/100 · ${edConfidenceLabel} confidence · Click for evidence`
             : 'Missing: Review Count, Sponsored ASINs, CPR, or PPC Bid'}
           icon={<DoorOpen className="w-4 h-4" />}
           color={edOk ? classColor(entry_difficulty_data.classification ?? '') : 'text-muted-foreground'}
@@ -766,33 +766,6 @@ export default function FinanceIntelligence() {
         </CardContent>
       </Card>
       </PageSection>
-
-      {/* Price Positioning Potential — clickable, shown only when available */}
-      {pvsOk && (
-        <Card
-          className="cursor-pointer hover:border-primary/50 transition-colors"
-          onClick={() => setEvidenceFor({ title: 'Price Positioning Potential', metric: pvs_data })}
-        >
-          <CardHeader className="pb-2">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <DollarSign className={cn('w-4 h-4', classColor(pvs_data.classification ?? ''))} />
-                <CardTitle className="text-base">Price Positioning Potential</CardTitle>
-                <ChevronDown className="w-3 h-3 text-muted-foreground/50" />
-              </div>
-              <span className={cn('text-2xl font-black font-mono', classColor(pvs_data.classification ?? ''))}>{pvsScore!.toFixed(0)}/100</span>
-            </div>
-            <CardDescription>Click to see formula, source data, and calculation steps</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="w-full bg-muted rounded-full h-2 mb-3">
-              <div className={cn('h-2 rounded-full', scoreColor(pvsScore!, false).replace('text-', 'bg-'))} style={{ width: `${pvsScore}%` }} />
-            </div>
-            <p className={cn('text-sm font-semibold mb-1', classColor(pvs_data.classification ?? ''))}>{formatGenericLabel(pvs_data.classification)}</p>
-            <p className="text-xs text-muted-foreground leading-relaxed">{pvs_data.mini_insight ?? 'Price-band analysis from BlackBox product price distribution.'}</p>
-          </CardContent>
-        </Card>
-      )}
 
       <PageSection title="3. Financial Modeling">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

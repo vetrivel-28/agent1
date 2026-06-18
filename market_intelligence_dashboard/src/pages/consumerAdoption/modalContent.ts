@@ -897,6 +897,12 @@ export function buildSegmentModal(seg: Segment): InsightModalData {
         body: sortedBarrierLines(seg),
       },
 
+      ...(seg.llm_reasoning ? [{
+        heading: 'LLM Analysis',
+        type: 'insight' as const,
+        body: seg.llm_reasoning,
+      }] : []),
+
       // ── Business insight (segment-specific) ──────────────────────────────
       {
         heading: 'Business insight',

@@ -44,6 +44,7 @@ export interface Segment {
   objections?: string[];
   dominant_traits?: DominantTraits;
   primary_theme?: string;
+  llm_reasoning?: string;
 }
 
 export interface PopulationSummary {

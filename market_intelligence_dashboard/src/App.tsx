@@ -14,13 +14,8 @@ const IntentEfficiency = lazy(() => import('./pages/IntentEfficiency'));
 const MarketConcentration = lazy(() => import('./pages/MarketConcentration'));
 const MarketReport = lazy(() => import('./pages/MarketReport'));
 const WhitespaceOpportunities = lazy(() => import('./pages/WhitespaceOpportunities'));
-const DirectCompetitors = lazy(() => import('./pages/DirectCompetitors'));
 const PriceElasticity = lazy(() => import('./pages/PriceElasticity'));
-const SubstituteIntelligence = lazy(() => import('./pages/SubstituteIntelligence'));
-const ComplementIntelligence = lazy(() => import('./pages/ComplementIntelligence'));
-const BundleOpportunities = lazy(() => import('./pages/BundleOpportunities'));
 const FinanceIntelligence = lazy(() => import('./pages/FinanceIntelligence'));
-const ProductIntelligence = lazy(() => import('./pages/ProductIntelligence'));
 const ConsumerAdoptionSimulator = lazy(() => import('./pages/ConsumerAdoptionSimulator'));
 
 const queryClient = new QueryClient({
@@ -63,7 +58,6 @@ function App() {
               <Route path="search-intent-efficiency" element={<IntentEfficiency />} />
               <Route path="market-structure" element={<MarketConcentration />} />
               <Route path="whitespace-opportunities" element={<WhitespaceOpportunities />} />
-              <Route path="product-intelligence" element={<ProductIntelligence />} />
               <Route path="price-elasticity" element={<PriceElasticity />} />
               <Route path="finance-intelligence" element={<FinanceIntelligence />} />
               <Route path="consumer-adoption" element={<ConsumerAdoptionSimulator />} />

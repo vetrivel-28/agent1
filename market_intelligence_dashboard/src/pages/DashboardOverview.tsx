@@ -299,7 +299,7 @@ export default function DashboardOverview() {
           </div>
         </PageSection>
 
-        <PageSection title="2. Market Structure (Product Intelligence)">
+        <PageSection title="2. Market Structure">
           <DataScopeIndicator scope={productScope} variant="product" />
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <KPICard

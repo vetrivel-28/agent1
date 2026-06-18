@@ -8,7 +8,7 @@ import { formatCurrency, formatNumber, cn } from '../utils/cn';
 import { getEngineErrorMessage } from '../utils/analysisStatus';
 import { Modal } from '../components/ui/Modal';
 import {
-  AlertCircle, Loader2, Target, Layers, Crown, Activity, Maximize, Target as TargetIcon, Info, Package, Database, Code, ChevronRight, Scale
+  AlertCircle, Loader2, Target, Layers, Crown, Activity, Maximize, Target as TargetIcon, Info, Package, Database, Code, ChevronRight, Scale, DollarSign, ChevronDown
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
@@ -407,7 +407,28 @@ type ModalState =
   | { type: 'tier'; tier: PriceRange }
   | { type: 'brand_details'; title: string; tier: string; brand_breakdown: BrandBreakdown[]; evidence: Evidence }
   | { type: 'product_detail'; data: PositioningData }
+  | { type: 'pvs_evidence'; title: string; metric: any }
   | null;
+
+function scoreColor(score: number, invert = false): string {
+  const s = invert ? 100 - score : score;
+  if (s <= 33) return 'text-emerald-500';
+  if (s <= 66) return 'text-yellow-500';
+  return 'text-red-500';
+}
+
+function classColor(cls: string): string {
+  const low = ['Low', 'Easy', 'Light', 'Accessible', 'Attractive', 'Highly Attractive', 'Favourable', 'Low observed pressure'];
+  const high = ['High', 'Difficult', 'Heavy', 'Challenging', 'Less Attractive', 'Unattractive', 'Severe pressure'];
+  if (low.some((l) => cls?.includes(l))) return 'text-emerald-500';
+  if (high.some((h) => cls?.includes(h))) return 'text-red-500';
+  return 'text-yellow-500';
+}
+
+function formatGenericLabel(label?: string) {
+  if (!label) return 'Unknown';
+  return label.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
 
 export default function PriceElasticity() {
   const { data: statusData } = useQuery({
@@ -422,6 +443,11 @@ export default function PriceElasticity() {
   const { data, isLoading, isError } = useQuery({
     queryKey: ['price-intelligence', categoryKey],
     queryFn: () => api.getPriceElasticity({ nBuckets: 6, scope: categoryScope }), // We mock project_id 6
+  });
+
+  const { data: financeData } = useQuery({
+    queryKey: ['finance-intelligence', categoryKey],
+    queryFn: () => api.getFinanceIntelligence({ scope: categoryScope }),
   });
 
   const engineResponse = useMemo(() => {
@@ -527,6 +553,12 @@ export default function PriceElasticity() {
 
   const pi = memoized;
   const struct = pi.market_price_structure;
+
+  const entryData = financeData?.data?.results?.market_entry_intelligence || {};
+  const metrics = entryData.metrics || {};
+  const pvs_data = metrics.price_positioning_potential;
+  const pvsScore = pvs_data?.score;
+  const pvsOk = pvs_data?.status === 'success' && pvsScore != null;
 
   // Render Table Columns
   const topOpportunitiesColumns: Column<TopOpportunity>[] = [
@@ -694,10 +726,38 @@ export default function PriceElasticity() {
       </div>
 
       <PageSection title="1. Market Price Structure">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <KpiCard title="Price Floor" value={formatCurrency(struct.price_floor)} icon={<Maximize className="w-4 h-4" />} color="text-muted-foreground" bg="bg-muted border-border" tooltip="Lowest statistically significant price point in market" onClick={() => setModalState({ type: 'evidence', title: "Market Price Structure", evidence: struct.evidence })} />
-          <KpiCard title="Price Ceiling" value={formatCurrency(struct.price_ceiling)} icon={<Maximize className="w-4 h-4" />} color="text-muted-foreground" bg="bg-muted border-border" tooltip="Highest statistically significant price point in market" onClick={() => setModalState({ type: 'evidence', title: "Market Price Structure", evidence: struct.evidence })} />
-          <KpiCard title="Price Spread" value={formatCurrency(struct.price_spread)} icon={<Layers className="w-4 h-4" />} color="text-primary" bg="bg-primary/10 border-primary/20" tooltip="Difference between ceiling and floor" onClick={() => setModalState({ type: 'evidence', title: "Market Price Structure", evidence: struct.evidence })} />
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <KpiCard title="Price Floor" value={formatCurrency(struct.price_floor)} icon={<Maximize className="w-4 h-4" />} color="text-muted-foreground" bg="bg-muted border-border" tooltip="Lowest statistically significant price point in market" onClick={() => setModalState({ type: 'evidence', title: "Market Price Structure", evidence: struct.evidence })} />
+            <KpiCard title="Price Ceiling" value={formatCurrency(struct.price_ceiling)} icon={<Maximize className="w-4 h-4" />} color="text-muted-foreground" bg="bg-muted border-border" tooltip="Highest statistically significant price point in market" onClick={() => setModalState({ type: 'evidence', title: "Market Price Structure", evidence: struct.evidence })} />
+            <KpiCard title="Price Spread" value={formatCurrency(struct.price_spread)} icon={<Layers className="w-4 h-4" />} color="text-primary" bg="bg-primary/10 border-primary/20" tooltip="Difference between ceiling and floor" onClick={() => setModalState({ type: 'evidence', title: "Market Price Structure", evidence: struct.evidence })} />
+          </div>
+          
+          {pvsOk && (
+            <Card
+              className="cursor-pointer hover:border-primary/50 transition-colors"
+              onClick={() => setModalState({ type: 'pvs_evidence', title: 'Price Positioning Potential', metric: pvs_data })}
+            >
+              <CardHeader className="pb-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <DollarSign className={cn('w-4 h-4', classColor(pvs_data.classification ?? ''))} />
+                    <CardTitle className="text-base">Price Positioning Potential</CardTitle>
+                    <ChevronDown className="w-3 h-3 text-muted-foreground/50" />
+                  </div>
+                  <span className={cn('text-2xl font-black font-mono', classColor(pvs_data.classification ?? ''))}>{pvsScore!.toFixed(0)}/100</span>
+                </div>
+                <CardDescription>Click to see formula, source data, and calculation steps</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="w-full bg-muted rounded-full h-2 mb-3">
+                  <div className={cn('h-2 rounded-full', scoreColor(pvsScore!, false).replace('text-', 'bg-'))} style={{ width: `${pvsScore}%` }} />
+                </div>
+                <p className={cn('text-sm font-semibold mb-1', classColor(pvs_data.classification ?? ''))}>{formatGenericLabel(pvs_data.classification)}</p>
+                <p className="text-xs text-muted-foreground leading-relaxed">{pvs_data.mini_insight ?? 'Price-band analysis from BlackBox product price distribution.'}</p>
+              </CardContent>
+            </Card>
+          )}
         </div>
       </PageSection>
 
@@ -959,7 +1019,7 @@ export default function PriceElasticity() {
     <Modal 
       isOpen={!!modalState} 
       onClose={() => setModalState(null)} 
-      title={modalState?.type === 'evidence' ? "Calculation Evidence" : modalState?.type === 'tier' ? "Market Tier Details" : modalState?.type === 'brand_details' ? "Brand Breakdown Details" : modalState?.type === 'product_detail' ? (modalState.data.title.length > 30 ? modalState.data.title.substring(0, 30) + '...' : modalState.data.title) : ""}
+      title={modalState?.type === 'evidence' ? "Calculation Evidence" : modalState?.type === 'tier' ? "Market Tier Details" : modalState?.type === 'brand_details' ? "Brand Breakdown Details" : modalState?.type === 'product_detail' ? (modalState.data.title.length > 30 ? modalState.data.title.substring(0, 30) + '...' : modalState.data.title) : modalState?.type === 'pvs_evidence' ? "Evidence: " + modalState.title : ""}
       maxWidth={modalState?.type === 'product_detail' ? "max-w-sm" : "max-w-4xl"}
     >
       {modalState?.type === 'evidence' && (
@@ -980,6 +1040,32 @@ export default function PriceElasticity() {
             <div className="pt-6 border-t border-border">
                 <EvidenceModalContent evidence={modalState.evidence} title="Brand Aggregation Evidence" />
             </div>
+        </div>
+      )}
+      {modalState?.type === 'pvs_evidence' && (
+        <div className="space-y-6 p-4">
+          <div className="bg-muted/30 p-4 rounded-xl border border-border">
+            <h3 className="text-xl font-bold leading-tight text-foreground mb-2">{modalState.title}</h3>
+            {modalState.metric?.formula_used && (
+              <div className="bg-muted/50 p-2 rounded border border-border/50 font-mono text-xs text-emerald-600 break-words mb-4">
+                {modalState.metric.formula_used}
+              </div>
+            )}
+            {modalState.metric?.low_score_note && (
+              <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg mb-4">
+                <p className="text-xs font-bold text-amber-600 mb-1">Score Explanation</p>
+                <p className="text-xs text-amber-700 leading-relaxed">{modalState.metric.low_score_note}</p>
+              </div>
+            )}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+              {Object.entries(modalState.metric?.evidence || {}).map(([key, data]: [string, any], idx) => (
+                <div key={idx} className="bg-card border border-border rounded-xl p-3 shadow-sm">
+                  <p className="text-[10px] uppercase font-bold text-muted-foreground mb-1">{key.replace(/_/g, ' ')}</p>
+                  <p className="font-mono text-sm">{data.interpretation || `Score: ${data.normalized_score}`}</p>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       )}
     </Modal>

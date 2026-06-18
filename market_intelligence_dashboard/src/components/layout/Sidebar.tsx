@@ -196,7 +196,6 @@ export function Sidebar() {
         
         <NavGroup name="Market Intelligence" icon={LineChart} items={marketIntelligenceItems} />
         <NavGroup name="Opportunity Intelligence" icon={Lightbulb} items={opportunityIntelligenceItems} />
-        <NavItemLink item={{ name: 'Product Intelligence', href: '/product-intelligence', icon: Package }} />
         <NavGroup name="Pricing Intelligence" icon={Tags} items={pricingIntelligenceItems} />
 
         <div className="space-y-1 pt-2">
